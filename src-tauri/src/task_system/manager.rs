@@ -35,7 +35,7 @@ impl TaskManager {
         let db = self.db.clone();
         let active_tasks = self.active_tasks.clone();
 
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(CHECKPOINT_INTERVAL_SECS));
             loop {
                 interval.tick().await;
@@ -110,7 +110,7 @@ impl TaskManager {
         let app_handle = self.app_handle.clone();
         let db = self.db.clone();
 
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             // Wait for slot if too many concurrent tasks
             loop {
                 let count = active_tasks.read().await.len();

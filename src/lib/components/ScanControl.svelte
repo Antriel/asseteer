@@ -1,10 +1,9 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
   import { open } from '@tauri-apps/plugin-dialog';
   import { uiState } from '$lib/state/ui.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
-  import { onMount } from 'svelte';
+  import { tasksState } from '$lib/state/tasks.svelte';
 
   async function selectFolder() {
     try {
@@ -15,7 +14,7 @@
       });
 
       if (selected && typeof selected === 'string') {
-        startScan(selected);
+        await startScan(selected);
       }
     } catch (error) {
       console.error('Failed to select folder:', error);
@@ -24,15 +23,21 @@
 
   async function startScan(path: string) {
     uiState.isScanning = true;
-    uiState.scanProgress = 'Starting scan...';
+    uiState.scanProgress = 'Scanning directory...';
 
     try {
       const sessionId = await invoke<number>('start_scan', { rootPath: path });
       uiState.currentSessionId = sessionId;
-      uiState.scanProgress = 'Scan complete!';
+      uiState.scanProgress = 'Scan complete! Assets discovered and tasks created.';
 
-      // Reload assets
+      // Reload assets and refresh task statistics
       await assetsState.loadAssets();
+      await tasksState.refreshStats();
+
+      // Clear progress message after delay
+      setTimeout(() => {
+        uiState.scanProgress = '';
+      }, 3000);
     } catch (error) {
       console.error('Failed to scan:', error);
       uiState.scanProgress = `Error: ${error}`;
@@ -40,79 +45,31 @@
       uiState.isScanning = false;
     }
   }
-
-  async function processAssets() {
-    uiState.isProcessing = true;
-    uiState.processProgress = 'Starting processing...';
-
-    try {
-      // Process images
-      uiState.processProgress = 'Processing images...';
-      const imageCount = await invoke<number>('process_pending_images');
-
-      // Process audio
-      uiState.processProgress = 'Processing audio...';
-      const audioCount = await invoke<number>('process_pending_audio');
-
-      uiState.processProgress = `Processed ${imageCount} images and ${audioCount} audio files!`;
-
-      // Reload assets
-      await assetsState.loadAssets();
-    } catch (error) {
-      console.error('Failed to process:', error);
-      uiState.processProgress = `Error: ${error}`;
-    } finally {
-      uiState.isProcessing = false;
-    }
-  }
-
-  // Listen to process progress events
-  onMount(() => {
-    const unlisten = listen('process-progress', (event: any) => {
-      const { total, processed, status } = event.payload;
-      if (status === 'complete') {
-        uiState.processProgress = `Processing complete!`;
-      } else {
-        uiState.processProgress = `Processing: ${processed}/${total}`;
-      }
-    });
-
-    return () => {
-      unlisten.then(fn => fn());
-    };
-  });
 </script>
 
 <div class="flex flex-col gap-4 p-4 bg-secondary border-b border-default">
   <div class="flex items-center gap-4">
     <button
       onclick={selectFolder}
-      disabled={uiState.isScanning || uiState.isProcessing}
-      class="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+      disabled={uiState.isScanning}
+      class="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
     >
       {uiState.isScanning ? 'Scanning...' : 'Scan Folder'}
     </button>
 
-    <button
-      onclick={processAssets}
-      disabled={uiState.isProcessing || uiState.isScanning || assetsState.totalCount === 0}
-      class="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
-    >
-      {uiState.isProcessing ? 'Processing...' : 'Process Assets'}
-    </button>
-
     {#if uiState.scanProgress}
-      <span class="text-sm text-secondary">{uiState.scanProgress}</span>
-    {/if}
-
-    {#if uiState.processProgress}
-      <span class="text-sm text-secondary">{uiState.processProgress}</span>
+      <div class="flex items-center gap-2">
+        {#if uiState.isScanning}
+          <div class="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+        {/if}
+        <span class="text-sm text-secondary">{uiState.scanProgress}</span>
+      </div>
     {/if}
   </div>
 
   {#if assetsState.totalCount > 0}
     <div class="text-sm text-secondary">
-      Total assets: {assetsState.totalCount}
+      Total assets discovered: <span class="font-semibold text-primary">{assetsState.totalCount}</span>
     </div>
   {/if}
 </div>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import ScanControl from '$lib/components/ScanControl.svelte';
+  import TaskProgress from '$lib/components/TaskProgress.svelte';
   import AssetList from '$lib/components/AssetList.svelte';
 </script>
 
@@ -9,6 +10,10 @@
   </header>
 
   <ScanControl />
+
+  <div class="px-4 py-2">
+    <TaskProgress />
+  </div>
 
   <AssetList />
 </div>

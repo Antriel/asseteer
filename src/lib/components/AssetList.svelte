@@ -48,7 +48,6 @@
             <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Type</th>
             <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Dimensions</th>
             <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Size</th>
-            <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Status</th>
           </tr>
         </thead>
         <tbody>
@@ -68,9 +67,6 @@
               </td>
               <td class="px-4 py-2 text-sm text-secondary">
                 {formatFileSize(asset.file_size)}
-              </td>
-              <td class="px-4 py-2 text-sm text-secondary">
-                {asset.processing_status}
               </td>
             </tr>
           {/each}
