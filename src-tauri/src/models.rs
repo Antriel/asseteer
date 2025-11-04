@@ -11,15 +11,6 @@ pub struct Asset {
     pub format: String,
     pub file_size: i64,
 
-    // Image metadata (from image_metadata table)
-    pub width: Option<i32>,
-    pub height: Option<i32>,
-
-    // Audio metadata (from audio_metadata table)
-    pub duration_ms: Option<i64>,
-    pub sample_rate: Option<i32>,
-    pub channels: Option<i32>,
-
     // Timestamps
     pub created_at: i64,
     pub modified_at: i64,
