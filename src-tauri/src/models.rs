@@ -85,3 +85,15 @@ impl AssetType {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct ProcessingResult {
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub duration_ms: Option<i64>,
+    pub sample_rate: Option<i32>,
+    pub channels: Option<i32>,
+    pub thumbnail_data: Vec<u8>,
+    pub processing_status: String,
+    pub processing_error: Option<String>,
+}

@@ -40,6 +40,9 @@ pub fn run() {
             commands::scan::start_scan,
             commands::search::search_assets,
             commands::search::get_asset_count,
+            commands::process::process_pending_images,
+            commands::process::process_pending_audio,
+            commands::process::get_thumbnail,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

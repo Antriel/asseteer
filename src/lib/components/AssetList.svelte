@@ -1,5 +1,6 @@
 <script lang="ts">
   import { assetsState, formatFileSize } from '$lib/state/assets.svelte';
+  import AssetThumbnail from './AssetThumbnail.svelte';
   import { onMount } from 'svelte';
 
   onMount(() => {
@@ -42,6 +43,7 @@
       <table class="w-full">
         <thead class="sticky top-0 bg-secondary border-b border-default">
           <tr>
+            <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Preview</th>
             <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Name</th>
             <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Type</th>
             <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Dimensions</th>
@@ -52,6 +54,9 @@
         <tbody>
           {#each assetsState.assets as asset (asset.id)}
             <tr class="border-b border-default hover:bg-secondary">
+              <td class="px-4 py-2">
+                <AssetThumbnail assetId={asset.id} assetType={asset.asset_type} />
+              </td>
               <td class="px-4 py-2 text-sm text-primary" title={asset.path}>
                 {asset.filename}
               </td>

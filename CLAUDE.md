@@ -43,9 +43,59 @@ Do not run other commands! If you want to test the application, ask the user to 
 ### Backend (Tauri/Rust)
 - **Entry Point**: `src-tauri/src/main.rs` → `src-tauri/src/lib.rs`
 - **Commands**: Organized in `src-tauri/src/commands/`
-- **Database Layer**: Organized in `src-tauri/src/database/` (if using database)
-- **Services**: Business logic in `src-tauri/src/services/`
-- **Utilities**: Helper functions in `src-tauri/src/utils/`
+  - `scan.rs` - Asset discovery and file scanning
+  - `search.rs` - Asset search and retrieval
+  - `process.rs` - **Asset processing pipeline (images and audio)**
+- **Database Layer**: Organized in `src-tauri/src/database/`
+  - SQLite with sqlx for async operations
+  - FTS5 for full-text search
+  - Connection pooling for performance
+- **Models**: Data structures in `src-tauri/src/models.rs`
+
+### Asset Processing Pipeline
+
+The application processes discovered assets in two phases:
+
+**Phase 1: Discovery** (`scan.rs`)
+- Recursively scans directory for supported file types
+- Inserts files into database with `processing_status = 'pending'`
+- Supported formats:
+  - Images: PNG, JPG, JPEG, WebP, GIF, BMP
+  - Audio: MP3, WAV, OGG, FLAC, M4A, AAC
+
+**Phase 2: Processing** (`process.rs`)
+- **Image Processing**:
+  - Extracts dimensions (width × height)
+  - Generates 128px JPEG thumbnails using `fast_image_resize` (Lanczos3 filter)
+  - Stores thumbnail as BLOB in database (<20KB per image)
+  - Uses Rayon for parallel batch processing (50 files/batch)
+
+- **Audio Processing**:
+  - Extracts metadata using Symphonia library
+  - Duration (milliseconds), sample rate (Hz), channel count
+  - No thumbnail generation for audio files
+
+**Tauri Commands** (exposed to frontend):
+```rust
+// Process all pending image assets (thumbnails + metadata)
+process_pending_images() -> Result<usize, String>
+
+// Process all pending audio assets (metadata only)
+process_pending_audio() -> Result<usize, String>
+
+// Retrieve thumbnail for specific asset
+get_thumbnail(asset_id: i64) -> Result<Vec<u8>, String>
+```
+
+**Progress Tracking**:
+- Emits `process-progress` events during processing
+- Frontend listens via `@tauri-apps/api/event`
+- Real-time UI updates for user feedback
+
+**Database Updates**:
+- Uses sqlx transactions for atomic batch updates
+- On success: Sets `processing_status = 'complete'`, writes metadata/thumbnail
+- On error: Sets `processing_status = 'error'`, stores error message
 
 ## Tech Stack
 
