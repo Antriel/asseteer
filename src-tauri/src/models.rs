@@ -23,10 +23,6 @@ pub struct Asset {
     // Timestamps
     pub created_at: i64,
     pub modified_at: i64,
-
-    // Processing state
-    pub processing_status: String,
-    pub processing_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,4 +92,105 @@ pub struct ProcessingResult {
     pub thumbnail_data: Vec<u8>,
     pub processing_status: String,
     pub processing_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ProcessingTask {
+    pub id: i64,
+    pub asset_id: i64,
+    pub task_type: String,
+    pub status: String,
+    pub priority: i32,
+    pub retry_count: i32,
+    pub max_retries: i32,
+
+    // Timestamps
+    pub created_at: i64,
+    pub started_at: Option<i64>,
+    pub completed_at: Option<i64>,
+
+    // Error tracking
+    pub error_message: Option<String>,
+
+    // Progress
+    pub progress_current: i32,
+    pub progress_total: i32,
+
+    // Task-specific data
+    pub input_params: Option<String>,
+    pub output_data: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatus {
+    Pending,
+    Queued,
+    Processing,
+    Paused,
+    Complete,
+    Error,
+    Cancelled,
+}
+
+impl TaskStatus {
+    pub fn as_str(&self) -> &str {
+        match self {
+            TaskStatus::Pending => "pending",
+            TaskStatus::Queued => "queued",
+            TaskStatus::Processing => "processing",
+            TaskStatus::Paused => "paused",
+            TaskStatus::Complete => "complete",
+            TaskStatus::Error => "error",
+            TaskStatus::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "pending" => TaskStatus::Pending,
+            "queued" => TaskStatus::Queued,
+            "processing" => TaskStatus::Processing,
+            "paused" => TaskStatus::Paused,
+            "complete" => TaskStatus::Complete,
+            "error" => TaskStatus::Error,
+            "cancelled" => TaskStatus::Cancelled,
+            _ => TaskStatus::Pending,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskType {
+    Thumbnail,
+    Metadata,
+}
+
+impl TaskType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            TaskType::Thumbnail => "thumbnail",
+            TaskType::Metadata => "metadata",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "thumbnail" => Some(TaskType::Thumbnail),
+            "metadata" => Some(TaskType::Metadata),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskProgress {
+    pub task_id: i64,
+    pub asset_id: i64,
+    pub task_type: String,
+    pub status: String,
+    pub progress_current: i32,
+    pub progress_total: i32,
+    pub current_file: String,
 }

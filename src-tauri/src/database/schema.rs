@@ -23,19 +23,49 @@ CREATE TABLE IF NOT EXISTS assets (
 
     -- Timestamps
     created_at INTEGER NOT NULL,
-    modified_at INTEGER NOT NULL,
-
-    -- Processing state
-    processing_status TEXT DEFAULT 'pending',
-    processing_error TEXT
+    modified_at INTEGER NOT NULL
 )
 "#;
 
 pub const CREATE_ASSETS_INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(asset_type);
 CREATE INDEX IF NOT EXISTS idx_assets_path ON assets(path);
-CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(processing_status);
 CREATE INDEX IF NOT EXISTS idx_assets_modified ON assets(modified_at);
+"#;
+
+pub const CREATE_PROCESSING_TASKS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS processing_tasks (
+    id INTEGER PRIMARY KEY,
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    task_type TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    priority INTEGER DEFAULT 0,
+    retry_count INTEGER DEFAULT 0,
+    max_retries INTEGER DEFAULT 3,
+
+    -- Timestamps
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    completed_at INTEGER,
+
+    -- Error tracking
+    error_message TEXT,
+
+    -- Progress (item-level)
+    progress_current INTEGER DEFAULT 0,
+    progress_total INTEGER DEFAULT 1,
+
+    -- Task-specific data (JSON)
+    input_params TEXT,
+    output_data TEXT
+)
+"#;
+
+pub const CREATE_PROCESSING_TASKS_INDEXES: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_tasks_asset ON processing_tasks(asset_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON processing_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_type ON processing_tasks(task_type);
+CREATE INDEX IF NOT EXISTS idx_tasks_priority ON processing_tasks(priority DESC, created_at ASC);
 "#;
 
 pub const CREATE_ASSETS_FTS: &str = r#"

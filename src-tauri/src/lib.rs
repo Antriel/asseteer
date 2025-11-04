@@ -1,9 +1,13 @@
 mod database;
 mod models;
 mod commands;
+mod task_system;
 
 use database::{initialize_db, close_db, DbPool};
+use task_system::TaskManager;
 use tauri::Manager;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Application state shared across all commands
 pub struct AppState {
@@ -32,7 +36,12 @@ pub fn run() {
             .expect("Failed to initialize database");
 
             // Store pool in app state
-            app.manage(AppState { pool });
+            app.manage(AppState { pool: pool.clone() });
+
+            // Initialize TaskManager
+            let task_manager = TaskManager::new(pool.clone(), app.handle().clone());
+            task_manager.start_checkpoint_loop();
+            app.manage(Arc::new(RwLock::new(task_manager)));
 
             Ok(())
         })
@@ -43,6 +52,15 @@ pub fn run() {
             commands::process::process_pending_images,
             commands::process::process_pending_audio,
             commands::process::get_thumbnail,
+            commands::tasks::start_processing,
+            commands::tasks::pause_task,
+            commands::tasks::resume_task,
+            commands::tasks::cancel_task,
+            commands::tasks::pause_all_tasks,
+            commands::tasks::resume_all_tasks,
+            commands::tasks::get_tasks,
+            commands::tasks::get_task,
+            commands::tasks::get_task_stats,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
