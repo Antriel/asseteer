@@ -15,6 +15,15 @@
     }
     return '—';
   }
+
+  function formatLocation(asset: any): string {
+    if (asset.zip_entry) {
+      // Extract zip filename from path
+      const zipName = asset.path.split(/[\\/]/).pop() || asset.path;
+      return `${zipName}/${asset.zip_entry}`;
+    }
+    return asset.path;
+  }
 </script>
 
 <div class="flex-1 flex flex-col overflow-hidden">
@@ -56,8 +65,15 @@
               <td class="px-4 py-2">
                 <AssetThumbnail assetId={asset.id} assetType={asset.asset_type} />
               </td>
-              <td class="px-4 py-2 text-sm text-primary" title={asset.path}>
-                {asset.filename}
+              <td class="px-4 py-2 text-sm text-primary" title={formatLocation(asset)}>
+                <div class="flex items-center gap-2">
+                  <span>{asset.filename}</span>
+                  {#if asset.zip_entry}
+                    <span class="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                      ZIP
+                    </span>
+                  {/if}
+                </div>
               </td>
               <td class="px-4 py-2 text-sm text-secondary">
                 {asset.asset_type}

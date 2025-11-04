@@ -2,6 +2,7 @@ mod database;
 mod models;
 mod commands;
 mod task_system;
+mod utils;
 
 use database::{initialize_db, close_db, DbPool};
 use task_system::WorkQueue;

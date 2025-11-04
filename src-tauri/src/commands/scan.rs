@@ -1,15 +1,34 @@
 use crate::{models::*, AppState};
 use sqlx;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 use walkdir::WalkDir;
+use zip::ZipArchive;
 
 /// Supported image extensions
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 
 /// Supported audio extensions
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "wav", "ogg", "flac", "m4a", "aac"];
+
+/// Represents a discovered asset (either a regular file or a zip entry)
+#[derive(Debug)]
+struct DiscoveredAsset {
+    /// Filename (without path)
+    filename: String,
+    /// Path to the file (or zip file if this is a zip entry)
+    path: PathBuf,
+    /// If this asset is inside a zip, this is the path within the zip
+    zip_entry: Option<String>,
+    /// File extension
+    format: String,
+    /// Asset type (image or audio)
+    asset_type: AssetType,
+    /// File size in bytes
+    file_size: i64,
+}
 
 /// Start a new scan session
 #[tauri::command]
@@ -108,9 +127,9 @@ async fn update_session_status(
     Ok(())
 }
 
-/// Discover all supported asset files in a directory
-fn discover_files(root_path: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut files = Vec::new();
+/// Discover all supported asset files in a directory (including zip entries)
+fn discover_files(root_path: &Path) -> Result<Vec<DiscoveredAsset>, String> {
+    let mut assets = Vec::new();
 
     for entry in WalkDir::new(root_path)
         .follow_links(false)
@@ -123,38 +142,112 @@ fn discover_files(root_path: &Path) -> Result<Vec<PathBuf>, String> {
             if let Some(ext) = path.extension() {
                 let ext_str = ext.to_string_lossy().to_lowercase();
 
-                if IMAGE_EXTENSIONS.contains(&ext_str.as_str())
-                    || AUDIO_EXTENSIONS.contains(&ext_str.as_str())
-                {
-                    files.push(path.to_path_buf());
+                // Check if it's a supported media file
+                if let Some(asset_type) = detect_asset_type(path) {
+                    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+                    let file_size = metadata.len() as i64;
+
+                    assets.push(DiscoveredAsset {
+                        filename: path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string(),
+                        path: path.to_path_buf(),
+                        zip_entry: None,
+                        format: ext_str.to_string(),
+                        asset_type,
+                        file_size,
+                    });
+                }
+                // Check if it's a zip file
+                else if ext_str == "zip" {
+                    // Process zip entries
+                    match discover_zip_entries(path) {
+                        Ok(mut zip_assets) => assets.append(&mut zip_assets),
+                        Err(e) => {
+                            eprintln!("Warning: Failed to process zip file {}: {}", path.display(), e);
+                            // Continue scanning even if one zip fails
+                        }
+                    }
                 }
             }
         }
     }
 
-    Ok(files)
+    Ok(assets)
+}
+
+/// Discover supported assets inside a zip file
+fn discover_zip_entries(zip_path: &Path) -> Result<Vec<DiscoveredAsset>, String> {
+    let file = File::open(zip_path)
+        .map_err(|e| format!("Failed to open zip: {}", e))?;
+
+    let mut archive = ZipArchive::new(file)
+        .map_err(|e| format!("Failed to read zip archive: {}", e))?;
+
+    let mut assets = Vec::new();
+
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i)
+            .map_err(|e| format!("Failed to read zip entry: {}", e))?;
+
+        // Skip directories
+        if entry.is_dir() {
+            continue;
+        }
+
+        let entry_path = entry.name().to_string();
+
+        // Extract filename and extension from the entry path
+        let entry_path_buf = PathBuf::from(&entry_path);
+        if let Some(ext) = entry_path_buf.extension() {
+            let ext_str = ext.to_string_lossy().to_lowercase();
+
+            if let Some(asset_type) = detect_asset_type_from_ext(&ext_str) {
+                assets.push(DiscoveredAsset {
+                    filename: entry_path_buf
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                    path: zip_path.to_path_buf(),
+                    zip_entry: Some(entry_path),
+                    format: ext_str.to_string(),
+                    asset_type,
+                    file_size: entry.size() as i64,
+                });
+            }
+        }
+    }
+
+    Ok(assets)
 }
 
 /// Detect asset type from file extension
 fn detect_asset_type(path: &Path) -> Option<AssetType> {
     path.extension().and_then(|ext| {
         let ext_str = ext.to_string_lossy().to_lowercase();
-
-        if IMAGE_EXTENSIONS.contains(&ext_str.as_str()) {
-            Some(AssetType::Image)
-        } else if AUDIO_EXTENSIONS.contains(&ext_str.as_str()) {
-            Some(AssetType::Audio)
-        } else {
-            None
-        }
+        detect_asset_type_from_ext(&ext_str)
     })
+}
+
+/// Detect asset type from extension string
+fn detect_asset_type_from_ext(ext: &str) -> Option<AssetType> {
+    if IMAGE_EXTENSIONS.contains(&ext) {
+        Some(AssetType::Image)
+    } else if AUDIO_EXTENSIONS.contains(&ext) {
+        Some(AssetType::Audio)
+    } else {
+        None
+    }
 }
 
 /// Insert discovered files as pending assets (no processing yet)
 async fn insert_pending_assets(
     state: &State<'_, AppState>,
     _session_id: i64,
-    files: Vec<PathBuf>,
+    assets: Vec<DiscoveredAsset>,
 ) -> Result<(), String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -163,38 +256,21 @@ async fn insert_pending_assets(
 
     let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
 
-    for path in files {
-        let filename = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-
-        let path_str = path.to_string_lossy().to_string();
-
-        let format = path
-            .extension()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_lowercase();
-
-        let asset_type = detect_asset_type(&path)
-            .ok_or_else(|| "Unknown asset type".to_string())?;
-
-        let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-        let file_size = metadata.len() as i64;
+    for asset in assets {
+        let path_str = asset.path.to_string_lossy().to_string();
 
         let _result = sqlx::query(
             "INSERT INTO assets (
-                filename, path, asset_type, format, file_size,
+                filename, path, zip_entry, asset_type, format, file_size,
                 created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
         )
-        .bind(&filename)
+        .bind(&asset.filename)
         .bind(&path_str)
-        .bind(asset_type.as_str())
-        .bind(&format)
-        .bind(file_size)
+        .bind(&asset.zip_entry)
+        .bind(asset.asset_type.as_str())
+        .bind(&asset.format)
+        .bind(asset.file_size)
         .bind(now)
         .bind(now)
         .execute(&mut *tx)

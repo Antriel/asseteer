@@ -1,8 +1,8 @@
 /// Unified asset processor - handles both thumbnail generation and metadata extraction
 use crate::models::Asset;
-use image::{DynamicImage, GenericImageView, ImageReader};
+use crate::utils::load_asset_bytes;
+use image::{DynamicImage, GenericImageView};
 use sqlx::SqlitePool;
-use std::path::Path;
 
 /// Result of processing an asset
 #[derive(Debug)]
@@ -15,11 +15,9 @@ pub struct ProcessingResult {
 
 /// Process a single asset (thumbnail + metadata combined)
 pub async fn process_asset(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
-    let path = Path::new(&asset.path);
-
     match asset.asset_type.as_str() {
-        "image" => process_image(asset.id, path, db).await,
-        "audio" => process_audio(asset.id, path, db).await,
+        "image" => process_image(asset, db).await,
+        "audio" => process_audio(asset, db).await,
         _ => ProcessingResult {
             asset_id: asset.id,
             success: false,
@@ -29,15 +27,29 @@ pub async fn process_asset(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
 }
 
 /// Process an image asset (thumbnail + dimensions in one go)
-async fn process_image(asset_id: i64, path: &Path, db: &SqlitePool) -> ProcessingResult {
-    let path_buf = path.to_path_buf();
+async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
+    let asset_id = asset.id;
+
+    // Clone asset data needed for the blocking task
+    let asset_clone = Asset {
+        id: asset.id,
+        filename: asset.filename.clone(),
+        path: asset.path.clone(),
+        zip_entry: asset.zip_entry.clone(),
+        asset_type: asset.asset_type.clone(),
+        format: asset.format.clone(),
+        file_size: asset.file_size,
+        created_at: asset.created_at,
+        modified_at: asset.modified_at,
+    };
 
     // Run CPU-intensive work in blocking thread
     let result = tokio::task::spawn_blocking(move || {
-        // Load image
-        let img = ImageReader::open(&path_buf)
-            .map_err(|e| format!("Failed to open image: {}", e))?
-            .decode()
+        // Load image bytes (from filesystem or zip)
+        let bytes = load_asset_bytes(&asset_clone)?;
+
+        // Load image from memory
+        let img = image::load_from_memory(&bytes)
             .map_err(|e| format!("Failed to decode image: {}", e))?;
 
         let (width, height) = img.dimensions();
@@ -95,27 +107,39 @@ async fn process_image(asset_id: i64, path: &Path, db: &SqlitePool) -> Processin
 }
 
 /// Process an audio asset (metadata extraction)
-async fn process_audio(asset_id: i64, path: &Path, db: &SqlitePool) -> ProcessingResult {
+async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     use symphonia::core::formats::FormatOptions;
     use symphonia::core::io::MediaSourceStream;
     use symphonia::core::meta::MetadataOptions;
     use symphonia::core::probe::Hint;
 
-    let path_buf = path.to_path_buf();
+    let asset_id = asset.id;
+
+    // Clone asset data needed for the blocking task
+    let asset_clone = Asset {
+        id: asset.id,
+        filename: asset.filename.clone(),
+        path: asset.path.clone(),
+        zip_entry: asset.zip_entry.clone(),
+        asset_type: asset.asset_type.clone(),
+        format: asset.format.clone(),
+        file_size: asset.file_size,
+        created_at: asset.created_at,
+        modified_at: asset.modified_at,
+    };
 
     // Run CPU-intensive work in blocking thread
     let result = tokio::task::spawn_blocking(move || {
-        // Open audio file
-        let file = std::fs::File::open(&path_buf)
-            .map_err(|e| format!("Failed to open audio file: {}", e))?;
+        // Load audio bytes (from filesystem or zip)
+        let bytes = load_asset_bytes(&asset_clone)?;
 
-        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+        // Create a cursor from the bytes for reading
+        let cursor = std::io::Cursor::new(bytes);
+        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
         // Set up hint from file extension
         let mut hint = Hint::new();
-        if let Some(ext) = path_buf.extension() {
-            hint.with_extension(ext.to_str().unwrap_or(""));
-        }
+        hint.with_extension(&asset_clone.format);
 
         // Probe the media format
         let probed = symphonia::default::get_probe()
