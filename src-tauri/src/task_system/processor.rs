@@ -54,7 +54,7 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
 
         let (width, height) = img.dimensions();
 
-        // Generate thumbnail (128px max dimension)
+        // Generate thumbnail (128px max dimension) as WebP with transparency support
         let thumbnail_data = generate_thumbnail(&img, 128)?;
 
         Ok::<_, String>((thumbnail_data, width, height))
@@ -219,7 +219,7 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     }
 }
 
-/// Generate a thumbnail using fast_image_resize
+/// Generate a thumbnail using fast_image_resize and encode as WebP
 fn generate_thumbnail(img: &DynamicImage, max_size: u32) -> Result<Vec<u8>, String> {
     use fast_image_resize::{images::Image as FirImage, PixelType, Resizer};
 
@@ -232,7 +232,7 @@ fn generate_thumbnail(img: &DynamicImage, max_size: u32) -> Result<Vec<u8>, Stri
 
     // Skip resize if image is already small enough
     if scale >= 1.0 {
-        return encode_jpeg(img, width, height);
+        return encode_webp(img, width, height);
     }
 
     // Convert to RGBA8
@@ -251,33 +251,26 @@ fn generate_thumbnail(img: &DynamicImage, max_size: u32) -> Result<Vec<u8>, Stri
         .resize(&src_image, &mut dst_image, None)
         .map_err(|e| format!("Failed to resize: {}", e))?;
 
-    // Encode as JPEG
-    let mut buffer = Vec::new();
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, 85);
-    encoder
-        .encode(
-            dst_image.buffer(),
-            new_width,
-            new_height,
-            image::ExtendedColorType::Rgba8,
-        )
-        .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
-
-    Ok(buffer)
+    // Encode as WebP (supports alpha channel)
+    encode_webp_from_rgba(dst_image.buffer(), new_width, new_height)
 }
 
-/// Helper to encode image as JPEG without resize
-fn encode_jpeg(img: &DynamicImage, width: u32, height: u32) -> Result<Vec<u8>, String> {
+/// Encode image as WebP without resize (preserves alpha channel)
+fn encode_webp(img: &DynamicImage, width: u32, height: u32) -> Result<Vec<u8>, String> {
     let rgba = img.to_rgba8();
-    let mut buffer = Vec::new();
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, 85);
-    encoder
-        .encode(
-            &rgba.into_raw(),
-            width,
-            height,
-            image::ExtendedColorType::Rgba8,
-        )
-        .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
-    Ok(buffer)
+    encode_webp_from_rgba(&rgba.into_raw(), width, height)
+}
+
+/// Encode RGBA buffer as lossy WebP with quality 85
+fn encode_webp_from_rgba(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+    use webp::{Encoder, WebPMemory};
+
+    // Create encoder from RGBA pixels
+    let encoder: Encoder = Encoder::from_rgba(rgba, width, height);
+
+    // Encode with quality 85 (0-100 scale, 85 is good balance)
+    let encoded: WebPMemory = encoder.encode(85.0);
+
+    // Return as Vec<u8>
+    Ok(encoded.to_vec())
 }

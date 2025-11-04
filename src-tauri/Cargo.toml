@@ -40,6 +40,7 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 # Image processing
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 fast_image_resize = "5.0"
+webp = "0.3"
 
 # Audio processing
 symphonia = { version = "0.5", features = ["all"] }

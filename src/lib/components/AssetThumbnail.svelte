@@ -29,8 +29,8 @@
         return;
       }
 
-      // Create blob from bytes
-      const blob = new Blob([uint8Array], { type: 'image/jpeg' });
+      // Create blob from bytes (WebP format with alpha support)
+      const blob = new Blob([uint8Array], { type: 'image/webp' });
 
       // Create object URL
       thumbnailUrl = URL.createObjectURL(blob);

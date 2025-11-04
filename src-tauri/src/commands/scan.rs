@@ -139,6 +139,17 @@ fn discover_files(root_path: &Path) -> Result<Vec<DiscoveredAsset>, String> {
         let path = entry.path();
 
         if path.is_file() {
+            // Get filename to check for macOS metadata files
+            let filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+
+            // Skip macOS metadata files (._filename) and hidden files
+            if filename.starts_with("._") || filename.starts_with('.') {
+                continue;
+            }
+
             if let Some(ext) = path.extension() {
                 let ext_str = ext.to_string_lossy().to_lowercase();
 
@@ -148,11 +159,7 @@ fn discover_files(root_path: &Path) -> Result<Vec<DiscoveredAsset>, String> {
                     let file_size = metadata.len() as i64;
 
                     assets.push(DiscoveredAsset {
-                        filename: path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string(),
+                        filename: filename.to_string(),
                         path: path.to_path_buf(),
                         zip_entry: None,
                         format: ext_str.to_string(),
@@ -201,16 +208,24 @@ fn discover_zip_entries(zip_path: &Path) -> Result<Vec<DiscoveredAsset>, String>
 
         // Extract filename and extension from the entry path
         let entry_path_buf = PathBuf::from(&entry_path);
+
+        // Get the filename to check for macOS metadata files
+        let filename = entry_path_buf
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+
+        // Skip macOS metadata files (._filename) and hidden files
+        if filename.starts_with("._") || filename.starts_with('.') {
+            continue;
+        }
+
         if let Some(ext) = entry_path_buf.extension() {
             let ext_str = ext.to_string_lossy().to_lowercase();
 
             if let Some(asset_type) = detect_asset_type_from_ext(&ext_str) {
                 assets.push(DiscoveredAsset {
-                    filename: entry_path_buf
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string(),
+                    filename: filename.to_string(),
                     path: zip_path.to_path_buf(),
                     zip_entry: Some(entry_path),
                     format: ext_str.to_string(),
