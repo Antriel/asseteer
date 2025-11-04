@@ -28,11 +28,11 @@
     try {
       const sessionId = await invoke<number>('start_scan', { rootPath: path });
       uiState.currentSessionId = sessionId;
-      uiState.scanProgress = 'Scan complete! Assets discovered and tasks created.';
+      uiState.scanProgress = 'Scan complete! Assets discovered.';
 
-      // Reload assets and refresh processing progress
+      // Reload assets and refresh pending count
       await assetsState.loadAssets();
-      await processingState.refreshProgress();
+      await processingState.refreshPendingCount();
 
       // Clear progress message after delay
       setTimeout(() => {

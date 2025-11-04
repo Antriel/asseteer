@@ -13,6 +13,15 @@ export interface ProcessingProgress {
 }
 
 /**
+ * Pending asset count from backend
+ */
+export interface PendingCount {
+  images: number;
+  audio: number;
+  total: number;
+}
+
+/**
  * Simplified processing state management
  *
  * The new architecture treats all asset processing as a single logical task
@@ -25,6 +34,9 @@ class ProcessingState {
   failed = $state(0);
   isPaused = $state(false);
   isRunning = $state(false);
+
+  // Pending asset count (from database)
+  pendingCount = $state<PendingCount>({ images: 0, audio: 0, total: 0 });
 
   // Event listeners
   private unlistenFns: UnlistenFn[] = [];
@@ -43,9 +55,11 @@ class ProcessingState {
     });
 
     // Listen for processing completion
-    const unlistenComplete = await listen<ProcessingProgress>('processing-complete', (event) => {
+    const unlistenComplete = await listen<ProcessingProgress>('processing-complete', async (event) => {
       console.log('[Processing] Complete:', event.payload);
       this.updateProgress(event.payload);
+      // Refresh pending count after processing completes
+      await this.refreshPendingCount();
     });
 
     this.unlistenFns = [unlistenProgress, unlistenComplete];
@@ -85,7 +99,7 @@ class ProcessingState {
     try {
       await invoke('pause_processing');
       console.log('[Processing] Paused');
-      this.isPaused = true;
+      // Backend will emit progress update with paused state
     } catch (error) {
       console.error('[Processing] Failed to pause:', error);
       throw error;
@@ -99,7 +113,7 @@ class ProcessingState {
     try {
       await invoke('resume_processing');
       console.log('[Processing] Resumed');
-      this.isPaused = false;
+      // Backend will emit progress update with resumed state
     } catch (error) {
       console.error('[Processing] Failed to resume:', error);
       throw error;
@@ -113,7 +127,8 @@ class ProcessingState {
     try {
       await invoke('stop_processing');
       console.log('[Processing] Stopped');
-      this.isRunning = false;
+      // State will be updated by backend or can be refreshed
+      await this.refreshProgress();
     } catch (error) {
       console.error('[Processing] Failed to stop:', error);
       throw error;
@@ -130,6 +145,21 @@ class ProcessingState {
       return progress;
     } catch (error) {
       console.error('[Processing] Failed to refresh progress:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Refresh pending asset count from database
+   */
+  async refreshPendingCount() {
+    try {
+      const count = await invoke<PendingCount>('get_pending_asset_count');
+      this.pendingCount = count;
+      console.log('[Processing] Pending count updated:', count);
+      return count;
+    } catch (error) {
+      console.error('[Processing] Failed to refresh pending count:', error);
       throw error;
     }
   }

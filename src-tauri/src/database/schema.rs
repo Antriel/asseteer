@@ -9,18 +9,6 @@ CREATE TABLE IF NOT EXISTS assets (
     format TEXT NOT NULL,
     file_size INTEGER NOT NULL,
 
-    -- Image metadata
-    width INTEGER,
-    height INTEGER,
-
-    -- Audio metadata
-    duration_ms INTEGER,
-    sample_rate INTEGER,
-    channels INTEGER,
-
-    -- Thumbnail (small only for MVP)
-    thumbnail_data BLOB,
-
     -- Timestamps
     created_at INTEGER NOT NULL,
     modified_at INTEGER NOT NULL
@@ -33,39 +21,24 @@ CREATE INDEX IF NOT EXISTS idx_assets_path ON assets(path);
 CREATE INDEX IF NOT EXISTS idx_assets_modified ON assets(modified_at);
 "#;
 
-pub const CREATE_PROCESSING_TASKS_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS processing_tasks (
-    id INTEGER PRIMARY KEY,
-    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-    task_type TEXT NOT NULL,
-    status TEXT DEFAULT 'pending',
-    priority INTEGER DEFAULT 0,
-    retry_count INTEGER DEFAULT 0,
-    max_retries INTEGER DEFAULT 3,
-
-    -- Timestamps
-    created_at INTEGER NOT NULL,
-    started_at INTEGER,
-    completed_at INTEGER,
-
-    -- Error tracking
-    error_message TEXT,
-
-    -- Progress (item-level)
-    progress_current INTEGER DEFAULT 0,
-    progress_total INTEGER DEFAULT 1,
-
-    -- Task-specific data (JSON)
-    input_params TEXT,
-    output_data TEXT
+pub const CREATE_IMAGE_METADATA_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS image_metadata (
+    asset_id INTEGER PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    thumbnail_data BLOB NOT NULL,
+    processed_at INTEGER NOT NULL
 )
 "#;
 
-pub const CREATE_PROCESSING_TASKS_INDEXES: &str = r#"
-CREATE INDEX IF NOT EXISTS idx_tasks_asset ON processing_tasks(asset_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON processing_tasks(status);
-CREATE INDEX IF NOT EXISTS idx_tasks_type ON processing_tasks(task_type);
-CREATE INDEX IF NOT EXISTS idx_tasks_priority ON processing_tasks(priority DESC, created_at ASC);
+pub const CREATE_AUDIO_METADATA_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS audio_metadata (
+    asset_id INTEGER PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+    duration_ms INTEGER NOT NULL,
+    sample_rate INTEGER,
+    channels INTEGER,
+    processed_at INTEGER NOT NULL
+)
 "#;
 
 pub const CREATE_ASSETS_FTS: &str = r#"

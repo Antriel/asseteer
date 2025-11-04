@@ -199,6 +199,11 @@ impl WorkQueue {
                     break;
                 }
 
+                // Skip emitting progress if paused (workers aren't doing anything)
+                if pause_signal.load(Ordering::SeqCst) {
+                    continue;
+                }
+
                 // Emit progress event
                 let progress = ProcessingProgress {
                     total: total_assets.load(Ordering::SeqCst),

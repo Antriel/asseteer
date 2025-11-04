@@ -6,6 +6,7 @@
   onMount(async () => {
     await processingState.initializeListeners();
     await processingState.refreshProgress();
+    await processingState.refreshPendingCount();
   });
 
   // Cleanup on destroy
@@ -79,7 +80,7 @@
         >
           Stop
         </button>
-      {:else if processingState.total > 0 && processingState.completed + processingState.failed < processingState.total}
+      {:else if processingState.pendingCount.total > 0}
         <button
           onclick={handleStart}
           class="px-3 py-1.5 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded transition-colors"
@@ -90,8 +91,8 @@
     </div>
   </div>
 
-  <!-- Statistics Grid -->
-  {#if processingState.total > 0}
+  <!-- Statistics Grid (when processing is running) -->
+  {#if processingState.isRunning && processingState.total > 0}
     <div class="grid grid-cols-4 gap-3">
       <div class="flex flex-col items-center p-3 bg-primary border border-default rounded">
         <span class="text-2xl font-bold text-primary">{processingState.total}</span>
@@ -129,6 +130,30 @@
           class="h-full bg-blue-500 transition-all duration-300"
           style="width: {processingState.getProgressPercentage()}%"
         ></div>
+      </div>
+    </div>
+  {:else if processingState.pendingCount.total > 0}
+    <!-- Pending assets info (when not processing) -->
+    <div class="flex flex-col gap-3 py-4">
+      <div class="text-center">
+        <div class="text-3xl font-bold text-primary mb-2">
+          {processingState.pendingCount.total}
+        </div>
+        <div class="text-sm text-secondary">
+          Assets ready to process
+        </div>
+      </div>
+
+      <div class="flex items-center justify-center gap-4 text-sm">
+        <div class="flex items-center gap-2">
+          <span class="text-secondary">Images:</span>
+          <span class="font-semibold text-primary">{processingState.pendingCount.images}</span>
+        </div>
+        <span class="text-gray-300 dark:text-gray-600">•</span>
+        <div class="flex items-center gap-2">
+          <span class="text-secondary">Audio:</span>
+          <span class="font-semibold text-primary">{processingState.pendingCount.audio}</span>
+        </div>
       </div>
     </div>
   {:else}

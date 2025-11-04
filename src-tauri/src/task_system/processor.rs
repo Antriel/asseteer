@@ -6,6 +6,7 @@ use std::path::Path;
 
 /// Result of processing an asset
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ProcessingResult {
     pub asset_id: i64,
     pub success: bool,
@@ -50,16 +51,21 @@ async fn process_image(asset_id: i64, path: &Path, db: &SqlitePool) -> Processin
 
     match result {
         Ok(Ok((thumbnail_data, width, height))) => {
-            // Update database with both thumbnail and metadata
+            // Insert into image_metadata table
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+
             match sqlx::query(
-                "UPDATE assets
-                 SET thumbnail_data = ?, width = ?, height = ?
-                 WHERE id = ?",
+                "INSERT INTO image_metadata (asset_id, width, height, thumbnail_data, processed_at)
+                 VALUES (?, ?, ?, ?, ?)",
             )
-            .bind(thumbnail_data)
+            .bind(asset_id)
             .bind(width as i32)
             .bind(height as i32)
-            .bind(asset_id)
+            .bind(thumbnail_data)
+            .bind(now)
             .execute(db)
             .await
             {
@@ -146,16 +152,21 @@ async fn process_audio(asset_id: i64, path: &Path, db: &SqlitePool) -> Processin
 
     match result {
         Ok(Ok((duration_ms, sample_rate, channels))) => {
-            // Update database with metadata
+            // Insert into audio_metadata table
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+
             match sqlx::query(
-                "UPDATE assets
-                 SET duration_ms = ?, sample_rate = ?, channels = ?
-                 WHERE id = ?",
+                "INSERT INTO audio_metadata (asset_id, duration_ms, sample_rate, channels, processed_at)
+                 VALUES (?, ?, ?, ?, ?)",
             )
+            .bind(asset_id)
             .bind(duration_ms)
             .bind(sample_rate)
             .bind(channels)
-            .bind(asset_id)
+            .bind(now)
             .execute(db)
             .await
             {

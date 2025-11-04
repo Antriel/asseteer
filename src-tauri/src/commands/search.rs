@@ -45,8 +45,7 @@ async fn search_with_fts(
         sqlx::query_as::<_, Asset>(
             "SELECT
                 assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
-                assets.format, assets.file_size, assets.width, assets.height, assets.duration_ms,
-                assets.sample_rate, assets.channels, assets.created_at, assets.modified_at
+                assets.format, assets.file_size, assets.created_at, assets.modified_at
             FROM assets
             INNER JOIN assets_fts ON assets.id = assets_fts.rowid
             WHERE assets_fts MATCH ? AND assets.asset_type = ?
@@ -64,8 +63,7 @@ async fn search_with_fts(
         sqlx::query_as::<_, Asset>(
             "SELECT
                 assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
-                assets.format, assets.file_size, assets.width, assets.height, assets.duration_ms,
-                assets.sample_rate, assets.channels, assets.created_at, assets.modified_at
+                assets.format, assets.file_size, assets.created_at, assets.modified_at
             FROM assets
             INNER JOIN assets_fts ON assets.id = assets_fts.rowid
             WHERE assets_fts MATCH ?
@@ -94,7 +92,6 @@ async fn search_without_fts(
         sqlx::query_as::<_, Asset>(
             "SELECT
                 id, filename, path, zip_entry, asset_type, format, file_size,
-                width, height, duration_ms, sample_rate, channels,
                 created_at, modified_at
             FROM assets
             WHERE asset_type = ?
@@ -111,7 +108,6 @@ async fn search_without_fts(
         sqlx::query_as::<_, Asset>(
             "SELECT
                 id, filename, path, zip_entry, asset_type, format, file_size,
-                width, height, duration_ms, sample_rate, channels,
                 created_at, modified_at
             FROM assets
             ORDER BY filename COLLATE NOCASE ASC

@@ -1,7 +1,9 @@
 pub mod init;
 pub mod schema;
 
-use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::{SqlitePool, sqlite::{SqlitePoolOptions, SqliteConnectOptions}};
+use std::str::FromStr;
+use std::time::Duration;
 
 pub type DbPool = SqlitePool;
 
@@ -25,9 +27,13 @@ pub async fn initialize_db(db_path: &str) -> Result<DbPool, sqlx::Error> {
 
     println!("[DB] Connection string: {}", connection_string);
 
+    // Configure SQLite connection options with busy timeout
+    let connect_options = SqliteConnectOptions::from_str(&connection_string)?
+        .busy_timeout(Duration::from_secs(30)); // 30 second busy timeout for concurrent writes
+
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect(&connection_string)
+        .connect_with(connect_options)
         .await?;
 
     // Run migrations/setup

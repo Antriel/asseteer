@@ -184,7 +184,7 @@ async fn insert_pending_assets(
         let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
         let file_size = metadata.len() as i64;
 
-        let result = sqlx::query(
+        let _result = sqlx::query(
             "INSERT INTO assets (
                 filename, path, asset_type, format, file_size,
                 created_at, modified_at
@@ -201,38 +201,8 @@ async fn insert_pending_assets(
         .await
         .map_err(|e| e.to_string())?;
 
-        let asset_id = result.last_insert_rowid();
-
-        // Create processing tasks for this asset
-        // Task 1: Generate thumbnail (for images only)
-        if matches!(asset_type, AssetType::Image) {
-            sqlx::query(
-                "INSERT INTO processing_tasks (
-                    asset_id, task_type, status, created_at
-                ) VALUES (?1, ?2, ?3, ?4)"
-            )
-            .bind(asset_id)
-            .bind("thumbnail")
-            .bind("pending")
-            .bind(now)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-
-        // Task 2: Extract metadata (for both images and audio)
-        sqlx::query(
-            "INSERT INTO processing_tasks (
-                asset_id, task_type, status, created_at
-            ) VALUES (?1, ?2, ?3, ?4)"
-        )
-        .bind(asset_id)
-        .bind("metadata")
-        .bind("pending")
-        .bind(now)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
+        // Asset inserted, no processing tasks needed
+        // Processing will check for missing metadata via LEFT JOIN
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;

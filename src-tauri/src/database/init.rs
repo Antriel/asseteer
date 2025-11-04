@@ -47,6 +47,7 @@ pub async fn migrate_fts_triggers(pool: &SqlitePool) -> Result<(), sqlx::Error> 
 /// Setup database: configure SQLite and create tables
 pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Configure SQLite for optimal performance
+    // Note: busy_timeout is now set via SqliteConnectOptions in mod.rs
     sqlx::query("PRAGMA journal_mode=WAL")
         .execute(pool)
         .await?;
@@ -90,17 +91,14 @@ pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
-    // Create processing tasks table
-    sqlx::query(CREATE_PROCESSING_TASKS_TABLE)
+    // Create metadata tables
+    sqlx::query(CREATE_IMAGE_METADATA_TABLE)
         .execute(pool)
         .await?;
 
-    // Create processing tasks indexes
-    for index_sql in CREATE_PROCESSING_TASKS_INDEXES.split(';').filter(|s| !s.trim().is_empty()) {
-        sqlx::query(index_sql.trim())
-            .execute(pool)
-            .await?;
-    }
+    sqlx::query(CREATE_AUDIO_METADATA_TABLE)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }

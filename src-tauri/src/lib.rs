@@ -56,6 +56,7 @@ pub fn run() {
             commands::process::stop_processing,
             commands::process::get_processing_progress,
             commands::process::get_thumbnail,
+            commands::process::get_pending_asset_count,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
