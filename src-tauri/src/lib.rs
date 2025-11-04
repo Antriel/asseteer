@@ -4,14 +4,14 @@ mod commands;
 mod task_system;
 
 use database::{initialize_db, close_db, DbPool};
-use task_system::TaskManager;
+use task_system::WorkQueue;
 use tauri::Manager;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 /// Application state shared across all commands
 pub struct AppState {
     pub pool: DbPool,
+    pub work_queue: Arc<WorkQueue>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -35,13 +35,14 @@ pub fn run() {
             })
             .expect("Failed to initialize database");
 
-            // Store pool in app state
-            app.manage(AppState { pool: pool.clone() });
+            // Initialize WorkQueue
+            let work_queue = Arc::new(WorkQueue::new());
 
-            // Initialize TaskManager
-            let task_manager = TaskManager::new(pool.clone(), app.handle().clone());
-            task_manager.start_checkpoint_loop();
-            app.manage(Arc::new(RwLock::new(task_manager)));
+            // Store pool and work queue in app state
+            app.manage(AppState {
+                pool: pool.clone(),
+                work_queue: work_queue.clone(),
+            });
 
             Ok(())
         })
@@ -49,18 +50,12 @@ pub fn run() {
             commands::scan::start_scan,
             commands::search::search_assets,
             commands::search::get_asset_count,
-            commands::process::process_pending_images,
-            commands::process::process_pending_audio,
+            commands::process::start_processing_assets,
+            commands::process::pause_processing,
+            commands::process::resume_processing,
+            commands::process::stop_processing,
+            commands::process::get_processing_progress,
             commands::process::get_thumbnail,
-            commands::tasks::start_processing,
-            commands::tasks::pause_task,
-            commands::tasks::resume_task,
-            commands::tasks::cancel_task,
-            commands::tasks::pause_all_tasks,
-            commands::tasks::resume_all_tasks,
-            commands::tasks::get_tasks,
-            commands::tasks::get_task,
-            commands::tasks::get_task_stats,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -1,216 +1,154 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { ProcessingTask, TaskProgress, TaskStats } from '$lib/types';
 
 /**
- * Tasks state management - handles task processing, progress tracking, and control
+ * Processing progress from backend
  */
-class TasksState {
-  // Active tasks being processed
-  tasks = $state<ProcessingTask[]>([]);
+export interface ProcessingProgress {
+  total: number;
+  completed: number;
+  failed: number;
+  is_paused: boolean;
+  is_running: boolean;
+}
 
-  // Statistics
-  stats = $state<TaskStats>({
-    total: 0,
-    pending: 0,
-    queued: 0,
-    processing: 0,
-    paused: 0,
-    complete: 0,
-    error: 0,
-    cancelled: 0,
-  });
-
-  // Processing state
-  isProcessing = $state(false);
-
-  // Progress tracking
-  currentProgress = $state<TaskProgress | null>(null);
+/**
+ * Simplified processing state management
+ *
+ * The new architecture treats all asset processing as a single logical task
+ * with batch progress updates instead of tracking individual per-asset tasks.
+ */
+class ProcessingState {
+  // Progress statistics
+  total = $state(0);
+  completed = $state(0);
+  failed = $state(0);
+  isPaused = $state(false);
+  isRunning = $state(false);
 
   // Event listeners
   private unlistenFns: UnlistenFn[] = [];
 
   /**
-   * Initialize event listeners for task events
+   * Initialize event listeners for processing events
    */
   async initializeListeners() {
     // Clean up existing listeners
     this.cleanup();
 
-    // Listen for task-started events
-    const unlistenStarted = await listen<TaskProgress>('task-started', (event) => {
-      console.log('[Tasks] Task started:', event.payload);
-      this.isProcessing = true;
-      this.currentProgress = event.payload;
-      this.refreshTasks();
+    // Listen for batch progress updates (every 10 assets or 2 seconds)
+    const unlistenProgress = await listen<ProcessingProgress>('processing-progress', (event) => {
+      console.log('[Processing] Progress update:', event.payload);
+      this.updateProgress(event.payload);
     });
 
-    // Listen for task-progress events
-    const unlistenProgress = await listen<TaskProgress>('task-progress', (event) => {
-      console.log('[Tasks] Task progress:', event.payload);
-      this.currentProgress = event.payload;
-      this.refreshTasks();
+    // Listen for processing completion
+    const unlistenComplete = await listen<ProcessingProgress>('processing-complete', (event) => {
+      console.log('[Processing] Complete:', event.payload);
+      this.updateProgress(event.payload);
     });
 
-    // Listen for task-completed events
-    const unlistenCompleted = await listen<TaskProgress>('task-completed', (event) => {
-      console.log('[Tasks] Task completed:', event.payload);
-      this.currentProgress = null;
-      this.refreshTasks();
-      this.refreshStats();
-    });
-
-    this.unlistenFns = [unlistenStarted, unlistenProgress, unlistenCompleted];
+    this.unlistenFns = [unlistenProgress, unlistenComplete];
   }
 
   /**
-   * Start processing tasks
+   * Update progress from backend event
    */
-  async startProcessing(taskType?: string, assetType?: string) {
+  private updateProgress(progress: ProcessingProgress) {
+    this.total = progress.total;
+    this.completed = progress.completed;
+    this.failed = progress.failed;
+    this.isPaused = progress.is_paused;
+    this.isRunning = progress.is_running;
+  }
+
+  /**
+   * Start processing all pending assets
+   */
+  async startProcessing() {
     try {
-      const taskIds = await invoke<number[]>('start_processing', {
-        taskType,
-        assetType,
-      });
-      console.log('[Tasks] Started processing:', taskIds.length, 'tasks');
-      this.isProcessing = true;
-      this.refreshTasks();
-      this.refreshStats();
-      return taskIds;
+      await invoke('start_processing_assets');
+      console.log('[Processing] Started');
+
+      // Query initial progress
+      await this.refreshProgress();
     } catch (error) {
-      console.error('[Tasks] Failed to start processing:', error);
+      console.error('[Processing] Failed to start:', error);
       throw error;
     }
   }
 
   /**
-   * Pause a specific task
+   * Pause processing
    */
-  async pauseTask(taskId: number) {
+  async pause() {
     try {
-      await invoke('pause_task', { taskId });
-      console.log('[Tasks] Paused task:', taskId);
-      this.refreshTasks();
+      await invoke('pause_processing');
+      console.log('[Processing] Paused');
+      this.isPaused = true;
     } catch (error) {
-      console.error('[Tasks] Failed to pause task:', error);
+      console.error('[Processing] Failed to pause:', error);
       throw error;
     }
   }
 
   /**
-   * Resume a specific task
+   * Resume processing
    */
-  async resumeTask(taskId: number) {
+  async resume() {
     try {
-      await invoke('resume_task', { taskId });
-      console.log('[Tasks] Resumed task:', taskId);
-      this.refreshTasks();
+      await invoke('resume_processing');
+      console.log('[Processing] Resumed');
+      this.isPaused = false;
     } catch (error) {
-      console.error('[Tasks] Failed to resume task:', error);
+      console.error('[Processing] Failed to resume:', error);
       throw error;
     }
   }
 
   /**
-   * Cancel a specific task
+   * Stop processing completely
    */
-  async cancelTask(taskId: number) {
+  async stop() {
     try {
-      await invoke('cancel_task', { taskId });
-      console.log('[Tasks] Cancelled task:', taskId);
-      this.refreshTasks();
+      await invoke('stop_processing');
+      console.log('[Processing] Stopped');
+      this.isRunning = false;
     } catch (error) {
-      console.error('[Tasks] Failed to cancel task:', error);
+      console.error('[Processing] Failed to stop:', error);
       throw error;
     }
   }
 
   /**
-   * Pause all active tasks
+   * Refresh progress from backend
    */
-  async pauseAll() {
+  async refreshProgress() {
     try {
-      await invoke('pause_all_tasks');
-      console.log('[Tasks] Paused all tasks');
-      this.refreshTasks();
+      const progress = await invoke<ProcessingProgress>('get_processing_progress');
+      this.updateProgress(progress);
+      return progress;
     } catch (error) {
-      console.error('[Tasks] Failed to pause all tasks:', error);
+      console.error('[Processing] Failed to refresh progress:', error);
       throw error;
     }
   }
 
   /**
-   * Resume all paused tasks
+   * Get progress percentage (0-100)
    */
-  async resumeAll() {
-    try {
-      await invoke('resume_all_tasks');
-      console.log('[Tasks] Resumed all tasks');
-      this.refreshTasks();
-    } catch (error) {
-      console.error('[Tasks] Failed to resume all tasks:', error);
-      throw error;
-    }
+  getProgressPercentage(): number {
+    if (this.total === 0) return 0;
+    return Math.round(((this.completed + this.failed) / this.total) * 100);
   }
 
   /**
-   * Load all tasks (optionally filtered by status)
+   * Get status text for display
    */
-  async loadTasks(status?: string) {
-    try {
-      const tasks = await invoke<ProcessingTask[]>('get_tasks', { status });
-      this.tasks = tasks;
-      return tasks;
-    } catch (error) {
-      console.error('[Tasks] Failed to load tasks:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Refresh tasks (reload from backend)
-   */
-  async refreshTasks() {
-    await this.loadTasks();
-  }
-
-  /**
-   * Load task statistics
-   */
-  async loadStats() {
-    try {
-      const stats = await invoke<TaskStats>('get_task_stats');
-      this.stats = stats;
-
-      // Update isProcessing based on stats
-      this.isProcessing = stats.processing > 0 || stats.queued > 0;
-
-      return stats;
-    } catch (error) {
-      console.error('[Tasks] Failed to load stats:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Refresh statistics
-   */
-  async refreshStats() {
-    await this.loadStats();
-  }
-
-  /**
-   * Get tasks by status
-   */
-  getTasksByStatus(status: string): ProcessingTask[] {
-    return this.tasks.filter((t) => t.status === status);
-  }
-
-  /**
-   * Get active tasks (processing or queued)
-   */
-  getActiveTasks(): ProcessingTask[] {
-    return this.tasks.filter((t) => t.status === 'processing' || t.status === 'queued');
+  getStatusText(): string {
+    if (!this.isRunning) return 'Idle';
+    if (this.isPaused) return 'Paused';
+    return 'Processing';
   }
 
   /**
@@ -223,49 +161,14 @@ class TasksState {
 }
 
 // Export singleton instance
-export const tasksState = new TasksState();
+export const processingState = new ProcessingState();
 
 /**
- * Helper to get task status display color
+ * Helper to get status display color
  */
-export function getTaskStatusColor(status: string): string {
-  switch (status) {
-    case 'pending':
-      return 'text-gray-500';
-    case 'queued':
-      return 'text-blue-500';
-    case 'processing':
-      return 'text-yellow-500';
-    case 'paused':
-      return 'text-orange-500';
-    case 'complete':
-      return 'text-green-500';
-    case 'error':
-      return 'text-red-500';
-    case 'cancelled':
-      return 'text-gray-400';
-    default:
-      return 'text-gray-500';
-  }
-}
-
-/**
- * Helper to get task status display text
- */
-export function getTaskStatusText(status: string): string {
-  return status.charAt(0).toUpperCase() + status.slice(1);
-}
-
-/**
- * Helper to format task type
- */
-export function formatTaskType(taskType: string): string {
-  switch (taskType) {
-    case 'thumbnail':
-      return 'Thumbnail';
-    case 'metadata':
-      return 'Metadata';
-    default:
-      return taskType.charAt(0).toUpperCase() + taskType.slice(1);
-  }
+export function getStatusColor(state: ProcessingState): string {
+  if (!state.isRunning) return 'text-gray-500';
+  if (state.isPaused) return 'text-orange-500';
+  if (state.failed > 0) return 'text-yellow-500';
+  return 'text-blue-500';
 }

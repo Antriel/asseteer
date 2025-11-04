@@ -1,6 +1,4 @@
-pub mod handlers;
-pub mod manager;
-pub mod runner;
-pub mod types;
+pub mod processor;
+pub mod work_queue;
 
-pub use manager::TaskManager;
+pub use work_queue::{WorkQueue, ProcessingProgress};

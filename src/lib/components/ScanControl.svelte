@@ -3,7 +3,7 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { uiState } from '$lib/state/ui.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
-  import { tasksState } from '$lib/state/tasks.svelte';
+  import { processingState } from '$lib/state/tasks.svelte';
 
   async function selectFolder() {
     try {
@@ -30,9 +30,9 @@
       uiState.currentSessionId = sessionId;
       uiState.scanProgress = 'Scan complete! Assets discovered and tasks created.';
 
-      // Reload assets and refresh task statistics
+      // Reload assets and refresh processing progress
       await assetsState.loadAssets();
-      await tasksState.refreshStats();
+      await processingState.refreshProgress();
 
       // Clear progress message after delay
       setTimeout(() => {
