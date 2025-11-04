@@ -19,6 +19,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_sql::Builder::new().build())
         .setup(|app| {
             // Get app data directory
             let app_dir = app.path().app_data_dir()
@@ -48,15 +49,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::scan::start_scan,
-            commands::search::search_assets,
-            commands::search::get_asset_count,
             commands::process::start_processing_assets,
             commands::process::pause_processing,
             commands::process::resume_processing,
             commands::process::stop_processing,
             commands::process::get_processing_progress,
-            commands::process::get_thumbnail,
-            commands::process::get_pending_asset_count,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

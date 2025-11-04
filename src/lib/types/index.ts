@@ -85,3 +85,9 @@ export interface ScanSession {
   completed_at: number | null;
   error: string | null;
 }
+
+export interface PendingCount {
+  images: number;
+  audio: number;
+  total: number;
+}

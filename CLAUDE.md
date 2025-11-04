@@ -30,6 +30,12 @@ Do not run other commands! If you want to test the application, ask the user to 
   - `src/routes/+layout.svelte` - Root layout
   - `src/routes/+page.svelte` - Main application page
 
+- **Database Layer**: Direct SQLite access via Tauri SQL plugin in `src/lib/database/`
+  - `connection.ts` - Database connection management
+  - `queries.ts` - Typed query functions for all read operations
+  - Frontend performs ALL read operations directly (search, counts, thumbnails)
+  - No backend round-trip for queries - better performance and simpler code
+
 - **State Management**: Svelte 5 runes-based state in `src/lib/state/`
   - State modules in `.svelte.ts` files
   - Use `$state`, `$derived`, `$effect` runes
@@ -43,14 +49,18 @@ Do not run other commands! If you want to test the application, ask the user to 
 ### Backend (Tauri/Rust)
 - **Entry Point**: `src-tauri/src/main.rs` → `src-tauri/src/lib.rs`
 - **Commands**: Organized in `src-tauri/src/commands/`
-  - `scan.rs` - Asset discovery and file scanning
-  - `search.rs` - Asset search and retrieval
-  - `process.rs` - **Asset processing pipeline (images and audio)**
+  - `scan.rs` - Asset discovery and file scanning (writes to DB)
+  - `process.rs` - Asset processing pipeline (images and audio) + worker management
+  - **Note**: All read operations moved to frontend via Tauri SQL plugin
 - **Database Layer**: Organized in `src-tauri/src/database/`
-  - SQLite with sqlx for async operations
-  - FTS5 for full-text search
-  - Connection pooling for performance
+  - SQLite with sqlx for async write operations
+  - FTS5 for full-text search (queried from frontend)
+  - Connection pooling for write operations
+  - Frontend has direct read-only access via Tauri SQL plugin
 - **Models**: Data structures in `src-tauri/src/models.rs`
+- **Task System**: Background worker pool in `src-tauri/src/task_system/`
+  - `work_queue.rs` - Async worker pool with 4 parallel workers
+  - `processor.rs` - Image and audio processing logic
 
 ### Asset Processing Pipeline
 
@@ -77,14 +87,24 @@ The application processes discovered assets in two phases:
 
 **Tauri Commands** (exposed to frontend):
 ```rust
-// Process all pending image assets (thumbnails + metadata)
-process_pending_images() -> Result<usize, String>
+// Scan operations
+start_scan(root_path: String) -> Result<(), String>
 
-// Process all pending audio assets (metadata only)
-process_pending_audio() -> Result<usize, String>
+// Processing operations
+start_processing_assets() -> Result<(), String>
+pause_processing() -> Result<(), String>
+resume_processing() -> Result<(), String>
+stop_processing() -> Result<(), String>
+get_processing_progress() -> Result<ProcessingProgress, String>
+```
 
-// Retrieve thumbnail for specific asset
-get_thumbnail(asset_id: i64) -> Result<Vec<u8>, String>
+**Frontend Database Queries** (via Tauri SQL plugin):
+```typescript
+// All read operations performed directly by frontend
+searchAssets(db, searchText?, assetType?, limit, offset) -> Promise<Asset[]>
+getAssetCount(db) -> Promise<number>
+getThumbnail(db, assetId) -> Promise<Uint8Array | null>
+getPendingAssetCounts(db) -> Promise<PendingCount>
 ```
 
 **Progress Tracking**:
@@ -103,7 +123,8 @@ get_thumbnail(asset_id: i64) -> Result<Vec<u8>, String>
 - **Tauri v2**: Rust-based desktop framework with native webviews
   - Small bundle size (3-5MB)
   - Low memory footprint
-  - Built-in plugins for fs, dialog, and other operations
+  - Built-in plugins for fs, dialog, SQL, and other operations
+  - **Tauri SQL Plugin**: Frontend direct database access for read operations
 
 ### Frontend
 - **Svelte 5**: Modern reactive framework using **runes** (`$state`, `$derived`, `$effect`)
@@ -236,7 +257,31 @@ export function getDerivedValue(): number {
 
 ⚠️ **IMPORTANT:** Never use component-specific `<style>` blocks in Svelte components!
 
-### 3. Tauri Backend Integration
+### 3. Database Access Pattern
+
+**IMPORTANT**: The application uses a dual-database architecture:
+- **Frontend**: Direct SQLite access via Tauri SQL plugin for ALL read operations
+- **Backend**: Rust/sqlx for write operations and processing
+
+**Frontend Database Access:**
+```typescript
+import { getDatabase } from '$lib/database/connection';
+import { searchAssets, getAssetCount, getThumbnail } from '$lib/database/queries';
+
+// Get database instance
+const db = await getDatabase();
+
+// Perform queries directly
+const assets = await searchAssets(db, 'searchTerm', undefined, 50, 0);
+const count = await getAssetCount(db);
+const thumbnail = await getThumbnail(db, assetId);
+```
+
+**When to use Frontend DB vs Backend Commands:**
+- ✅ **Frontend DB**: ALL read operations (SELECT queries)
+- ✅ **Backend Commands**: Write operations (INSERT/UPDATE/DELETE), processing, file operations
+
+### 4. Tauri Backend Integration
 
 **Use built-in plugins wherever possible:**
 ```typescript
@@ -250,7 +295,7 @@ async function saveData(data: any, path: string) {
 }
 ```
 
-### 4. Error Handling & User Feedback
+### 5. Error Handling & User Feedback
 
 **⚠️ IMPORTANT**: Tauri restricts native browser dialogs (`alert()`, `confirm()`) for security. Always use custom UI components.
 
@@ -318,6 +363,9 @@ src/
 │   │   ├── shared/       # Reusable components
 │   │   ├── layout/       # Layout components
 │   │   └── [feature]/    # Feature-specific components
+│   ├── database/         # Frontend database layer (Tauri SQL plugin)
+│   │   ├── connection.ts # Database connection management
+│   │   └── queries.ts    # Typed query functions for all read operations
 │   ├── state/            # Svelte 5 rune-based state modules (.svelte.ts)
 │   │   ├── ui.svelte.ts        # UI state (toasts, modals, etc.)
 │   │   └── [feature].svelte.ts # Feature-specific state
@@ -331,12 +379,12 @@ src/
 └── app.css              # Global styles with theme variables
 src-tauri/
 ├── src/
-│   ├── commands/        # Tauri command handlers
-│   ├── database/        # Database layer (if applicable)
-│   ├── services/        # Business logic
+│   ├── commands/        # Tauri command handlers (write operations only)
+│   ├── database/        # Backend database layer (sqlx for writes)
+│   ├── task_system/     # Background worker pool for asset processing
 │   └── utils/           # Helper functions
 ├── migrations/          # Database migrations
-└── tauri.conf.json      # Tauri configuration
+└── tauri.conf.json      # Tauri configuration (includes SQL plugin setup)
 ```
 
 ## Code Style Guidelines
@@ -439,3 +487,85 @@ npm run test:unit         # Run once
 - Types defined within respective state or feature modules
 - Import types from their source locations
 - Central types file only if truly shared across many modules
+
+## Database Architecture
+
+### Dual-Access Pattern
+The application uses a **dual-access database architecture** for optimal performance:
+
+**Frontend (Read Operations)**:
+- Direct SQLite access via `@tauri-apps/plugin-sql`
+- All SELECT queries executed on frontend
+- No serialization overhead for reads
+- Supports complex JOINs and FTS5 full-text search
+- Location: `src/lib/database/`
+
+**Backend (Write Operations)**:
+- Rust/sqlx for INSERT, UPDATE, DELETE operations
+- Asset processing and metadata generation
+- Database migrations and schema management
+- Location: `src-tauri/src/database/`
+
+### Database Schema
+```sql
+-- Core tables
+assets                 -- Asset registry (files discovered)
+image_metadata         -- Image dimensions + thumbnails (BLOB)
+audio_metadata         -- Audio duration, sample rate, channels
+assets_fts             -- FTS5 virtual table for full-text search
+scan_sessions          -- Scan history tracking
+
+-- Relationships
+image_metadata.asset_id -> assets.id (1:1)
+audio_metadata.asset_id -> assets.id (1:1)
+assets_fts.rowid -> assets.id (1:1, auto-synced via triggers)
+```
+
+### Query Examples
+
+**Frontend Read Operations:**
+```typescript
+import { getDatabase } from '$lib/database/connection';
+import { searchAssets, getAssetCount, getThumbnail } from '$lib/database/queries';
+
+// Search with full-text search and pagination
+const db = await getDatabase();
+const results = await searchAssets(db, 'forest', 'image', 50, 0);
+
+// Get counts
+const totalAssets = await getAssetCount(db);
+
+// Get thumbnail BLOB
+const thumbnailData = await getThumbnail(db, assetId);
+if (thumbnailData) {
+  const blob = new Blob([thumbnailData], { type: 'image/jpeg' });
+  const url = URL.createObjectURL(blob);
+}
+```
+
+**Backend Write Operations:**
+```rust
+// Insert new asset (via scan command)
+sqlx::query("INSERT INTO assets (...) VALUES (...)")
+    .bind(...)
+    .execute(&pool)
+    .await?;
+
+// Update metadata (via processing command)
+sqlx::query("INSERT INTO image_metadata (...) VALUES (...)")
+    .bind(...)
+    .execute(&pool)
+    .await?;
+```
+
+### Best Practices
+
+1. **Never create backend commands for read operations** - Use frontend database queries instead
+2. **Keep queries in `src/lib/database/queries.ts`** - Centralized, typed, reusable
+3. **Use backend commands only for:**
+   - Write operations (INSERT/UPDATE/DELETE)
+   - File system operations
+   - Heavy processing (image resizing, audio parsing)
+   - Background worker coordination
+4. **FTS5 queries**: Add `*` wildcard for prefix matching (`searchTerm*`)
+5. **BLOB handling**: Convert `number[]` from SQL plugin to `Uint8Array<ArrayBuffer>` for Blob compatibility

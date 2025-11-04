@@ -1,5 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { getDatabase } from '$lib/database/connection';
+import { getPendingAssetCounts } from '$lib/database/queries';
+import type { PendingCount } from '$lib/types';
 
 /**
  * Processing progress from backend
@@ -10,15 +13,6 @@ export interface ProcessingProgress {
   failed: number;
   is_paused: boolean;
   is_running: boolean;
-}
-
-/**
- * Pending asset count from backend
- */
-export interface PendingCount {
-  images: number;
-  audio: number;
-  total: number;
 }
 
 /**
@@ -154,7 +148,8 @@ class ProcessingState {
    */
   async refreshPendingCount() {
     try {
-      const count = await invoke<PendingCount>('get_pending_asset_count');
+      const db = await getDatabase();
+      const count = await getPendingAssetCounts(db);
       this.pendingCount = count;
       console.log('[Processing] Pending count updated:', count);
       return count;

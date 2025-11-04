@@ -1,4 +1,4 @@
-use crate::models::{Asset, PendingCount};
+use crate::models::Asset;
 use crate::task_system::ProcessingProgress;
 use crate::AppState;
 use tauri::{AppHandle, Emitter, State};
@@ -114,49 +114,3 @@ pub async fn get_processing_progress(state: State<'_, AppState>) -> Result<Proce
     Ok(state.work_queue.get_progress())
 }
 
-/// Get thumbnail data for a specific asset
-#[tauri::command]
-pub async fn get_thumbnail(state: State<'_, AppState>, asset_id: i64) -> Result<Vec<u8>, String> {
-    let result: (Vec<u8>,) = sqlx::query_as(
-        "SELECT thumbnail_data FROM image_metadata WHERE asset_id = ?"
-    )
-    .bind(asset_id)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    Ok(result.0)
-}
-
-/// Get count of pending assets that need processing
-#[tauri::command]
-pub async fn get_pending_asset_count(state: State<'_, AppState>) -> Result<PendingCount, String> {
-    // Count images without metadata
-    let images: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM assets a
-         LEFT JOIN image_metadata im ON a.id = im.asset_id
-         WHERE a.asset_type = 'image' AND im.asset_id IS NULL"
-    )
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| format!("Failed to count pending images: {}", e))?;
-
-    // Count audio without metadata
-    let audio: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM assets a
-         LEFT JOIN audio_metadata am ON a.id = am.asset_id
-         WHERE a.asset_type = 'audio' AND am.asset_id IS NULL"
-    )
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| format!("Failed to count pending audio: {}", e))?;
-
-    let images_count = images.0 as usize;
-    let audio_count = audio.0 as usize;
-
-    Ok(PendingCount {
-        images: images_count,
-        audio: audio_count,
-        total: images_count + audio_count,
-    })
-}

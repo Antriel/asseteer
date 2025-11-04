@@ -26,10 +26,19 @@
           "windows": ["main"],
           "permissions": [
             "dialog:allow-open",
-            "core:event:default"
+            "core:event:default",
+            "sql:allow-load",
+            "sql:allow-execute",
+            "sql:allow-select",
+            "sql:allow-close"
           ]
         }
       ]
+    }
+  },
+  "plugins": {
+    "sql": {
+      "preload": ["sqlite:asseteer.db"]
     }
   },
   "bundle": {

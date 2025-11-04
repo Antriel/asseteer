@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
+  import { getDatabase } from '$lib/database/connection';
+  import { getThumbnail } from '$lib/database/queries';
 
   interface Props {
     assetId: number;
@@ -20,10 +21,13 @@
     }
 
     try {
-      const bytes = await invoke<number[]>('get_thumbnail', { assetId });
+      const db = await getDatabase();
+      const uint8Array = await getThumbnail(db, assetId);
 
-      // Convert array to Uint8Array
-      const uint8Array = new Uint8Array(bytes);
+      if (!uint8Array) {
+        error = 'Thumbnail not found';
+        return;
+      }
 
       // Create blob from bytes
       const blob = new Blob([uint8Array], { type: 'image/jpeg' });

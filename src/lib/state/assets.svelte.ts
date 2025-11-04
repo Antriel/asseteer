@@ -1,5 +1,6 @@
-import { invoke } from '@tauri-apps/api/core';
-import type { Asset, SearchQuery } from '$lib/types';
+import type { Asset } from '$lib/types';
+import { getDatabase } from '$lib/database/connection';
+import { searchAssets as dbSearchAssets, getAssetCount } from '$lib/database/queries';
 
 // Assets state - create a reactive state object
 class AssetsState {
@@ -17,17 +18,20 @@ class AssetsState {
     this.isLoading = true;
 
     try {
-      const query: SearchQuery = {
-        text: this.searchText || undefined,
-        limit: this.pageSize,
-        offset: this.currentOffset,
-      };
+      const db = await getDatabase();
 
-      const result = await invoke<Asset[]>('search_assets', { query });
+      // Search assets with current parameters
+      const result = await dbSearchAssets(
+        db,
+        this.searchText || undefined,
+        undefined,
+        this.pageSize,
+        this.currentOffset
+      );
       this.assets = result;
 
       // Load total count
-      const count = await invoke<number>('get_asset_count');
+      const count = await getAssetCount(db);
       this.totalCount = count;
     } catch (error) {
       console.error('Failed to load assets:', error);
