@@ -10,7 +10,6 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 
-const NUM_WORKERS: usize = 4;
 const BATCH_UPDATE_INTERVAL_SEC: u64 = 2;
 const EMIT_PROGRESS_EVERY_N_ASSETS: usize = 10;
 
@@ -84,9 +83,13 @@ impl WorkQueue {
                 .map_err(|e| format!("Failed to queue asset: {}", e))?;
         }
 
+        // Calculate number of workers based on CPU cores (leave 1 core free for system/UI)
+        let num_workers = std::cmp::max(2, num_cpus::get().saturating_sub(1));
+        println!("[WorkQueue] Starting {} workers (detected {} CPUs)", num_workers, num_cpus::get());
+
         // Spawn workers
         let mut handles = Vec::new();
-        for worker_id in 0..NUM_WORKERS {
+        for worker_id in 0..num_workers {
             let handle = self.spawn_worker(worker_id, db.clone(), app_handle.clone());
             handles.push(handle);
         }

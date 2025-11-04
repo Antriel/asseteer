@@ -48,4 +48,5 @@ symphonia = { version = "0.5", features = ["all"] }
 # Utilities
 base64 = "0.22"
 chrono = "0.4"
+num_cpus = "1"
 
