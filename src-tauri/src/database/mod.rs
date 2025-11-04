@@ -33,6 +33,9 @@ pub async fn initialize_db(db_path: &str) -> Result<DbPool, sqlx::Error> {
     // Run migrations/setup
     init::setup_database(&pool).await?;
 
+    // Run migration to fix FTS triggers
+    init::migrate_fts_triggers(&pool).await?;
+
     println!("[DB] Database pool initialized successfully");
     Ok(pool)
 }

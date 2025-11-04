@@ -17,65 +17,114 @@ pub async fn search_assets(
     state: State<'_, AppState>,
     query: SearchQuery,
 ) -> Result<Vec<Asset>, String> {
-    let mut sql = String::from(
-        "SELECT
-            id, filename, path, zip_entry, asset_type, format, file_size,
-            width, height, duration_ms, sample_rate, channels,
-            created_at, modified_at, processing_status, processing_error
-        FROM assets"
-    );
+    // Check if we need full-text search
+    let search_text = query.text.as_ref()
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("{}*", t.trim()));
 
-    let mut conditions = Vec::new();
-    let mut where_added = false;
-
-    // Full-text search
-    let search_text = if let Some(text) = &query.text {
-        if !text.is_empty() {
-            sql.push_str(" INNER JOIN assets_fts fts ON assets.id = fts.rowid");
-            conditions.push("fts MATCH ?");
-            where_added = true;
-            Some(format!("{}*", text.trim()))
-        } else {
-            None
-        }
+    let assets = if let Some(text) = search_text {
+        // Full-text search query
+        search_with_fts(&state, text, query.asset_type.as_deref(), query.limit, query.offset).await?
     } else {
-        None
+        // Simple query without FTS
+        search_without_fts(&state, query.asset_type.as_deref(), query.limit, query.offset).await?
     };
 
-    // Asset type filter
-    if query.asset_type.is_some() {
-        conditions.push("asset_type = ?");
-    }
+    Ok(assets)
+}
 
-    // Build WHERE clause
-    if !conditions.is_empty() {
-        if !where_added {
-            sql.push_str(" WHERE ");
-        } else {
-            sql.push_str(" WHERE ");
-        }
-        sql.push_str(&conditions.join(" AND "));
-    }
-
-    // Sorting and pagination
-    sql.push_str(" ORDER BY filename COLLATE NOCASE ASC");
-    sql.push_str(&format!(" LIMIT {} OFFSET {}", query.limit, query.offset));
-
-    // Execute query with dynamic binding
-    let mut query_builder = sqlx::query_as::<_, Asset>(&sql);
-
-    if let Some(text) = search_text {
-        query_builder = query_builder.bind(text);
-    }
-
-    if let Some(asset_type) = &query.asset_type {
-        query_builder = query_builder.bind(asset_type);
-    }
-
-    let assets = query_builder
+/// Search using full-text search
+async fn search_with_fts(
+    state: &AppState,
+    search_text: String,
+    asset_type: Option<&str>,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<Asset>, String> {
+    let assets = if let Some(atype) = asset_type {
+        sqlx::query_as::<_, Asset>(
+            "SELECT
+                assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
+                assets.format, assets.file_size, assets.width, assets.height, assets.duration_ms,
+                assets.sample_rate, assets.channels, assets.created_at, assets.modified_at,
+                assets.processing_status, assets.processing_error
+            FROM assets
+            INNER JOIN assets_fts ON assets.id = assets_fts.rowid
+            WHERE assets_fts MATCH ? AND assets.asset_type = ?
+            ORDER BY assets.filename COLLATE NOCASE ASC
+            LIMIT ? OFFSET ?"
+        )
+        .bind(search_text)
+        .bind(atype)
+        .bind(limit)
+        .bind(offset)
         .fetch_all(&state.pool)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+    } else {
+        sqlx::query_as::<_, Asset>(
+            "SELECT
+                assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
+                assets.format, assets.file_size, assets.width, assets.height, assets.duration_ms,
+                assets.sample_rate, assets.channels, assets.created_at, assets.modified_at,
+                assets.processing_status, assets.processing_error
+            FROM assets
+            INNER JOIN assets_fts ON assets.id = assets_fts.rowid
+            WHERE assets_fts MATCH ?
+            ORDER BY assets.filename COLLATE NOCASE ASC
+            LIMIT ? OFFSET ?"
+        )
+        .bind(search_text)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?
+    };
+
+    Ok(assets)
+}
+
+/// Search without full-text search
+async fn search_without_fts(
+    state: &AppState,
+    asset_type: Option<&str>,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<Asset>, String> {
+    let assets = if let Some(atype) = asset_type {
+        sqlx::query_as::<_, Asset>(
+            "SELECT
+                id, filename, path, zip_entry, asset_type, format, file_size,
+                width, height, duration_ms, sample_rate, channels,
+                created_at, modified_at, processing_status, processing_error
+            FROM assets
+            WHERE asset_type = ?
+            ORDER BY filename COLLATE NOCASE ASC
+            LIMIT ? OFFSET ?"
+        )
+        .bind(atype)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?
+    } else {
+        sqlx::query_as::<_, Asset>(
+            "SELECT
+                id, filename, path, zip_entry, asset_type, format, file_size,
+                width, height, duration_ms, sample_rate, channels,
+                created_at, modified_at, processing_status, processing_error
+            FROM assets
+            ORDER BY filename COLLATE NOCASE ASC
+            LIMIT ? OFFSET ?"
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?
+    };
 
     Ok(assets)
 }

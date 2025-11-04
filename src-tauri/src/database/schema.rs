@@ -42,8 +42,6 @@ pub const CREATE_ASSETS_FTS: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS assets_fts USING fts5(
     filename,
     path_segments,
-    content=assets,
-    content_rowid=id,
     tokenize='porter unicode61 remove_diacritics 1'
 )
 "#;
@@ -55,10 +53,9 @@ CREATE TRIGGER IF NOT EXISTS assets_ai AFTER INSERT ON assets BEGIN
 END;
 
 CREATE TRIGGER IF NOT EXISTS assets_au AFTER UPDATE ON assets BEGIN
-    UPDATE assets_fts
-    SET filename = new.filename,
-        path_segments = REPLACE(new.path, '/', ' ')
-    WHERE rowid = new.id;
+    DELETE FROM assets_fts WHERE rowid = old.id;
+    INSERT INTO assets_fts(rowid, filename, path_segments)
+    VALUES (new.id, new.filename, REPLACE(new.path, '/', ' '));
 END;
 
 CREATE TRIGGER IF NOT EXISTS assets_ad AFTER DELETE ON assets BEGIN

@@ -25,7 +25,8 @@
           "description": "Main application capabilities",
           "windows": ["main"],
           "permissions": [
-            "dialog:allow-open"
+            "dialog:allow-open",
+            "core:event:default"
           ]
         }
       ]
