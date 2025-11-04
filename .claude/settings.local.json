@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check:*)",
+      "Bash(npm run check:svelte:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
