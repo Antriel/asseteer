@@ -45,7 +45,7 @@ pub const CREATE_ASSETS_FTS: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS assets_fts USING fts5(
     filename,
     path_segments,
-    tokenize='porter unicode61 remove_diacritics 1'
+    tokenize='trigram'
 )
 "#;
 
