@@ -2,12 +2,12 @@ mod database;
 mod models;
 mod commands;
 
-use database::{initialize_db, DbConnection};
+use database::{initialize_db, close_db, DbPool};
 use tauri::Manager;
 
 /// Application state shared across all commands
 pub struct AppState {
-    pub db: DbConnection,
+    pub pool: DbPool,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -24,13 +24,15 @@ pub fn run() {
             std::fs::create_dir_all(&app_dir)
                 .expect("Failed to create app data directory");
 
-            // Initialize database
+            // Initialize database pool
             let db_path = app_dir.join("asseteer.db");
-            let db = initialize_db(db_path.to_str().unwrap())
-                .expect("Failed to initialize database");
+            let pool = tauri::async_runtime::block_on(async {
+                initialize_db(db_path.to_str().unwrap()).await
+            })
+            .expect("Failed to initialize database");
 
-            // Store database in app state
-            app.manage(AppState { db });
+            // Store pool in app state
+            app.manage(AppState { pool });
 
             Ok(())
         })
@@ -39,6 +41,24 @@ pub fn run() {
             commands::search::search_assets,
             commands::search::get_asset_count,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            match event {
+                tauri::RunEvent::Exit => {
+                    println!("[APP] Application exiting, cleaning up...");
+
+                    // Close the database pool properly
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        let pool = state.pool.clone();
+                        tauri::async_runtime::block_on(async {
+                            close_db(pool).await;
+                        });
+                    } else {
+                        println!("[APP] Could not get AppState");
+                    }
+                }
+                _ => {}
+            }
+        });
 }

@@ -1,5 +1,5 @@
 use crate::{models::*, AppState};
-use rusqlite::params;
+use sqlx;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
@@ -45,20 +45,21 @@ pub async fn start_scan(
 
 /// Create a new scan session
 async fn create_scan_session(state: &State<'_, AppState>, root_path: &str) -> Result<i64, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs() as i64;
 
-    conn.execute(
-        "INSERT INTO scan_sessions (root_path, started_at) VALUES (?1, ?2)",
-        params![root_path, now],
+    let result = sqlx::query(
+        "INSERT INTO scan_sessions (root_path, started_at) VALUES (?1, ?2)"
     )
+    .bind(root_path)
+    .bind(now)
+    .execute(&state.pool)
+    .await
     .map_err(|e| e.to_string())?;
 
-    let id = conn.last_insert_rowid();
-    Ok(id)
+    Ok(result.last_insert_rowid())
 }
 
 /// Update session with total file count
@@ -67,12 +68,12 @@ async fn update_session_total(
     session_id: i64,
     total: usize,
 ) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "UPDATE scan_sessions SET total_files = ?1 WHERE id = ?2",
-        params![total as i64, session_id],
-    )
-    .map_err(|e| e.to_string())?;
+    sqlx::query("UPDATE scan_sessions SET total_files = ?1 WHERE id = ?2")
+        .bind(total as i64)
+        .bind(session_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -82,24 +83,26 @@ async fn update_session_status(
     session_id: i64,
     status: &str,
 ) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs() as i64;
 
     if status == "complete" {
-        conn.execute(
-            "UPDATE scan_sessions SET status = ?1, completed_at = ?2 WHERE id = ?3",
-            params![status, now, session_id],
-        )
-        .map_err(|e| e.to_string())?;
+        sqlx::query("UPDATE scan_sessions SET status = ?1, completed_at = ?2 WHERE id = ?3")
+            .bind(status)
+            .bind(now)
+            .bind(session_id)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| e.to_string())?;
     } else {
-        conn.execute(
-            "UPDATE scan_sessions SET status = ?1 WHERE id = ?2",
-            params![status, session_id],
-        )
-        .map_err(|e| e.to_string())?;
+        sqlx::query("UPDATE scan_sessions SET status = ?1 WHERE id = ?2")
+            .bind(status)
+            .bind(session_id)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -153,13 +156,12 @@ async fn insert_pending_assets(
     _session_id: i64,
     files: Vec<PathBuf>,
 ) -> Result<(), String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs() as i64;
 
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
 
     for path in files {
         let filename = path
@@ -182,26 +184,26 @@ async fn insert_pending_assets(
         let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
         let file_size = metadata.len() as i64;
 
-        tx.execute(
+        sqlx::query(
             "INSERT INTO assets (
                 filename, path, asset_type, format, file_size,
                 created_at, modified_at, processing_status
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                filename,
-                path_str,
-                asset_type.as_str(),
-                format,
-                file_size,
-                now,
-                now,
-                "pending"
-            ],
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
         )
+        .bind(&filename)
+        .bind(&path_str)
+        .bind(asset_type.as_str())
+        .bind(&format)
+        .bind(file_size)
+        .bind(now)
+        .bind(now)
+        .bind("pending")
+        .execute(&mut *tx)
+        .await
         .map_err(|e| e.to_string())?;
     }
 
-    tx.commit().map_err(|e| e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
 
     Ok(())
 }
