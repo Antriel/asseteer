@@ -45,9 +45,13 @@ async fn search_with_fts(
         sqlx::query_as::<_, Asset>(
             "SELECT
                 assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
-                assets.format, assets.file_size, assets.created_at, assets.modified_at
+                assets.format, assets.file_size, assets.created_at, assets.modified_at,
+                image_metadata.width, image_metadata.height,
+                audio_metadata.duration_ms, audio_metadata.sample_rate, audio_metadata.channels
             FROM assets
             INNER JOIN assets_fts ON assets.id = assets_fts.rowid
+            LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
+            LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
             WHERE assets_fts MATCH ? AND assets.asset_type = ?
             ORDER BY assets.filename COLLATE NOCASE ASC
             LIMIT ? OFFSET ?"
@@ -63,9 +67,13 @@ async fn search_with_fts(
         sqlx::query_as::<_, Asset>(
             "SELECT
                 assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
-                assets.format, assets.file_size, assets.created_at, assets.modified_at
+                assets.format, assets.file_size, assets.created_at, assets.modified_at,
+                image_metadata.width, image_metadata.height,
+                audio_metadata.duration_ms, audio_metadata.sample_rate, audio_metadata.channels
             FROM assets
             INNER JOIN assets_fts ON assets.id = assets_fts.rowid
+            LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
+            LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
             WHERE assets_fts MATCH ?
             ORDER BY assets.filename COLLATE NOCASE ASC
             LIMIT ? OFFSET ?"
@@ -91,9 +99,13 @@ async fn search_without_fts(
     let assets = if let Some(atype) = asset_type {
         sqlx::query_as::<_, Asset>(
             "SELECT
-                id, filename, path, zip_entry, asset_type, format, file_size,
-                created_at, modified_at
+                assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
+                assets.format, assets.file_size, assets.created_at, assets.modified_at,
+                image_metadata.width, image_metadata.height,
+                audio_metadata.duration_ms, audio_metadata.sample_rate, audio_metadata.channels
             FROM assets
+            LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
+            LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
             WHERE asset_type = ?
             ORDER BY filename COLLATE NOCASE ASC
             LIMIT ? OFFSET ?"
@@ -107,9 +119,13 @@ async fn search_without_fts(
     } else {
         sqlx::query_as::<_, Asset>(
             "SELECT
-                id, filename, path, zip_entry, asset_type, format, file_size,
-                created_at, modified_at
+                assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
+                assets.format, assets.file_size, assets.created_at, assets.modified_at,
+                image_metadata.width, image_metadata.height,
+                audio_metadata.duration_ms, audio_metadata.sample_rate, audio_metadata.channels
             FROM assets
+            LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
+            LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
             ORDER BY filename COLLATE NOCASE ASC
             LIMIT ? OFFSET ?"
         )
