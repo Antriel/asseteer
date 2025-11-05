@@ -12,9 +12,9 @@ class AssetsState {
   pageSize = 100;
 
   /**
-   * Load assets from the database
+   * Load assets from the database with optional type filter
    */
-  async loadAssets() {
+  async loadAssets(assetType?: 'image' | 'audio') {
     this.isLoading = true;
 
     try {
@@ -24,7 +24,7 @@ class AssetsState {
       const result = await dbSearchAssets(
         db,
         this.searchText || undefined,
-        undefined,
+        assetType,
         this.pageSize,
         this.currentOffset
       );
@@ -41,12 +41,19 @@ class AssetsState {
   }
 
   /**
-   * Search for assets
+   * Search for assets with optional type filter
    */
-  searchAssets(text: string) {
+  searchAssets(text: string, assetType?: 'image' | 'audio') {
     this.searchText = text;
     this.currentOffset = 0;
-    this.loadAssets();
+    this.loadAssets(assetType);
+  }
+
+  /**
+   * Get filtered assets by type (for derived computations)
+   */
+  getFilteredAssets(assetType: 'image' | 'audio'): Asset[] {
+    return this.assets.filter(a => a.asset_type === assetType);
   }
 }
 

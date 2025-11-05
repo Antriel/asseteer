@@ -101,6 +101,33 @@ export async function getAssetCount(db: Database): Promise<number> {
 }
 
 /**
+ * Get count of assets by type
+ */
+export async function getAssetCountByType(
+	db: Database,
+	assetType: 'image' | 'audio'
+): Promise<number> {
+	const result = await db.select<Array<{ 'COUNT(*)': number }>>(
+		'SELECT COUNT(*) FROM assets WHERE asset_type = ?',
+		[assetType]
+	);
+	return result[0]['COUNT(*)'];
+}
+
+/**
+ * Get counts of both image and audio assets
+ */
+export async function getAssetTypeCounts(
+	db: Database
+): Promise<{ images: number; audio: number }> {
+	const [images, audio] = await Promise.all([
+		getAssetCountByType(db, 'image'),
+		getAssetCountByType(db, 'audio')
+	]);
+	return { images, audio };
+}
+
+/**
  * Get thumbnail data for a specific asset
  */
 export async function getThumbnail(
