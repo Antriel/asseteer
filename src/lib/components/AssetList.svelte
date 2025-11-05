@@ -2,6 +2,7 @@
   import type { Asset } from '$lib/types';
   import { formatFileSize } from '$lib/state/assets.svelte';
   import AssetThumbnail from './AssetThumbnail.svelte';
+  import Badge from './shared/Badge.svelte';
 
   interface Props {
     assets: Asset[];
@@ -59,9 +60,7 @@
               <div class="flex items-center gap-2">
                 <span>{asset.filename}</span>
                 {#if asset.zip_entry}
-                  <span class="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
-                    ZIP
-                  </span>
+                  <Badge variant="info">ZIP</Badge>
                 {/if}
               </div>
             </td>

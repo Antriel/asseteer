@@ -93,49 +93,21 @@ body {
   background-color: var(--color-accent-light);
 }
 
-/* Utility classes for buttons */
-.btn {
-  padding: 0.5rem 1rem;
-  border-radius: 0.375rem;
-  font-weight: 500;
-  transition: all 0.15s;
-  cursor: pointer;
-  border: none;
-  outline: none;
+/* Utility classes for repeated patterns (3+ uses) */
+
+/* Action buttons - used across TaskProgress and ScanControl */
+.btn-action {
+  @apply px-3 py-1.5 text-sm font-medium text-white rounded transition-colors;
 }
 
-.btn-primary {
-  background-color: var(--color-accent);
-  color: white;
+/* Lightbox navigation buttons - circular prev/next buttons */
+.btn-lightbox-nav {
+  @apply w-12 h-12 bg-black/50 text-white border-none rounded-full text-3xl cursor-pointer hover:bg-black/70 transition-colors;
 }
 
-.btn-primary:hover {
-  background-color: var(--color-accent-hover);
-}
-
-.btn-secondary {
-  background-color: var(--color-bg-secondary);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-border-default);
-}
-
-.btn-secondary:hover {
-  background-color: var(--color-bg-tertiary);
-}
-
-/* Input styles */
-.input {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--color-border-default);
-  border-radius: 0.375rem;
-  background-color: var(--color-bg-primary);
-  color: var(--color-text-primary);
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.input:focus {
-  border-color: var(--color-accent);
+/* Lightbox control buttons - toolbar buttons */
+.btn-lightbox-control {
+  @apply px-3 py-1 bg-white/10 rounded hover:bg-white/20 transition-colors;
 }
 
 /* Scrollbar styling */

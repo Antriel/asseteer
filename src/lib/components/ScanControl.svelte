@@ -6,6 +6,7 @@
   import { assetsState } from '$lib/state/assets.svelte';
   import { processingState } from '$lib/state/tasks.svelte';
   import { viewState } from '$lib/state/view.svelte';
+  import Spinner from '$lib/components/shared/Spinner.svelte';
 
   async function selectFolder() {
     try {
@@ -66,7 +67,7 @@
     {#if uiState.scanProgress}
       <div class="flex items-center gap-2">
         {#if uiState.isScanning}
-          <div class="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <Spinner size="sm" color="blue" />
         {/if}
         <span class="text-sm text-secondary">{uiState.scanProgress}</span>
       </div>

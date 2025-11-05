@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { getDatabase } from '$lib/database/connection';
   import { getThumbnail } from '$lib/database/queries';
+  import Spinner from '$lib/components/shared/Spinner.svelte';
 
   interface Props {
     assetId: number;
@@ -76,7 +77,7 @@
 <div bind:this={containerElement} class="w-full flex items-center justify-center bg-tertiary overflow-hidden {sizeClasses}">
   {#if isLoading}
     <div class="flex items-center justify-center w-full h-full">
-      <div class="w-5 h-5 border-2 border-default border-t-accent rounded-full animate-spin"></div>
+      <Spinner size="md" />
     </div>
   {:else if error || !thumbnailUrl}
     <div class="flex items-center justify-center w-full h-full">

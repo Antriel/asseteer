@@ -1,6 +1,7 @@
 <script lang="ts">
   import { viewState } from '$lib/state/view.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
+  import Badge from './Badge.svelte';
 
   interface Props {
     imageCount: number;
@@ -23,7 +24,7 @@
     onclick={() => switchTab('images')}
   >
     Images
-    <span class="text-xs px-2 py-0.5 bg-tertiary rounded-full">{imageCount}</span>
+    <Badge variant="count">{imageCount}</Badge>
   </button>
 
   <button
@@ -33,6 +34,6 @@
     onclick={() => switchTab('audio')}
   >
     Audio
-    <span class="text-xs px-2 py-0.5 bg-tertiary rounded-full">{audioCount}</span>
+    <Badge variant="count">{audioCount}</Badge>
   </button>
 </div>

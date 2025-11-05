@@ -15,6 +15,7 @@
   import AudioList from '$lib/components/AudioList.svelte';
   import AssetList from '$lib/components/AssetList.svelte';
   import ImageLightbox from '$lib/components/modals/ImageLightbox.svelte';
+  import Spinner from '$lib/components/shared/Spinner.svelte';
 
   let assetCounts = $state({ images: 0, audio: 0 });
   let unlistenFns: UnlistenFn[] = [];
@@ -81,7 +82,7 @@
   <main class="flex-1 overflow-y-auto relative">
     {#if assetsState.isLoading}
       <div class="flex flex-col items-center justify-center h-full gap-4">
-        <div class="w-10 h-10 border-3 border-default border-t-accent rounded-full animate-spin"></div>
+        <Spinner size="lg" />
         <p class="text-secondary">Loading assets...</p>
       </div>
     {:else if displayedAssets.length === 0}

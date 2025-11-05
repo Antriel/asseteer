@@ -57,33 +57,33 @@
       {#if processingState.isRunning && !processingState.isPaused}
         <button
           onclick={handlePause}
-          class="px-3 py-1.5 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded transition-colors"
+          class="btn-action bg-orange-500 hover:bg-orange-600"
         >
           Pause
         </button>
         <button
           onclick={handleStop}
-          class="px-3 py-1.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded transition-colors"
+          class="btn-action bg-red-500 hover:bg-red-600"
         >
           Stop
         </button>
       {:else if processingState.isPaused}
         <button
           onclick={handleResume}
-          class="px-3 py-1.5 text-sm font-medium text-white bg-green-500 hover:bg-green-600 rounded transition-colors"
+          class="btn-action bg-green-500 hover:bg-green-600"
         >
           Resume
         </button>
         <button
           onclick={handleStop}
-          class="px-3 py-1.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded transition-colors"
+          class="btn-action bg-red-500 hover:bg-red-600"
         >
           Stop
         </button>
       {:else if processingState.pendingCount.total > 0}
         <button
           onclick={handleStart}
-          class="px-3 py-1.5 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded transition-colors"
+          class="btn-action bg-blue-500 hover:bg-blue-600"
         >
           Start Processing
         </button>

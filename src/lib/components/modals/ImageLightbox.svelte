@@ -140,7 +140,7 @@
   >
     <!-- Close button -->
     <button
-      class="absolute top-4 right-4 w-12 h-12 bg-black/50 text-white border-none rounded-full text-3xl cursor-pointer z-10 hover:bg-black/70 transition-colors"
+      class="absolute top-4 right-4 btn-lightbox-nav z-10"
       onclick={onClose}
     >
       ×
@@ -149,7 +149,7 @@
     <!-- Navigation -->
     {#if onPrev}
       <button
-        class="absolute top-1/2 -translate-y-1/2 left-4 w-12 h-12 bg-black/50 text-white border-none rounded-full text-3xl cursor-pointer hover:bg-black/70 transition-colors"
+        class="absolute top-1/2 -translate-y-1/2 left-4 btn-lightbox-nav"
         onclick={onPrev}
       >
         ‹
@@ -157,7 +157,7 @@
     {/if}
     {#if onNext}
       <button
-        class="absolute top-1/2 -translate-y-1/2 right-4 w-12 h-12 bg-black/50 text-white border-none rounded-full text-3xl cursor-pointer hover:bg-black/70 transition-colors"
+        class="absolute top-1/2 -translate-y-1/2 right-4 btn-lightbox-nav"
         onclick={onNext}
       >
         ›
@@ -194,11 +194,11 @@
       </div>
 
       <div class="flex gap-2 items-center">
-        <button class="px-3 py-1 bg-white/10 rounded hover:bg-white/20 transition-colors" onclick={() => zoom = Math.max(zoom - 0.5, 0.5)}>−</button>
+        <button class="btn-lightbox-control" onclick={() => zoom = Math.max(zoom - 0.5, 0.5)}>−</button>
         <span class="min-w-[4rem] text-center">{Math.round(zoom * 100)}%</span>
-        <button class="px-3 py-1 bg-white/10 rounded hover:bg-white/20 transition-colors" onclick={() => zoom = Math.min(zoom + 0.5, 5)}>+</button>
-        <button class="px-3 py-1 bg-white/10 rounded hover:bg-white/20 transition-colors" onclick={() => zoom = 1}>Reset</button>
-        <button class="px-3 py-1 bg-white/10 rounded hover:bg-white/20 transition-colors" onclick={() => showMetadata = !showMetadata}>Info</button>
+        <button class="btn-lightbox-control" onclick={() => zoom = Math.min(zoom + 0.5, 5)}>+</button>
+        <button class="btn-lightbox-control" onclick={() => zoom = 1}>Reset</button>
+        <button class="btn-lightbox-control" onclick={() => showMetadata = !showMetadata}>Info</button>
       </div>
     </div>
 
