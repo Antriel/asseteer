@@ -2,13 +2,15 @@
 
 ## Executive Summary
 
-Implement advanced text-to-audio search using **CLAP (Contrastive Language-Audio Pretraining)** to enable natural language queries for audio assets. CLAP provides superior text-to-audio alignment compared to PANNs, enabling queries like "footsteps on wood", "distant thunder", or "gentle wind" without being limited to predefined categories.
+Implement advanced text-to-audio search using **CLAP (Contrastive Language-Audio Pretraining)** to enable natural language queries for audio assets. CLAP provides content-based semantic search, enabling queries like "footsteps on wood", "distant thunder", or "gentle wind" that understand audio content rather than just matching filenames.
 
 **Target Performance:**
 - **Processing**: 50-120ms per audio file (20-40ms inference + overhead)
-- **Total Time**: 10-25 minutes for 10,000 audio files
+- **Total Time**: 10-25 minutes for 10,000 audio files (3-5 hours for 200,000 files)
 - **VRAM Usage**: ~1.2GB during processing
-- **Search Speed**: <100ms for text-to-audio similarity queries
+- **Search Speed**: ~500ms for 200K files (faster with duration/path filters)
+
+**Note on T-CLAP:** T-CLAP offers enhanced temporal understanding but has less mature tooling. CLAP is recommended for initial implementation, with T-CLAP as potential future enhancement if temporal queries become important.
 
 ---
 
@@ -16,21 +18,20 @@ Implement advanced text-to-audio search using **CLAP (Contrastive Language-Audio
 
 ### Comparison with Current System
 
-| Feature | PANNs (Current?) | CLAP (Proposed) |
-|---------|------------------|-----------------|
-| **Model Type** | Audio classifier | Contrastive text-audio |
-| **Text Queries** | ❌ Predefined tags only | ✅ Arbitrary text |
-| **Search Quality** | Basic category matching | Semantic understanding |
-| **Example Query** | Can't handle "gentle wind" | ✅ Understands nuance |
-| **Speed** | 22-45ms/file | 50-120ms/file |
-| **VRAM** | 2-3GB | 1.2GB |
+| Feature | Current (FTS5 Filename) | CLAP (Proposed) |
+|---------|-------------------------|-----------------|
+| **Search Type** | Filename text matching | Content-based semantic search |
+| **Text Queries** | ❌ Must match filename | ✅ Natural language queries |
+| **Example** | "footstep.wav" ✅ / "footsteps on wood" ❌ | Both work! ✅ |
+| **Understanding** | None (text matching only) | Semantic audio understanding |
+| **Processing** | None required | 50-120ms per file |
 
 ### CLAP Advantages
 
 1. **Zero-shot text queries**: "metal impact with reverb", "footstep on concrete", "ambient forest no birds"
-2. **Semantic understanding**: Understands relationships between concepts
-3. **Better search results**: 75-85% recall vs 65-75% with PANNs
-4. **Reasonable speed**: Still processes 10K files in 10-25 minutes
+2. **Semantic understanding**: Understands relationships between concepts (e.g., "explosion" relates to "blast", "boom")
+3. **Content-based**: Searches actual audio content, not just filenames
+4. **Handles long-form**: Works with both sound effects and full music tracks
 
 ---
 
@@ -68,37 +69,30 @@ Ranked Results (Top N)
 
 ---
 
-## Database Schema Changes
+## Database Schema
 
-### Option 1: Extend Existing Schema (Recommended)
+**Note:** Since we can start with a fresh database, no migrations needed - just define the schema directly.
 
-Add CLAP embeddings alongside existing metadata:
-
-```sql
--- Add CLAP embedding column to audio_metadata
-ALTER TABLE audio_metadata ADD COLUMN clap_embedding BLOB;
-
--- Add processing tier tracking
-ALTER TABLE audio_metadata ADD COLUMN processing_tier TEXT DEFAULT 'basic';
--- Values: 'basic' (PANNs only), 'clap' (has CLAP embeddings), 'premium' (LLM descriptions)
-
--- Add index for processing tier queries
-CREATE INDEX idx_audio_processing_tier ON audio_metadata(processing_tier);
-```
-
-**Benefits:**
-- Preserves existing PANNs data
-- Allows incremental upgrade (reprocess files for CLAP)
-- Can compare PANNs vs CLAP search quality
-
-### Option 2: Replace PANNs Entirely
-
-If PANNs isn't currently used:
+### Audio Metadata Table
 
 ```sql
--- Modify embedding column to store CLAP embeddings
--- Update processing to use CLAP instead of PANNs
+CREATE TABLE audio_metadata (
+    asset_id INTEGER PRIMARY KEY,
+    duration_ms INTEGER NOT NULL,
+    sample_rate INTEGER NOT NULL,
+    channels INTEGER NOT NULL,
+    clap_embedding BLOB,  -- 512 floats × 4 bytes = 2048 bytes per file
+    FOREIGN KEY (asset_id) REFERENCES assets(id)
+);
+
+-- Index for duration-based filtering (useful for 200K+ file search)
+CREATE INDEX idx_audio_duration ON audio_metadata(duration_ms);
 ```
+
+**Storage Considerations:**
+- **10K files**: ~20MB embeddings
+- **200K files**: ~400MB embeddings
+- Linear scan acceptable with pre-filtering by duration/path
 
 ---
 
@@ -116,10 +110,13 @@ symphonia = "0.5"
 
 # ML inference
 ort = { version = "2.0.0-rc.10", features = ["cuda", "load-dynamic"] }
+tokenizers = "0.15"  # CLIP BPE tokenizer
 
 # Audio processing
 rubato = "0.15"  # Resampling
-hound = "3.5"    # WAV encoding
+rustfft = "6.1"  # FFT for STFT
+ndarray = "0.15" # Array operations
+num-complex = "0.4"  # Complex numbers for FFT
 ```
 
 **Model Manager (`src-tauri/src/audio/clap_model.rs`):**
@@ -127,18 +124,21 @@ hound = "3.5"    # WAV encoding
 ```rust
 use ort::{Session, SessionBuilder, Value};
 use ndarray::{Array1, Array2, ArrayView1};
+use tokenizers::Tokenizer;
 use std::path::Path;
 
 pub struct ClapModel {
     audio_encoder: Session,
     text_encoder: Session,
+    tokenizer: Tokenizer,
 }
 
 impl ClapModel {
-    /// Load CLAP ONNX models
+    /// Load CLAP ONNX models and tokenizer
     pub fn new(model_dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let audio_path = model_dir.join("clap_audio_encoder.onnx");
         let text_path = model_dir.join("clap_text_encoder.onnx");
+        let tokenizer_path = model_dir.join("tokenizer.json");
 
         let audio_encoder = SessionBuilder::new()?
             .with_optimization_level(ort::GraphOptimizationLevel::Level3)?
@@ -150,9 +150,12 @@ impl ClapModel {
             .with_intra_threads(2)?
             .commit_from_file(text_path)?;
 
+        let tokenizer = Tokenizer::from_file(tokenizer_path)?;
+
         Ok(Self {
             audio_encoder,
             text_encoder,
+            tokenizer,
         })
     }
 
@@ -172,28 +175,24 @@ impl ClapModel {
 
     /// Generate text embedding from query string
     pub fn encode_text(&self, text: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
-        // Tokenize text (simplified - production should use proper tokenizer)
-        let tokens = self.tokenize(text)?;
+        // Tokenize text using CLIP tokenizer
+        let encoding = self.tokenizer.encode(text, false)?;
+        let token_ids = encoding.get_ids();
 
-        let input_value = Value::from_array(tokens.view())?;
+        // Convert to i64 array and pad/truncate to 77 tokens (CLIP standard)
+        let mut tokens = vec![0i64; 77];
+        for (i, &id) in token_ids.iter().enumerate().take(77) {
+            tokens[i] = id as i64;
+        }
+
+        let tokens_array = Array1::from_vec(tokens).insert_axis(ndarray::Axis(0));
+        let input_value = Value::from_array(tokens_array.view())?;
         let outputs = self.text_encoder.run(ort::inputs![input_value]?)?;
 
         // Extract embedding (512-dim vector)
         let embedding: ArrayView1<f32> = outputs[0].try_extract_tensor()?;
 
         Ok(embedding.to_vec())
-    }
-
-    /// Simplified tokenization (replace with proper CLIP tokenizer)
-    fn tokenize(&self, text: &str) -> Result<Array1<i64>, Box<dyn std::error::Error>> {
-        // TODO: Implement proper CLIP text tokenization
-        // For now, placeholder that should be replaced with:
-        // - Lowercase text
-        // - BPE tokenization
-        // - Special tokens ([CLS], [SEP])
-        // - Padding to max_length (77 tokens for CLIP)
-
-        unimplemented!("Use proper CLIP tokenizer library")
     }
 }
 ```
@@ -262,9 +261,36 @@ fn compute_stft(
     n_fft: usize,
     hop_length: usize,
 ) -> Result<Array2<num_complex::Complex<f32>>, Box<dyn std::error::Error>> {
-    // TODO: Implement STFT
-    // Libraries: rustfft, realfft
-    unimplemented!("Implement STFT")
+    use rustfft::{FftPlanner, num_complex::Complex};
+
+    let mut planner = FftPlanner::new();
+    let fft = planner.plan_fft_forward(n_fft);
+
+    let num_frames = (samples.len() - n_fft) / hop_length + 1;
+    let mut stft_result = Array2::zeros((n_fft / 2 + 1, num_frames));
+
+    // Apply Hann window
+    let window: Vec<f32> = (0..n_fft)
+        .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / n_fft as f32).cos()))
+        .collect();
+
+    for frame_idx in 0..num_frames {
+        let start = frame_idx * hop_length;
+        let mut buffer: Vec<Complex<f32>> = samples[start..start + n_fft]
+            .iter()
+            .zip(window.iter())
+            .map(|(s, w)| Complex::new(s * w, 0.0))
+            .collect();
+
+        fft.process(&mut buffer);
+
+        // Keep only positive frequencies
+        for (freq_idx, value) in buffer[..(n_fft / 2 + 1)].iter().enumerate() {
+            stft_result[[freq_idx, frame_idx]] = *value;
+        }
+    }
+
+    Ok(stft_result)
 }
 
 fn create_mel_filterbank(
@@ -274,9 +300,38 @@ fn create_mel_filterbank(
     fmin: f32,
     fmax: f32,
 ) -> Result<Array2<f32>, Box<dyn std::error::Error>> {
-    // TODO: Implement mel filterbank creation
-    // Convert Hz to mel scale, create triangular filters
-    unimplemented!("Implement mel filterbank")
+    // Helper: Convert Hz to mel scale
+    let hz_to_mel = |hz: f32| 2595.0 * (1.0 + hz / 700.0).log10();
+    let mel_to_hz = |mel: f32| 700.0 * (10.0_f32.powf(mel / 2595.0) - 1.0);
+
+    let mel_min = hz_to_mel(fmin);
+    let mel_max = hz_to_mel(fmax);
+    let mel_points: Vec<f32> = (0..=n_mels + 1)
+        .map(|i| mel_to_hz(mel_min + (mel_max - mel_min) * i as f32 / (n_mels + 1) as f32))
+        .collect();
+
+    let n_freqs = n_fft / 2 + 1;
+    let fft_freqs: Vec<f32> = (0..n_freqs)
+        .map(|i| i as f32 * sample_rate as f32 / n_fft as f32)
+        .collect();
+
+    let mut filterbank = Array2::zeros((n_mels, n_freqs));
+
+    for mel_idx in 0..n_mels {
+        let left = mel_points[mel_idx];
+        let center = mel_points[mel_idx + 1];
+        let right = mel_points[mel_idx + 2];
+
+        for (freq_idx, &freq) in fft_freqs.iter().enumerate() {
+            if freq >= left && freq <= center {
+                filterbank[[mel_idx, freq_idx]] = (freq - left) / (center - left);
+            } else if freq > center && freq <= right {
+                filterbank[[mel_idx, freq_idx]] = (right - freq) / (right - center);
+            }
+        }
+    }
+
+    Ok(filterbank)
 }
 ```
 
@@ -392,9 +447,56 @@ pub struct AudioProcessingResult {
 }
 
 fn load_audio(path: &Path) -> Result<(Vec<f32>, u32, usize), Box<dyn std::error::Error>> {
-    // Use Symphonia to decode various audio formats
-    // TODO: Implement proper audio loading
-    unimplemented!("Implement audio loading with Symphonia")
+    use symphonia::core::audio::SampleBuffer;
+    use symphonia::core::codecs::DecoderOptions;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
+    use std::fs::File;
+
+    // Open file and create media source
+    let file = File::open(path)?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    // Probe format
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension() {
+        hint.with_extension(&ext.to_string_lossy());
+    }
+
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())?;
+
+    let mut format = probed.format;
+    let track = format.default_track()
+        .ok_or("No audio track found")?;
+
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())?;
+
+    let sample_rate = track.codec_params.sample_rate
+        .ok_or("Sample rate not found")? as u32;
+    let channels = track.codec_params.channels
+        .ok_or("Channel count not found")?
+        .count();
+
+    let mut samples = Vec::new();
+
+    // Decode all packets
+    while let Ok(packet) = format.next_packet() {
+        let decoded = decoder.decode(&packet)?;
+
+        let spec = *decoded.spec();
+        let duration = decoded.capacity() as u64;
+
+        let mut sample_buf = SampleBuffer::<f32>::new(duration, spec);
+        sample_buf.copy_interleaved_ref(decoded);
+
+        samples.extend_from_slice(sample_buf.samples());
+    }
+
+    Ok((samples, sample_rate, channels))
 }
 
 fn to_mono(stereo: &[f32]) -> Vec<f32> {
@@ -422,8 +524,8 @@ async fn save_audio_metadata(
 
     sqlx::query(
         "INSERT INTO audio_metadata
-         (asset_id, duration_ms, sample_rate, channels, clap_embedding, processing_tier)
-         VALUES (?, ?, ?, ?, ?, 'clap')"
+         (asset_id, duration_ms, sample_rate, channels, clap_embedding)
+         VALUES (?, ?, ?, ?, ?)"
     )
     .bind(asset_id)
     .bind(result.duration_ms)
@@ -441,73 +543,17 @@ async fn save_audio_metadata(
 
 ## Frontend Implementation
 
+**Note:** Application already has existing Tauri + Svelte UI infrastructure. Integration points below show how to add audio search to existing interface.
+
 ### 1. Database Queries (`src/lib/database/queries.ts`)
 
 ```typescript
 import type Database from '@tauri-apps/plugin-sql';
 
-export interface AudioSearchResult {
-  id: number;
-  name: string;
-  path: string;
-  duration_ms: number;
-  sample_rate: number;
-  channels: number;
-  similarity: number; // Cosine similarity score
-}
-
 /**
- * Search audio files using text query with CLAP embeddings
+ * Get count of audio files with CLAP embeddings
  */
-export async function searchAudioByText(
-  db: Database,
-  textQuery: string,
-  limit: number = 50
-): Promise<AudioSearchResult[]> {
-  // This requires backend command - can't compute CLAP text embedding in frontend
-  // See searchAudioByTextCommand below
-  throw new Error('Use searchAudioByTextCommand instead');
-}
-
-/**
- * Get audio files with CLAP embeddings (for manual similarity calculation)
- */
-export async function getAudioWithEmbeddings(
-  db: Database,
-  limit?: number,
-  offset: number = 0
-): Promise<Array<{ id: number; name: string; embedding: Uint8Array }>> {
-  const query = `
-    SELECT
-      a.id,
-      a.name,
-      am.clap_embedding
-    FROM assets a
-    INNER JOIN audio_metadata am ON a.id = am.asset_id
-    WHERE a.asset_type = 'audio'
-      AND am.clap_embedding IS NOT NULL
-    ORDER BY a.id
-    ${limit ? `LIMIT ${limit}` : ''}
-    OFFSET ${offset}
-  `;
-
-  const results = await db.select<Array<{
-    id: number;
-    name: string;
-    clap_embedding: number[];
-  }>>(query);
-
-  return results.map(row => ({
-    id: row.id,
-    name: row.name,
-    embedding: new Uint8Array(row.clap_embedding),
-  }));
-}
-
-/**
- * Get count of audio files by processing tier
- */
-export async function getAudioProcessingStats(
+export async function getAudioWithClapCount(
   db: Database
 ): Promise<{ total: number; with_clap: number; pending: number }> {
   const result = await db.select<Array<{
@@ -516,7 +562,7 @@ export async function getAudioProcessingStats(
   }>>(
     `SELECT
        COUNT(*) as total,
-       SUM(CASE WHEN am.processing_tier = 'clap' THEN 1 ELSE 0 END) as with_clap
+       SUM(CASE WHEN am.clap_embedding IS NOT NULL THEN 1 ELSE 0 END) as with_clap
      FROM assets a
      LEFT JOIN audio_metadata am ON a.id = am.asset_id
      WHERE a.asset_type = 'audio'`
@@ -550,13 +596,18 @@ pub struct AudioSearchResult {
     pub similarity: f32,
 }
 
-/// Search audio files using natural language text query
+/// Search audio files using natural language text query with optional filters
 #[tauri::command]
 pub async fn search_audio_by_text(
     state: tauri::State<'_, AppState>,
     text_query: String,
+    duration_min: Option<i64>,
+    duration_max: Option<i64>,
+    path_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<AudioSearchResult>, String> {
+    use rayon::prelude::*;
+
     let limit = limit.unwrap_or(50);
 
     // 1. Generate text embedding using CLAP
@@ -564,39 +615,45 @@ pub async fn search_audio_by_text(
         .encode_text(&text_query)
         .map_err(|e| format!("Failed to encode text: {}", e))?;
 
-    // 2. Load all audio embeddings from database
-    let pool = &state.db_pool;
-    let audio_data: Vec<(i64, String, String, i64, i64, i32, Vec<u8>)> = sqlx::query_as(
-        "SELECT
-           a.id, a.name, a.path,
-           am.duration_ms, am.sample_rate, am.channels,
-           am.clap_embedding
+    // 2. Build filtered query
+    let mut query = String::from(
+        "SELECT a.id, a.name, a.path, am.duration_ms, am.sample_rate, am.channels, am.clap_embedding
          FROM assets a
          INNER JOIN audio_metadata am ON a.id = am.asset_id
-         WHERE a.asset_type = 'audio'
-           AND am.clap_embedding IS NOT NULL"
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Database error: {}", e))?;
+         WHERE a.asset_type = 'audio' AND am.clap_embedding IS NOT NULL"
+    );
 
-    // 3. Calculate cosine similarity for each audio file
+    if duration_min.is_some() {
+        query.push_str(&format!(" AND am.duration_ms >= {}", duration_min.unwrap()));
+    }
+    if duration_max.is_some() {
+        query.push_str(&format!(" AND am.duration_ms <= {}", duration_max.unwrap()));
+    }
+    if let Some(ref path) = path_filter {
+        query.push_str(&format!(" AND a.path LIKE '%{}%'", path));
+    }
+
+    let pool = &state.db_pool;
+    let audio_data: Vec<(i64, String, String, i64, i64, i32, Vec<u8>)> =
+        sqlx::query_as(&query)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Database error: {}", e))?;
+
+    // 3. Calculate cosine similarity in parallel
     let mut results: Vec<AudioSearchResult> = audio_data
-        .into_iter()
+        .par_iter()
         .map(|(id, name, path, duration_ms, sample_rate, channels, embedding_bytes)| {
-            // Deserialize embedding from bytes
-            let audio_embedding = deserialize_embedding(&embedding_bytes);
-
-            // Calculate cosine similarity
+            let audio_embedding = deserialize_embedding(embedding_bytes);
             let similarity = cosine_similarity(&text_embedding, &audio_embedding);
 
             AudioSearchResult {
-                id,
-                name,
-                path,
-                duration_ms,
-                sample_rate,
-                channels,
+                id: *id,
+                name: name.clone(),
+                path: path.clone(),
+                duration_ms: *duration_ms,
+                sample_rate: *sample_rate,
+                channels: *channels,
                 similarity,
             }
         })
@@ -631,9 +688,9 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 }
 ```
 
-### 3. Frontend Search Component
+### 3. Frontend Search Integration
 
-**Create `src/lib/components/AudioSearch.svelte`:**
+**Add to existing search interface:**
 
 ```svelte
 <script lang="ts">
@@ -649,6 +706,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
   }
 
   let searchQuery = $state('');
+  let maxDuration = $state<number | undefined>(undefined);  // seconds
   let results = $state<AudioSearchResult[]>([]);
   let isSearching = $state(false);
 
@@ -662,6 +720,9 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     try {
       const searchResults = await invoke<AudioSearchResult[]>('search_audio_by_text', {
         textQuery: searchQuery,
+        durationMin: undefined,
+        durationMax: maxDuration ? maxDuration * 1000 : undefined,
+        pathFilter: undefined,
         limit: 50,
       });
 
@@ -677,96 +738,28 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
       isSearching = false;
     }
   }
-
-  function formatDuration(ms: number): string {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    return minutes > 0
-      ? `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
-      : `${seconds}s`;
-  }
 </script>
 
-<div class="flex flex-col gap-4 p-4">
-  <!-- Search Input -->
-  <div class="flex gap-2">
-    <input
-      type="text"
-      bind:value={searchQuery}
-      onkeydown={(e) => e.key === 'Enter' && handleSearch()}
-      placeholder="Search audio... (e.g., 'footsteps on wood', 'distant thunder')"
-      class="flex-1 px-4 py-2 bg-primary border border-default rounded-lg text-primary
-             placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
-    />
-    <button
-      onclick={handleSearch}
-      disabled={isSearching || !searchQuery.trim()}
-      class="px-6 py-2 bg-accent text-white rounded-lg font-medium
-             hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
-    >
-      {isSearching ? 'Searching...' : 'Search'}
-    </button>
+<!-- Search interface with optional duration filter -->
+<input
+  type="text"
+  bind:value={searchQuery}
+  placeholder="Search audio... (e.g., 'footsteps on wood')"
+/>
+<input
+  type="number"
+  bind:value={maxDuration}
+  placeholder="Max duration (s)"
+/>
+<button onclick={handleSearch}>Search</button>
+
+<!-- Display results with similarity scores -->
+{#each results as result}
+  <div>
+    <span>{result.name}</span>
+    <span>{(result.similarity * 100).toFixed(1)}% match</span>
   </div>
-
-  <!-- Example Queries -->
-  <div class="flex gap-2 flex-wrap">
-    <span class="text-sm text-secondary">Try:</span>
-    {#each ['footsteps on wood', 'explosion sound', 'gentle wind', 'door closing'] as example}
-      <button
-        onclick={() => {
-          searchQuery = example;
-          handleSearch();
-        }}
-        class="px-3 py-1 text-sm bg-secondary border border-default rounded-full
-               hover:bg-accent hover:text-white transition-colors"
-      >
-        {example}
-      </button>
-    {/each}
-  </div>
-
-  <!-- Results -->
-  {#if results.length > 0}
-    <div class="flex flex-col gap-2">
-      <h3 class="text-sm font-semibold text-secondary">
-        {results.length} results found
-      </h3>
-
-      {#each results as result (result.id)}
-        <div
-          class="flex items-center justify-between p-3 bg-secondary border border-default rounded-lg
-                 hover:border-accent transition-colors"
-        >
-          <div class="flex flex-col gap-1">
-            <span class="font-medium text-primary">{result.name}</span>
-            <span class="text-xs text-secondary">
-              Duration: {formatDuration(result.duration_ms)}
-            </span>
-          </div>
-
-          <div class="flex items-center gap-3">
-            <span class="text-sm text-secondary">
-              {(result.similarity * 100).toFixed(1)}% match
-            </span>
-            <button
-              class="px-3 py-1 text-sm bg-accent text-white rounded
-                     hover:bg-accent/90 transition-colors"
-              onclick={() => {
-                // TODO: Play audio preview
-                console.log('Play audio:', result.id);
-              }}
-            >
-              Play
-            </button>
-          </div>
-        </div>
-      {/each}
-    </div>
-  {:else if searchQuery && !isSearching}
-    <p class="text-center text-secondary py-8">No results found</p>
-  {/if}
-</div>
+{/each}
 ```
 
 ---
@@ -817,8 +810,9 @@ torch.onnx.export(
 ```
 
 **Storage Location:**
-- Store models in app data directory: `$APPDATA/asseteer/models/clap/`
-- Check for models on startup, prompt user to download if missing
+- **Development**: Download manually and cache locally (e.g., `models/clap/` in project directory)
+- **Production**: Store in app data directory: `$APPDATA/asseteer/models/clap/`
+- Model acquisition strategy to be determined post-MVP
 
 ---
 
@@ -844,25 +838,35 @@ pub async fn process_audio_batch(
 }
 ```
 
-### 2. Embedding Search Optimization
+### 2. Embedding Search Optimization for Large Libraries (200K+ files)
 
-For large audio libraries (10K+ files), consider:
-
-**Option A: In-Memory Cache (Simple)**
+**Primary Strategy: Filtered Linear Search**
 ```rust
-// Load all embeddings into memory on startup
-pub struct EmbeddingCache {
-    embeddings: HashMap<i64, Vec<f32>>,
-}
+// Pre-filter before loading embeddings
+// Example: Duration filter reduces 200K files → 50K files → ~125-250ms search
+let audio_data = sqlx::query_as(
+    "SELECT ... WHERE duration_ms BETWEEN ? AND ? AND clap_embedding IS NOT NULL"
+)
+.bind(duration_min)
+.bind(duration_max)
+.fetch_all(pool).await?;
 
-// Search: O(n) linear scan with SIMD-optimized cosine similarity
+// Parallel cosine similarity with rayon
+let results: Vec<_> = audio_data
+    .par_iter()
+    .map(|data| calculate_similarity(data))
+    .collect();
 ```
 
-**Option B: Vector Database (Advanced)**
-- Use [qdrant](https://github.com/qdrant/qdrant) or [milvus](https://milvus.io/)
-- Approximate nearest neighbor search
-- Sub-10ms search for 100K+ vectors
-- Overkill for <50K audio files
+**Performance Expectations:**
+- **200K unfiltered**: ~500ms-1s (acceptable for broad search)
+- **50K filtered**: ~125-250ms (typical use case)
+- **10K filtered**: ~50-100ms (narrow search)
+
+**Advanced Option (Post-MVP):**
+- **Vector Database (usearch, qdrant)**: Sub-100ms for 200K+ files
+- Only needed if filtered linear search is too slow in practice
+- Adds complexity: index building, memory overhead (~100-200MB)
 
 ### 3. ONNX Runtime Optimization
 
@@ -942,82 +946,82 @@ async fn test_search_flow() {
 
 ### Manual Testing Checklist
 
-- [ ] Process 100 audio files successfully
+- [ ] Process 100-1000 audio files successfully
 - [ ] Search queries return relevant results:
-  - [ ] "footsteps on wood"
-  - [ ] "explosion sound"
-  - [ ] "gentle wind"
-  - [ ] "door closing"
-  - [ ] "metal impact"
-- [ ] Search completes in <200ms for 10K audio library
-- [ ] Processing shows accurate progress updates
-- [ ] Error handling for corrupted audio files
-- [ ] Memory usage stays under 2GB during processing
+  - [ ] "footsteps on wood" - finds footstep sounds
+  - [ ] "explosion sound" - finds explosions/impacts
+  - [ ] "gentle wind" - finds ambient wind
+  - [ ] "door closing" - finds door sounds
+  - [ ] "metal impact" - finds metallic sounds
+- [ ] Duration filtering reduces search space effectively
+- [ ] Search completes in <1s for 200K files (unfiltered)
+- [ ] Search completes in <250ms for 50K files (filtered)
+- [ ] Error handling for corrupted/unsupported audio files
+- [ ] Works with both short sound effects and long music tracks
 
 ---
 
 ## Implementation Phases
 
-### Phase 1: Core CLAP Integration (Week 1)
-**Goal:** Get CLAP model working in Rust
+### Phase 0: Audio Processing Primitives (3-5 days)
+**Goal:** Implement foundational audio processing components
 
-- [ ] Add ONNX Runtime dependencies to Cargo.toml
-- [ ] Implement `ClapModel` struct with audio/text encoders
-- [ ] Create mel spectrogram generation pipeline
-- [ ] Add audio resampling (to 32kHz)
-- [ ] Write unit tests for embedding generation
-- [ ] Verify embeddings match expected dimensions (512-dim)
+- [ ] Implement STFT with rustfft (Hann window, configurable FFT size)
+- [ ] Implement mel filterbank creation (Hz→mel conversion, triangular filters)
+- [ ] Implement Symphonia audio loading (multi-format support)
+- [ ] Implement audio resampling to 32kHz (rubato)
+- [ ] Unit tests with sample audio files
+- [ ] Verify mel spectrograms match expected shape
 
-**Deliverable:** Rust function that takes audio file → returns 512-dim embedding
+**Deliverable:** Working audio→mel spectrogram pipeline
 
-### Phase 2: Database & Processing (Week 1-2)
-**Goal:** Integrate CLAP into existing processing pipeline
+### Phase 1: CLAP Integration (3-5 days)
+**Goal:** Get CLAP embeddings working
 
-- [ ] Update database schema (add `clap_embedding` column)
-- [ ] Modify `AudioProcessor` to generate CLAP embeddings
-- [ ] Implement batch processing for audio files
-- [ ] Add progress tracking for CLAP processing
-- [ ] Test processing pipeline with 100-1000 audio files
-- [ ] Benchmark processing speed (target: 50-120ms per file)
+- [ ] Add ONNX Runtime + tokenizers dependencies
+- [ ] Implement `ClapModel` with audio/text encoders
+- [ ] Load CLAP models and tokenizer from local directory
+- [ ] Implement text encoding (tokenize → embed)
+- [ ] Implement audio encoding (mel spec → embed)
+- [ ] Unit tests verifying 512-dim embeddings
 
-**Deliverable:** Audio files processed with CLAP embeddings stored in database
+**Deliverable:** Functions for audio→embedding and text→embedding
 
-### Phase 3: Text Search Backend (Week 2)
-**Goal:** Implement text-to-audio search
+### Phase 2: Processing Pipeline (3-5 days)
+**Goal:** Process audio files and store embeddings
 
-- [ ] Implement text tokenization (CLIP BPE tokenizer)
-- [ ] Create `search_audio_by_text` Tauri command
-- [ ] Implement cosine similarity calculation
-- [ ] Add result ranking and filtering
-- [ ] Optimize search for 10K+ audio library
-- [ ] Write integration tests for search
+- [ ] Define database schema (audio_metadata with clap_embedding BLOB)
+- [ ] Integrate CLAP into AudioProcessor
+- [ ] Implement batch processing (existing task system)
+- [ ] Store embeddings as BLOBs in SQLite
+- [ ] Test with 100-1000 audio files
+- [ ] Benchmark: 50-120ms per file
 
-**Deliverable:** Backend API for text-based audio search
+**Deliverable:** Audio files with CLAP embeddings in database
 
-### Phase 4: Frontend Integration (Week 2)
-**Goal:** User-facing search interface
+### Phase 3: Search Backend (2-3 days)
+**Goal:** Text-to-audio search functionality
 
-- [ ] Create `AudioSearch.svelte` component
-- [ ] Implement search input with debouncing
-- [ ] Display ranked search results with similarity scores
-- [ ] Add audio preview playback
-- [ ] Show example queries for discoverability
+- [ ] Implement `search_audio_by_text` Tauri command
+- [ ] Add duration/path filtering to pre-filter search space
+- [ ] Parallel cosine similarity with rayon
+- [ ] Sort by similarity, return top N results
+- [ ] Integration tests with sample queries
+
+**Deliverable:** Working search command returning ranked results
+
+### Phase 4: Frontend Integration (2-3 days)
+**Goal:** Add search to existing UI
+
+- [ ] Integrate search into existing audio interface
+- [ ] Add search query input + optional duration filter
+- [ ] Display results with similarity scores
 - [ ] Add loading states and error handling
+- [ ] Test with various queries
 
-**Deliverable:** Working audio search UI in application
+**Deliverable:** Working audio search in application UI
 
-### Phase 5: Polish & Optimization (Week 3)
-**Goal:** Production-ready performance
-
-- [ ] Profile and optimize hot paths
-- [ ] Implement embedding caching
-- [ ] Add CUDA/GPU acceleration if available
-- [ ] Optimize database queries
-- [ ] Add comprehensive error handling
-- [ ] Write user documentation
-- [ ] Performance testing with 10K+ audio files
-
-**Deliverable:** Production-ready audio search feature
+**Total Estimated Time:** 2-4 weeks
 
 ---
 
@@ -1025,20 +1029,23 @@ async fn test_search_flow() {
 
 ### Performance Targets
 - ✅ **Processing Speed**: 50-120ms per audio file
-- ✅ **Search Latency**: <200ms for text queries (10K audio library)
+- ✅ **Search Latency**:
+  - 200K files unfiltered: ~500ms-1s
+  - 50K files filtered: ~125-250ms
+  - 10K files filtered: ~50-100ms
 - ✅ **VRAM Usage**: <1.5GB during processing
-- ✅ **RAM Usage**: <2GB for embedding cache (10K files)
+- ✅ **RAM Usage**: ~400MB for 200K embeddings
 
 ### Quality Targets
 - ✅ **Search Precision**: >80% relevant results in top 10
 - ✅ **Query Understanding**: Handles arbitrary text descriptions
 - ✅ **Example Success**: Query "footsteps on wood" ranks footstep sounds in top 5
+- ✅ **Handles Long-Form**: Works with both sound effects and music tracks
 
 ### User Experience
-- ✅ **Search Response**: Results appear in <1 second
-- ✅ **Processing Feedback**: Real-time progress updates
+- ✅ **Search Response**: Results appear in <1 second (with reasonable filters)
+- ✅ **Filtering**: Duration/path filters enable targeted search
 - ✅ **Error Handling**: Clear error messages for failures
-- ✅ **Discoverability**: Example queries help users understand capabilities
 
 ---
 
@@ -1062,23 +1069,24 @@ async fn test_search_flow() {
 - Provide fallback to CPU if GPU fails
 - Clear error messages if model loading fails
 
-### Risk 3: Tokenizer Implementation
-**Problem:** CLIP BPE tokenizer is complex to implement in Rust
+### Risk 3: Search Performance at 200K Scale
+**Problem:** Linear scan of 200K embeddings may be too slow
 
 **Mitigations:**
-- Use existing Rust tokenizer libraries (tokenizers.rs)
-- Port Python implementation if needed
-- Pre-tokenize common queries as fallback
-- Document tokenizer requirements clearly
+- Pre-filter by duration/path to reduce search space
+- Parallel similarity calculation with rayon
+- Profile with realistic 200K dataset
+- If needed: Implement ANN search (usearch, qdrant) post-MVP
+- Current target: <1s unfiltered, <250ms filtered (acceptable)
 
-### Risk 4: Search Performance at Scale
-**Problem:** Linear scan may be slow for 50K+ audio files
+### Risk 4: Audio Processing Complexity
+**Problem:** STFT and mel filterbank implementation may have edge cases
 
 **Mitigations:**
-- Profile with realistic dataset sizes
-- Implement SIMD-optimized cosine similarity
-- Consider approximate nearest neighbor search if needed
-- Cache embeddings in memory
+- Unit tests with known audio samples
+- Verify mel spectrogram dimensions match CLAP requirements
+- Test with various audio formats and sample rates
+- Reference implementations available in Python (librosa)
 
 ---
 
@@ -1112,9 +1120,9 @@ pub async fn find_similar_audio(
 
 **4. Advanced Filters**
 - Sample rate range
-- Duration range
 - Channel count (mono/stereo)
-- Processing tier (basic/CLAP/premium)
+- File format filtering
+- Folder hierarchy filtering
 
 **5. Batch Operations**
 - Tag multiple search results at once
@@ -1143,18 +1151,40 @@ pub async fn find_similar_audio(
 
 ## Conclusion
 
-Implementing CLAP-based audio search provides **significant improvements** over tag-based search:
+Implementing CLAP-based audio search provides **dramatic improvements** over filename-only search:
 
 **Key Benefits:**
-- ✅ Natural language queries ("footsteps on wood floor")
-- ✅ Zero-shot learning (no predefined categories needed)
-- ✅ Semantic understanding (knows "explosion" relates to "blast", "boom")
-- ✅ Reasonable performance (50-120ms per file, <200ms search)
+- ✅ **Content-based search**: Understands what audio *sounds like*, not just filename
+- ✅ **Natural language queries**: "footsteps on wood floor", "gentle wind", "metal impact"
+- ✅ **Zero-shot learning**: No predefined categories needed
+- ✅ **Semantic understanding**: Knows "explosion" relates to "blast", "boom", "impact"
+- ✅ **Scalable**: Handles 200K+ files with filtered search strategy
 
 **Implementation Effort:**
-- **3 weeks** for full implementation
-- **Moderate complexity** (audio processing + ML integration)
-- **Well-documented** CLAP models and ONNX tooling
-- **Clear path** from MVP to production-ready
+- **2-4 weeks** for working implementation
+- **Moderate complexity**: Audio processing (STFT, mel spectrograms) + ML inference (ONNX)
+- **Well-documented**: CLAP models, ONNX Runtime, Symphonia all have good docs
+- **Phase 0 critical**: Audio primitives (STFT, mel) must be implemented correctly
 
-This feature will dramatically improve audio asset discoverability compared to filename/tag-based search, making it easier for users to find exactly the sounds they need using natural language descriptions.
+**Transformation:**
+Current: Search for `"footstep.wav"` → finds only files named "footstep"
+With CLAP: Search for `"footsteps on wood"` → finds all footstep sounds regardless of filename
+
+This feature will **transform audio asset discoverability**, making it dramatically easier for users to find sounds based on what they hear in their head rather than guessing filenames.
+
+---
+
+## Plan Adjustments Summary
+
+**Key changes from original plan:**
+
+1. **Schema**: No migrations needed - fresh database schema defined directly
+2. **Baseline**: Removed PANNs comparisons - upgrading from FTS5 filename search only
+3. **Scale**: Updated for 200K file target with filtered search strategy
+4. **T-CLAP**: Sticking with CLAP (not T-CLAP) for initial implementation
+5. **Implementation**: Added Phase 0 for audio primitives (STFT, mel, loading)
+6. **Tokenization**: Using `tokenizers` crate (solved, not a risk)
+7. **Performance**: Realistic targets for 200K files (~500ms unfiltered, ~125-250ms filtered)
+8. **Model hosting**: Manual download for development, production strategy TBD
+9. **Dependencies**: Complete list including rustfft, tokenizers, ndarray, num-complex
+10. **UI**: Simplified frontend examples - integrates with existing Tauri+Svelte UI
