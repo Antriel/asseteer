@@ -64,8 +64,8 @@ export async function searchAssets(
 				FROM assets
 				LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
 				LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
-				WHERE asset_type = ?
-				ORDER BY filename COLLATE NOCASE ASC
+				WHERE assets.asset_type = ?
+				ORDER BY assets.filename COLLATE NOCASE ASC
 				LIMIT ? OFFSET ?
 			`;
 			params = [assetType, limit, offset];
@@ -79,7 +79,7 @@ export async function searchAssets(
 				FROM assets
 				LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
 				LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
-				ORDER BY filename COLLATE NOCASE ASC
+				ORDER BY assets.filename COLLATE NOCASE ASC
 				LIMIT ? OFFSET ?
 			`;
 			params = [limit, offset];

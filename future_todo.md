@@ -1,4 +1,5 @@
 - [ ] Clean up CSS, make it prettier.
+- [ ] Fix Vite errors.
 - [ ] Don't make thumbnails for images with smaller size.
 - [ ] Add support for GIF files.
 - [ ] Errors during processing should be gathered and showed to the user, but it should be some list in a new final report view of the processing, as there could be a lot of them.

@@ -1,9 +1,11 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { emit } from '@tauri-apps/api/event';
   import { open } from '@tauri-apps/plugin-dialog';
   import { uiState } from '$lib/state/ui.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
   import { processingState } from '$lib/state/tasks.svelte';
+  import { viewState } from '$lib/state/view.svelte';
 
   async function selectFolder() {
     try {
@@ -30,9 +32,13 @@
       uiState.currentSessionId = sessionId;
       uiState.scanProgress = 'Scan complete! Assets discovered.';
 
-      // Reload assets and refresh pending count
-      await assetsState.loadAssets();
+      // Reload assets for current tab and refresh pending count
+      const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
+      await assetsState.loadAssets(currentType);
       await processingState.refreshPendingCount();
+
+      // Emit custom event to notify parent to refresh asset counts
+      await emit('scan-complete');
 
       // Clear progress message after delay
       setTimeout(() => {

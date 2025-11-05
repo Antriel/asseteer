@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { assetsState } from '$lib/state/assets.svelte';
   import { viewState } from '$lib/state/view.svelte';
   import { getDatabase } from '$lib/database/connection';
   import { getAssetTypeCounts } from '$lib/database/queries';
+  import type { ProcessingProgress } from '$lib/state/tasks.svelte';
 
   import ScanControl from '$lib/components/ScanControl.svelte';
   import TaskProgress from '$lib/components/TaskProgress.svelte';
@@ -15,21 +17,44 @@
   import ImageLightbox from '$lib/components/modals/ImageLightbox.svelte';
 
   let assetCounts = $state({ images: 0, audio: 0 });
+  let unlistenFns: UnlistenFn[] = [];
 
-  onMount(async () => {
+  async function refreshAssetCounts() {
     const db = await getDatabase();
     assetCounts = await getAssetTypeCounts(db);
+  }
+
+  onMount(async () => {
+    await refreshAssetCounts();
 
     // Load initial assets (images by default)
     assetsState.loadAssets('image');
+
+    // Listen for scan completion to refresh counts
+    const unlistenScan = await listen('scan-complete', async () => {
+      console.log('[Main] Scan complete, refreshing asset counts');
+      await refreshAssetCounts();
+    });
+
+    // Listen for processing completion to refresh counts
+    const unlistenComplete = await listen<ProcessingProgress>('processing-complete', async () => {
+      console.log('[Main] Processing complete, refreshing asset counts and reloading assets');
+      await refreshAssetCounts();
+      // Reload current tab's assets
+      const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
+      await assetsState.loadAssets(currentType);
+    });
+
+    unlistenFns.push(unlistenScan, unlistenComplete);
   });
 
-  // Filtered assets based on active tab
-  let displayedAssets = $derived(
-    viewState.activeTab === 'images'
-      ? assetsState.assets.filter(a => a.asset_type === 'image')
-      : assetsState.assets.filter(a => a.asset_type === 'audio')
-  );
+  onDestroy(() => {
+    unlistenFns.forEach((fn) => fn());
+  });
+
+  // Assets are already filtered by loadAssets() based on the current tab
+  // No need for additional filtering here
+  let displayedAssets = $derived(assetsState.assets);
 </script>
 
 <div class="flex flex-col h-screen bg-primary">
@@ -72,8 +97,8 @@
         {#if viewState.layoutMode === 'grid'}
           <ImageGrid assets={displayedAssets} />
         {:else}
-          <!-- Fallback to table view for images -->
-          <AssetList />
+          <!-- Table view for images -->
+          <AssetList assets={displayedAssets} isLoading={assetsState.isLoading} />
         {/if}
       {:else}
         <AudioList assets={displayedAssets} />
