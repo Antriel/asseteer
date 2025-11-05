@@ -59,7 +59,7 @@
       <!-- Inline player -->
       <div class="w-[300px] flex-shrink-0">
         <AudioPlayer
-          audioPath={asset.path}
+          asset={asset}
           isActive={currentlyPlaying === asset.id}
           onPlay={() => currentlyPlaying = asset.id}
           onPause={() => currentlyPlaying = null}

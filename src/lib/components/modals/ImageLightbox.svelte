@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { convertFileSrc } from '@tauri-apps/api/core';
+  import { invoke } from '@tauri-apps/api/core';
   import type { Asset } from '$lib/types';
 
   interface Props {
@@ -14,9 +15,79 @@
 
   let zoom = $state(1);
   let showMetadata = $state(false);
+  let imageSrc = $state<string>('');
+  let blobUrl = $state<string | null>(null);
+  let loading = $state(true);
 
-  // Convert file path to Tauri-compatible URL
-  const imageSrc = $derived(convertFileSrc(asset.path));
+  // Load image when asset changes - track only asset.id
+  $effect(() => {
+    // Track the asset.id (this is what triggers the effect)
+    const assetId = asset.id;
+    const zipEntry = asset.zip_entry;
+    const assetPath = asset.path;
+    const assetFormat = asset.format;
+
+    console.log('[ImageLightbox] Effect triggered for asset:', assetId);
+
+    // Use untrack to prevent state updates from re-triggering the effect
+    untrack(() => {
+      // Clean up previous blob URL if exists
+      if (blobUrl) {
+        console.log('[ImageLightbox] Revoking previous blob URL');
+        URL.revokeObjectURL(blobUrl);
+        blobUrl = null;
+      }
+
+      loading = true;
+
+      // Load the new asset
+      (async () => {
+        try {
+          if (zipEntry) {
+            // Asset is inside a zip - need to extract it
+            console.log('[ImageLightbox] Extracting from zip:', zipEntry);
+            const bytes = await invoke<number[]>('get_asset_bytes', { assetId });
+            const blob = new Blob([new Uint8Array(bytes)], { type: `image/${assetFormat}` });
+            const newBlobUrl = URL.createObjectURL(blob);
+            console.log('[ImageLightbox] Created blob URL:', newBlobUrl);
+
+            untrack(() => {
+              blobUrl = newBlobUrl;
+              imageSrc = newBlobUrl;
+              loading = false;
+            });
+          } else {
+            // Regular file - use convertFileSrc
+            const src = convertFileSrc(assetPath);
+            console.log('[ImageLightbox] Using convertFileSrc:', src);
+
+            untrack(() => {
+              imageSrc = src;
+              loading = false;
+            });
+          }
+        } catch (error) {
+          console.error('[ImageLightbox] Failed to load image:', error);
+          untrack(() => {
+            imageSrc = '';
+            loading = false;
+          });
+        }
+      })();
+    });
+  });
+
+  // Cleanup on unmount
+  $effect(() => {
+    return () => {
+      console.log('[ImageLightbox] Cleanup - revoking blob URL');
+      untrack(() => {
+        if (blobUrl) {
+          URL.revokeObjectURL(blobUrl);
+        }
+      });
+    };
+  });
 
   function handleKeydown(e: KeyboardEvent) {
     switch (e.key) {
@@ -82,12 +153,22 @@
 
     <!-- Image display -->
     <div class="flex-1 flex items-center justify-center overflow-auto">
-      <img
-        src={imageSrc}
-        alt={asset.filename}
-        style="transform: scale({zoom})"
-        class="max-w-full max-h-full object-contain transition-transform duration-200"
-      />
+      {#if loading}
+        <div class="text-white text-center">
+          <div class="text-2xl mb-2">Loading...</div>
+        </div>
+      {:else if imageSrc}
+        <img
+          src={imageSrc}
+          alt={asset.filename}
+          style="transform: scale({zoom})"
+          class="max-w-full max-h-full object-contain transition-transform duration-200"
+        />
+      {:else}
+        <div class="text-white text-center">
+          <div class="text-2xl mb-2">Failed to load image</div>
+        </div>
+      {/if}
     </div>
 
     <!-- Controls -->

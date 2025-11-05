@@ -1,23 +1,88 @@
 <script lang="ts">
-  import { convertFileSrc } from '@tauri-apps/api/core';
+  import { untrack } from 'svelte';
+  import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+  import type { Asset } from '$lib/types';
 
   interface Props {
-    audioPath: string;
+    asset: Asset;
     isActive?: boolean;
     onPlay?: () => void;
     onPause?: () => void;
   }
 
-  let { audioPath, isActive = false, onPlay, onPause }: Props = $props();
+  let { asset, isActive = false, onPlay, onPause }: Props = $props();
 
   let audioElement: HTMLAudioElement;
   let isPlaying = $state(false);
   let currentTime = $state(0);
   let duration = $state(0);
   let volume = $state(1);
+  let audioSrc = $state<string>('');
+  let blobUrl = $state<string | null>(null);
+  let loading = $state(true);
 
-  // Convert file path to Tauri-compatible URL
-  const audioSrc = $derived(convertFileSrc(audioPath));
+  // Load audio when asset changes - track only asset properties
+  $effect(() => {
+    // Track the asset properties (this is what triggers the effect)
+    const assetId = asset.id;
+    const zipEntry = asset.zip_entry;
+    const assetPath = asset.path;
+    const assetFormat = asset.format;
+
+    // Use untrack to prevent state updates from re-triggering the effect
+    untrack(() => {
+      // Clean up previous blob URL if exists
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+        blobUrl = null;
+      }
+
+      loading = true;
+
+      // Load the new asset
+      (async () => {
+        try {
+          if (zipEntry) {
+            // Asset is inside a zip - need to extract it
+            const bytes = await invoke<number[]>('get_asset_bytes', { assetId });
+            const blob = new Blob([new Uint8Array(bytes)], { type: `audio/${assetFormat}` });
+            const newBlobUrl = URL.createObjectURL(blob);
+
+            untrack(() => {
+              blobUrl = newBlobUrl;
+              audioSrc = newBlobUrl;
+              loading = false;
+            });
+          } else {
+            // Regular file - use convertFileSrc
+            const src = convertFileSrc(assetPath);
+
+            untrack(() => {
+              audioSrc = src;
+              loading = false;
+            });
+          }
+        } catch (error) {
+          console.error('Failed to load audio:', error);
+          untrack(() => {
+            audioSrc = '';
+            loading = false;
+          });
+        }
+      })();
+    });
+  });
+
+  // Cleanup on unmount
+  $effect(() => {
+    return () => {
+      untrack(() => {
+        if (blobUrl) {
+          URL.revokeObjectURL(blobUrl);
+        }
+      });
+    };
+  });
 
   async function togglePlay() {
     if (isPlaying) {
@@ -71,19 +136,24 @@
 </script>
 
 <div class="flex items-center gap-3">
-  <audio
-    bind:this={audioElement}
-    src={audioSrc}
-    ontimeupdate={handleTimeUpdate}
-    onloadedmetadata={handleLoadedMetadata}
-    onended={handleEnded}
-  />
+  {#if loading}
+    <div class="text-sm text-secondary">Loading audio...</div>
+  {:else if !audioSrc}
+    <div class="text-sm text-red-500">Failed to load audio</div>
+  {:else}
+    <audio
+      bind:this={audioElement}
+      src={audioSrc}
+      ontimeupdate={handleTimeUpdate}
+      onloadedmetadata={handleLoadedMetadata}
+      onended={handleEnded}
+    ></audio>
 
-  <!-- Play/Pause button -->
-  <button
-    class="w-8 h-8 flex items-center justify-center bg-accent text-white border-none rounded-full cursor-pointer hover:opacity-90 transition-opacity flex-shrink-0"
-    onclick={togglePlay}
-  >
+    <!-- Play/Pause button -->
+    <button
+      class="w-8 h-8 flex items-center justify-center bg-accent text-white border-none rounded-full cursor-pointer hover:opacity-90 transition-opacity flex-shrink-0"
+      onclick={togglePlay}
+    >
     {#if isPlaying}
       <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
         <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
@@ -124,4 +194,5 @@
       class="w-[60px]"
     />
   </div>
+  {/if}
 </div>

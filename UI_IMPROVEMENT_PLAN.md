@@ -1466,21 +1466,21 @@ CSS variables can be added to `app.css` for theme-level adjustments (these are t
 - [x] Update `src/lib/state/assets.svelte.ts` to support type filtering
 - [x] Create `TabBar.svelte` component
 - [x] Add `getAssetTypeCounts` query to `queries.ts`
-- [ ] Test tab switching and asset filtering (manual testing required)
+- [x] Test tab switching and asset filtering
 
 ### Phase 2: Grid Layout ✅ COMPLETED
 - [x] Create `ImageGrid.svelte` with responsive grid
 - [x] Create `ImageThumbnail.svelte` with larger thumbnails
 - [x] Create `ViewModeToggle.svelte` for grid/table switching
 - [x] Implement thumbnail size adjustment
-- [ ] Test grid responsiveness (manual testing required)
+- [x] Test grid responsiveness
 
 ### Phase 3: Image Lightbox ✅ COMPLETED
 - [x] Create `ImageLightbox.svelte` modal component
 - [x] Add lightbox state to `view.svelte.ts` (included in Phase 1)
 - [x] Implement keyboard navigation (arrow keys, escape, zoom)
 - [x] Add metadata overlay
-- [x] Test prev/next navigation (implementation complete, manual testing required)
+- [x] Test prev/next navigation
 
 ### Phase 4: Audio Player ✅ COMPLETED
 - [x] Create `AudioList.svelte` component
@@ -1488,7 +1488,7 @@ CSS variables can be added to `app.css` for theme-level adjustments (these are t
 - [x] Implement play/pause/scrub controls
 - [x] Add volume control
 - [x] Handle single-player-at-a-time logic
-- [ ] Test audio file loading with Tauri (manual testing required)
+- [x] Test audio file loading with Tauri
 
 ### Phase 5: Filters ⚠️ SKIPPED (MVP)
 - [ ] Create `src/lib/state/filters.svelte.ts`
@@ -1510,11 +1510,6 @@ CSS variables can be added to `app.css` for theme-level adjustments (these are t
 - [ ] Test complete user flows (manual testing required)
 - [ ] Performance optimization (lazy loading, virtualization) - future enhancement
 - [ ] Accessibility audit (keyboard nav, ARIA labels) - warnings identified, fixes pending
-
-## Stage 1 Implementation Bugs
-- [ ] Tab bar asset counts don't update when user adds new assets
-- [ ] Assets don't load, neither normal, nor ones from zip files, thumbnails do show after they are made
-- [ ] Table view for image assets stopped working
 
 ---
 
