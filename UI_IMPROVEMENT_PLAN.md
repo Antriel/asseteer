@@ -2,6 +2,7 @@
 
 **Created**: 2025-11-04
 **Status**: Planning Phase
+**Styling Approach**: Tailwind CSS 4 with inline-first methodology
 
 ## Executive Summary
 
@@ -12,6 +13,15 @@ This document outlines a comprehensive plan to enhance the Asseteer UI with:
 - **Audio playback** functionality with media controls
 - **Full-size image viewing** with lightbox/modal
 - **Enhanced user experience** with better navigation and organization
+
+### Styling Philosophy
+
+This plan follows the project's **inline-first Tailwind approach**:
+- ✅ All component styling uses inline Tailwind utility classes
+- ✅ NO component-specific `<style>` blocks
+- ✅ Semantic color tokens (text-primary, bg-secondary, border-default, etc.) via CSS variables
+- ✅ Custom utilities only if pattern is used in 3+ components
+- ✅ Token-efficient and AI-friendly code structure
 
 ---
 
@@ -176,7 +186,7 @@ class AssetsState {
   import { assetsState } from '$lib/state/assets.svelte';
 
   interface Props {
-    imageCoun: number;
+    imageCount: number;
     audioCount: number;
   }
 
@@ -190,52 +200,25 @@ class AssetsState {
 
 <div class="flex items-center gap-1 border-b border-default bg-secondary px-4">
   <button
-    class="tab-btn"
-    class:active={viewState.activeTab === 'images'}
+    class="flex items-center gap-2 px-4 py-3 border-b-2 border-transparent font-medium text-secondary transition-all hover:text-primary"
+    class:!text-accent={viewState.activeTab === 'images'}
+    class:!border-accent={viewState.activeTab === 'images'}
     onclick={() => switchTab('images')}
   >
     Images
-    <span class="count">{imageCount}</span>
+    <span class="text-xs px-2 py-0.5 bg-tertiary rounded-full">{imageCount}</span>
   </button>
 
   <button
-    class="tab-btn"
-    class:active={viewState.activeTab === 'audio'}
+    class="flex items-center gap-2 px-4 py-3 border-b-2 border-transparent font-medium text-secondary transition-all hover:text-primary"
+    class:!text-accent={viewState.activeTab === 'audio'}
+    class:!border-accent={viewState.activeTab === 'audio'}
     onclick={() => switchTab('audio')}
   >
     Audio
-    <span class="count">{audioCount}</span>
+    <span class="text-xs px-2 py-0.5 bg-tertiary rounded-full">{audioCount}</span>
   </button>
 </div>
-
-<style>
-  .tab-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 1rem;
-    border-bottom: 2px solid transparent;
-    font-weight: 500;
-    color: var(--color-text-secondary);
-    transition: all 0.2s;
-  }
-
-  .tab-btn:hover {
-    color: var(--color-text-primary);
-  }
-
-  .tab-btn.active {
-    color: var(--color-accent);
-    border-bottom-color: var(--color-accent);
-  }
-
-  .count {
-    font-size: 0.75rem;
-    padding: 0.125rem 0.5rem;
-    background: var(--color-bg-tertiary);
-    border-radius: 9999px;
-  }
-</style>
 ```
 
 ### 1.3 Database Query Enhancement
@@ -302,58 +285,24 @@ export async function getAssetTypeCounts(
 <div class="grid {gridClasses()} gap-2 p-4">
   {#each assets as asset (asset.id)}
     <button
-      class="image-card"
+      class="relative bg-secondary border border-default rounded-lg overflow-hidden transition-all cursor-pointer hover:border-accent hover:shadow-md hover:-translate-y-0.5"
       onclick={() => handleImageClick(asset)}
     >
       <ImageThumbnail assetId={asset.id} size={viewState.thumbnailSize} />
 
-      <div class="image-info">
-        <p class="filename" title={asset.filename}>{asset.filename}</p>
+      <div class="p-2 bg-primary">
+        <p class="text-xs font-medium text-primary whitespace-nowrap overflow-hidden text-ellipsis" title={asset.filename}>
+          {asset.filename}
+        </p>
         {#if asset.width && asset.height}
-          <p class="dimensions">{asset.width} × {asset.height}</p>
+          <p class="text-[0.625rem] text-secondary mt-1">
+            {asset.width} × {asset.height}
+          </p>
         {/if}
       </div>
     </button>
   {/each}
 </div>
-
-<style>
-  .image-card {
-    position: relative;
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border-default);
-    border-radius: 8px;
-    overflow: hidden;
-    transition: all 0.2s;
-    cursor: pointer;
-  }
-
-  .image-card:hover {
-    border-color: var(--color-accent);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    transform: translateY(-2px);
-  }
-
-  .image-info {
-    padding: 0.5rem;
-    background: var(--color-bg-primary);
-  }
-
-  .filename {
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: var(--color-text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .dimensions {
-    font-size: 0.625rem;
-    color: var(--color-text-secondary);
-    margin-top: 0.25rem;
-  }
-</style>
 ```
 
 ### 2.2 Enhanced Thumbnail Component
@@ -410,61 +359,23 @@ Replace existing `AssetThumbnail.svelte` for images with larger, responsive thum
   });
 </script>
 
-<div class="thumbnail-container {sizeClasses()}">
+<div class="w-full flex items-center justify-center bg-tertiary overflow-hidden {sizeClasses()}">
   {#if isLoading}
-    <div class="placeholder">
-      <div class="spinner"></div>
+    <div class="flex items-center justify-center w-full h-full">
+      <div class="w-5 h-5 border-2 border-default border-t-accent rounded-full animate-spin"></div>
     </div>
   {:else if error || !thumbnailUrl}
-    <div class="placeholder">
+    <div class="flex items-center justify-center w-full h-full">
       <span class="text-xs text-secondary">No preview</span>
     </div>
   {:else}
     <img
       src={thumbnailUrl}
       alt="Thumbnail"
-      class="thumbnail-image"
+      class="w-full h-full object-cover"
     />
   {/if}
 </div>
-
-<style>
-  .thumbnail-container {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--color-bg-tertiary);
-    overflow: hidden;
-  }
-
-  .thumbnail-image {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .placeholder {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-  }
-
-  .spinner {
-    width: 20px;
-    height: 20px;
-    border: 2px solid var(--color-border-default);
-    border-top-color: var(--color-accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-</style>
 ```
 
 ### 2.3 View Mode Toggle
@@ -565,166 +476,98 @@ Replace existing `AssetThumbnail.svelte` for images with larger, responsive thum
   });
 </script>
 
-<div class="lightbox-overlay" onclick={onClose}>
-  <div class="lightbox-content" onclick={(e) => e.stopPropagation()}>
+<div class="fixed inset-0 bg-black/90 flex items-center justify-center z-[1000]" onclick={onClose}>
+  <div class="relative w-[90vw] h-[90vh] flex flex-col" onclick={(e) => e.stopPropagation()}>
     <!-- Close button -->
-    <button class="close-btn" onclick={onClose}>×</button>
+    <button
+      class="absolute top-4 right-4 w-12 h-12 bg-black/50 text-white border-none rounded-full text-3xl cursor-pointer z-10 hover:bg-black/70"
+      onclick={onClose}
+    >
+      ×
+    </button>
 
     <!-- Navigation -->
     {#if onPrev}
-      <button class="nav-btn nav-prev" onclick={onPrev}>‹</button>
+      <button
+        class="absolute top-1/2 -translate-y-1/2 left-4 w-12 h-12 bg-black/50 text-white border-none rounded-full text-3xl cursor-pointer hover:bg-black/70"
+        onclick={onPrev}
+      >
+        ‹
+      </button>
     {/if}
     {#if onNext}
-      <button class="nav-btn nav-next" onclick={onNext}>›</button>
+      <button
+        class="absolute top-1/2 -translate-y-1/2 right-4 w-12 h-12 bg-black/50 text-white border-none rounded-full text-3xl cursor-pointer hover:bg-black/70"
+        onclick={onNext}
+      >
+        ›
+      </button>
     {/if}
 
     <!-- Image display -->
-    <div class="image-container">
+    <div class="flex-1 flex items-center justify-center overflow-auto">
       <img
         src={asset.path}
         alt={asset.filename}
         style="transform: scale({zoom})"
-        class="lightbox-image"
+        class="max-w-full max-h-full object-contain transition-transform duration-200"
       />
     </div>
 
     <!-- Controls -->
-    <div class="controls-bar">
-      <div class="info">
-        <p class="filename">{asset.filename}</p>
+    <div class="flex justify-between items-center p-4 bg-black/80 text-white">
+      <div>
+        <p class="font-medium">{asset.filename}</p>
         {#if asset.width && asset.height}
-          <p class="metadata">{asset.width} × {asset.height} • {(asset.file_size / 1024).toFixed(0)} KB</p>
+          <p class="text-sm text-gray-300">{asset.width} × {asset.height} • {(asset.file_size / 1024).toFixed(0)} KB</p>
         {/if}
       </div>
 
-      <div class="actions">
-        <button onclick={() => zoom = Math.max(zoom - 0.5, 0.5)}>−</button>
-        <span>{Math.round(zoom * 100)}%</span>
-        <button onclick={() => zoom = Math.min(zoom + 0.5, 5)}>+</button>
-        <button onclick={() => zoom = 1}>Reset</button>
-        <button onclick={() => showMetadata = !showMetadata}>Info</button>
+      <div class="flex gap-2 items-center">
+        <button class="px-3 py-1 bg-white/10 rounded hover:bg-white/20" onclick={() => zoom = Math.max(zoom - 0.5, 0.5)}>−</button>
+        <span class="min-w-[4rem] text-center">{Math.round(zoom * 100)}%</span>
+        <button class="px-3 py-1 bg-white/10 rounded hover:bg-white/20" onclick={() => zoom = Math.min(zoom + 0.5, 5)}>+</button>
+        <button class="px-3 py-1 bg-white/10 rounded hover:bg-white/20" onclick={() => zoom = 1}>Reset</button>
+        <button class="px-3 py-1 bg-white/10 rounded hover:bg-white/20" onclick={() => showMetadata = !showMetadata}>Info</button>
       </div>
     </div>
 
     <!-- Metadata panel -->
     {#if showMetadata}
-      <div class="metadata-panel">
-        <h3>Image Details</h3>
-        <dl>
-          <dt>Filename:</dt>
-          <dd>{asset.filename}</dd>
+      <div class="absolute top-16 right-4 w-[300px] p-4 bg-black/90 text-white rounded-lg">
+        <h3 class="text-lg font-semibold mb-3">Image Details</h3>
+        <dl class="space-y-2">
+          <div>
+            <dt class="text-sm text-gray-400">Filename:</dt>
+            <dd class="text-sm">{asset.filename}</dd>
+          </div>
 
-          <dt>Path:</dt>
-          <dd>{asset.path}</dd>
+          <div>
+            <dt class="text-sm text-gray-400">Path:</dt>
+            <dd class="text-sm break-all">{asset.path}</dd>
+          </div>
 
           {#if asset.width && asset.height}
-            <dt>Dimensions:</dt>
-            <dd>{asset.width} × {asset.height} px</dd>
+            <div>
+              <dt class="text-sm text-gray-400">Dimensions:</dt>
+              <dd class="text-sm">{asset.width} × {asset.height} px</dd>
+            </div>
           {/if}
 
-          <dt>Format:</dt>
-          <dd>{asset.format.toUpperCase()}</dd>
+          <div>
+            <dt class="text-sm text-gray-400">Format:</dt>
+            <dd class="text-sm">{asset.format.toUpperCase()}</dd>
+          </div>
 
-          <dt>File Size:</dt>
-          <dd>{(asset.file_size / 1024).toFixed(2)} KB</dd>
+          <div>
+            <dt class="text-sm text-gray-400">File Size:</dt>
+            <dd class="text-sm">{(asset.file_size / 1024).toFixed(2)} KB</dd>
+          </div>
         </dl>
       </div>
     {/if}
   </div>
 </div>
-
-<style>
-  .lightbox-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.9);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-  }
-
-  .lightbox-content {
-    position: relative;
-    width: 90vw;
-    height: 90vh;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .image-container {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: auto;
-  }
-
-  .lightbox-image {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    transition: transform 0.2s;
-  }
-
-  .close-btn {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    width: 3rem;
-    height: 3rem;
-    background: rgba(0, 0, 0, 0.5);
-    color: white;
-    border: none;
-    border-radius: 50%;
-    font-size: 2rem;
-    cursor: pointer;
-    z-index: 10;
-  }
-
-  .nav-btn {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 3rem;
-    height: 3rem;
-    background: rgba(0, 0, 0, 0.5);
-    color: white;
-    border: none;
-    border-radius: 50%;
-    font-size: 2rem;
-    cursor: pointer;
-  }
-
-  .nav-prev { left: 1rem; }
-  .nav-next { right: 1rem; }
-
-  .controls-bar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1rem;
-    background: rgba(0, 0, 0, 0.8);
-    color: white;
-  }
-
-  .actions {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-  }
-
-  .metadata-panel {
-    position: absolute;
-    top: 4rem;
-    right: 1rem;
-    width: 300px;
-    padding: 1rem;
-    background: rgba(0, 0, 0, 0.9);
-    color: white;
-    border-radius: 8px;
-  }
-</style>
 ```
 
 ### 3.2 Lightbox State Management
@@ -797,18 +640,24 @@ class ViewState {
   }
 </script>
 
-<div class="audio-list">
+<div class="flex flex-col gap-2 p-4">
   {#each assets as asset (asset.id)}
-    <div class="audio-item" class:playing={currentlyPlaying === asset.id}>
+    <div
+      class="flex items-center gap-4 p-4 bg-secondary border border-default rounded-lg transition-all hover:border-accent"
+      class:!bg-accent-light={currentlyPlaying === asset.id}
+      class:!border-accent={currentlyPlaying === asset.id}
+    >
       <!-- Audio icon/waveform placeholder -->
-      <div class="audio-icon">
+      <div class="w-12 h-12 flex items-center justify-center bg-primary rounded-lg">
         <svg><!-- Music note icon --></svg>
       </div>
 
       <!-- Audio metadata -->
-      <div class="audio-info">
-        <p class="audio-title">{asset.filename}</p>
-        <div class="audio-metadata">
+      <div class="flex-1 min-w-0">
+        <p class="font-semibold text-primary whitespace-nowrap overflow-hidden text-ellipsis">
+          {asset.filename}
+        </p>
+        <div class="flex gap-4 mt-1 text-xs text-secondary">
           {#if asset.duration_ms}
             <span>{formatDuration(asset.duration_ms)}</span>
           {/if}
@@ -824,7 +673,7 @@ class ViewState {
       </div>
 
       <!-- Inline player -->
-      <div class="player-container">
+      <div class="w-[300px]">
         <AudioPlayer
           audioPath={asset.path}
           isActive={currentlyPlaying === asset.id}
@@ -835,70 +684,6 @@ class ViewState {
     </div>
   {/each}
 </div>
-
-<style>
-  .audio-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 1rem;
-  }
-
-  .audio-item {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 1rem;
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border-default);
-    border-radius: 8px;
-    transition: all 0.2s;
-  }
-
-  .audio-item:hover {
-    border-color: var(--color-accent);
-  }
-
-  .audio-item.playing {
-    background: var(--color-bg-accent-light);
-    border-color: var(--color-accent);
-  }
-
-  .audio-icon {
-    width: 48px;
-    height: 48px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--color-bg-primary);
-    border-radius: 8px;
-  }
-
-  .audio-info {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .audio-title {
-    font-weight: 600;
-    color: var(--color-text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .audio-metadata {
-    display: flex;
-    gap: 1rem;
-    margin-top: 0.25rem;
-    font-size: 0.75rem;
-    color: var(--color-text-secondary);
-  }
-
-  .player-container {
-    width: 300px;
-  }
-</style>
 ```
 
 ### 4.2 Create Audio Player Component
@@ -974,7 +759,7 @@ class ViewState {
   });
 </script>
 
-<div class="audio-player">
+<div class="flex items-center gap-3">
   <audio
     bind:this={audioElement}
     src={audioSrc}
@@ -984,7 +769,10 @@ class ViewState {
   />
 
   <!-- Play/Pause button -->
-  <button class="play-btn" onclick={togglePlay}>
+  <button
+    class="w-8 h-8 flex items-center justify-center bg-accent text-white border-none rounded-full cursor-pointer hover:opacity-90"
+    onclick={togglePlay}
+  >
     {#if isPlaying}
       <svg><!-- Pause icon --></svg>
     {:else}
@@ -993,18 +781,21 @@ class ViewState {
   </button>
 
   <!-- Progress bar -->
-  <div class="progress-container" onclick={seek}>
-    <div class="progress-bar">
-      <div class="progress-fill" style="width: {(currentTime / duration) * 100}%"></div>
+  <div class="flex-1 cursor-pointer" onclick={seek}>
+    <div class="h-1 bg-default rounded-sm overflow-hidden">
+      <div
+        class="h-full bg-accent transition-[width] duration-100"
+        style="width: {(currentTime / duration) * 100}%"
+      ></div>
     </div>
-    <div class="time-display">
+    <div class="flex justify-between mt-1 text-[0.625rem] text-secondary">
       <span>{formatTime(currentTime)}</span>
       <span>{formatTime(duration)}</span>
     </div>
   </div>
 
   <!-- Volume control -->
-  <div class="volume-control">
+  <div class="flex items-center gap-2">
     <svg><!-- Volume icon --></svg>
     <input
       type="range"
@@ -1013,66 +804,10 @@ class ViewState {
       step="0.1"
       bind:value={volume}
       oninput={() => audioElement.volume = volume}
+      class="w-[60px]"
     />
   </div>
 </div>
-
-<style>
-  .audio-player {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .play-btn {
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--color-accent);
-    color: white;
-    border: none;
-    border-radius: 50%;
-    cursor: pointer;
-  }
-
-  .progress-container {
-    flex: 1;
-    cursor: pointer;
-  }
-
-  .progress-bar {
-    height: 4px;
-    background: var(--color-border-default);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-
-  .progress-fill {
-    height: 100%;
-    background: var(--color-accent);
-    transition: width 0.1s;
-  }
-
-  .time-display {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 0.25rem;
-    font-size: 0.625rem;
-    color: var(--color-text-secondary);
-  }
-
-  .volume-control {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .volume-control input[type="range"] {
-    width: 60px;
-  }
-</style>
 ```
 
 ---
@@ -1470,16 +1205,16 @@ Consolidate search, filters, view controls into a dense toolbar:
   }
 </script>
 
-<div class="toolbar">
+<div class="flex items-center gap-4 px-4 py-3 bg-secondary border-b border-default">
   <!-- Search -->
-  <div class="search-container">
+  <div class="relative flex-1 max-w-[400px]">
     <svg><!-- Search icon --></svg>
     <input
       type="text"
       placeholder="Search {viewState.activeTab}..."
       value={searchInput}
       oninput={handleSearch}
-      class="search-input"
+      class="w-full py-2 px-2 pl-8 border border-default rounded-md bg-primary text-primary"
     />
   </div>
 
@@ -1493,113 +1228,50 @@ Consolidate search, filters, view controls into a dense toolbar:
   <ViewModeToggle />
 
   <!-- Stats -->
-  <div class="stats">
+  <div class="ml-auto">
     <span class="text-sm text-secondary">
       {assetsState.assets.length} of {assetsState.totalCount} assets
     </span>
   </div>
 </div>
-
-<style>
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 0.75rem 1rem;
-    background: var(--color-bg-secondary);
-    border-bottom: 1px solid var(--color-border-default);
-  }
-
-  .search-container {
-    position: relative;
-    flex: 1;
-    max-width: 400px;
-  }
-
-  .search-input {
-    width: 100%;
-    padding: 0.5rem 0.5rem 0.5rem 2rem;
-    border: 1px solid var(--color-border-default);
-    border-radius: 6px;
-    background: var(--color-bg-primary);
-    color: var(--color-text-primary);
-  }
-
-  .stats {
-    margin-left: auto;
-  }
-</style>
 ```
 
 ### 6.2 Compact Table Layout
 
 **Update**: `src/lib/components/AssetList.svelte`
 
-Improve table density:
+Use inline Tailwind classes for table density:
 
-```css
-/* Add to component styles or app.css */
-.asset-table {
-  font-size: 0.875rem;
-  line-height: 1.25rem;
-}
-
-.asset-table thead th {
-  padding: 0.5rem 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  font-size: 0.75rem;
-  letter-spacing: 0.05em;
-}
-
-.asset-table tbody td {
-  padding: 0.5rem 0.75rem;
-  border-top: 1px solid var(--color-border-light);
-}
-
-.asset-table tbody tr:hover {
-  background: var(--color-bg-tertiary);
-}
+```svelte
+<table class="w-full text-sm leading-5">
+  <thead>
+    <tr>
+      <th class="px-3 py-2 font-semibold uppercase text-xs tracking-wide text-left">...</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="border-t border-light hover:bg-tertiary transition-colors">
+      <td class="px-3 py-2">...</td>
+    </tr>
+  </tbody>
+</table>
 ```
 
 ### 6.3 Responsive Sizing
 
-Add CSS variables for user-adjustable density:
+CSS variables can be added to `app.css` for theme-level adjustments (these are theme values, not component-specific):
 
 ```css
-/* app.css */
-:root {
+/* app.css - Optional density presets */
+@theme {
   --thumbnail-size-small: 128px;
   --thumbnail-size-medium: 192px;
   --thumbnail-size-large: 256px;
-  --grid-gap: 0.5rem;
-  --list-item-height: 64px;
 }
 
-/* Density classes */
-.density-compact {
-  --thumbnail-size-small: 96px;
-  --thumbnail-size-medium: 144px;
-  --thumbnail-size-large: 192px;
-  --grid-gap: 0.25rem;
-  --list-item-height: 48px;
-}
-
-.density-comfortable {
-  --thumbnail-size-small: 128px;
-  --thumbnail-size-medium: 192px;
-  --thumbnail-size-large: 256px;
-  --grid-gap: 0.5rem;
-  --list-item-height: 64px;
-}
-
-.density-spacious {
-  --thumbnail-size-small: 160px;
-  --thumbnail-size-medium: 240px;
-  --thumbnail-size-large: 320px;
-  --grid-gap: 1rem;
-  --list-item-height: 80px;
-}
+/* Note: Prefer using Tailwind's h-32, h-48, h-64 classes directly in components
+   rather than creating density utility classes. Only add utilities if the pattern
+   is genuinely reused across 3+ components. */
 ```
 
 ---
@@ -1644,9 +1316,9 @@ Add CSS variables for user-adjustable density:
   );
 </script>
 
-<div class="app-layout">
+<div class="flex flex-col h-screen bg-primary">
   <!-- Header -->
-  <header class="app-header">
+  <header class="px-6 py-4 border-b border-default bg-secondary">
     <h1 class="text-xl font-bold text-primary">Asset Manager</h1>
   </header>
 
@@ -1663,14 +1335,14 @@ Add CSS variables for user-adjustable density:
   <Toolbar />
 
   <!-- Main Content Area -->
-  <main class="content-area">
+  <main class="flex-1 overflow-y-auto relative">
     {#if assetsState.isLoading}
-      <div class="loading-state">
-        <div class="spinner"></div>
+      <div class="flex flex-col items-center justify-center h-full gap-4">
+        <div class="w-10 h-10 border-3 border-default border-t-accent rounded-full animate-spin"></div>
         <p>Loading assets...</p>
       </div>
     {:else if displayedAssets.length === 0}
-      <div class="empty-state">
+      <div class="flex flex-col items-center justify-center h-full gap-4">
         <svg><!-- Empty icon --></svg>
         <p>No {viewState.activeTab} found</p>
         <p class="text-sm text-secondary">Try adjusting your search or filters</p>
@@ -1698,50 +1370,6 @@ Add CSS variables for user-adjustable density:
     />
   {/if}
 </div>
-
-<style>
-  .app-layout {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    background: var(--color-bg-primary);
-  }
-
-  .app-header {
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--color-border-default);
-    background: var(--color-bg-secondary);
-  }
-
-  .content-area {
-    flex: 1;
-    overflow-y: auto;
-    position: relative;
-  }
-
-  .loading-state,
-  .empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    gap: 1rem;
-  }
-
-  .spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid var(--color-border-default);
-    border-top-color: var(--color-accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-</style>
 ```
 
 ---
