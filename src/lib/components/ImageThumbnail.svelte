@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { getDatabase } from '$lib/database/connection';
   import { getThumbnail } from '$lib/database/queries';
   import Spinner from '$lib/components/shared/Spinner.svelte';
@@ -34,7 +35,13 @@
       const thumbnailData = await getThumbnail(db, assetId);
 
       if (thumbnailData) {
-        const blob = new Blob([thumbnailData], { type: 'image/jpeg' });
+        // Thumbnail exists in database - use it
+        const blob = new Blob([thumbnailData], { type: 'image/webp' });
+        thumbnailUrl = URL.createObjectURL(blob);
+      } else {
+        // No thumbnail - load original file (works for both regular files and zip entries)
+        const bytes = await invoke<number[]>('get_asset_bytes', { assetId });
+        const blob = new Blob([new Uint8Array(bytes)]);
         thumbnailUrl = URL.createObjectURL(blob);
       }
     } catch (e) {

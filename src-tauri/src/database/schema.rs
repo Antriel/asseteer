@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS image_metadata (
     asset_id INTEGER PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
     width INTEGER NOT NULL,
     height INTEGER NOT NULL,
-    thumbnail_data BLOB NOT NULL,
+    thumbnail_data BLOB,
     processed_at INTEGER NOT NULL
 )
 "#;

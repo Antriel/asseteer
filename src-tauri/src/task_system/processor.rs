@@ -29,6 +29,7 @@ pub async fn process_asset(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
 /// Process an image asset (thumbnail + dimensions in one go)
 async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     let asset_id = asset.id;
+    let file_size = asset.file_size;
 
     // Clone asset data needed for the blocking task
     let asset_clone = Asset {
@@ -43,6 +44,9 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
         modified_at: asset.modified_at,
     };
 
+    // 20KB threshold for thumbnail generation
+    const THUMBNAIL_SIZE_THRESHOLD: i64 = 20 * 1024; // 20KB in bytes
+
     // Run CPU-intensive work in blocking thread
     let result = tokio::task::spawn_blocking(move || {
         // Load image bytes (from filesystem or zip)
@@ -54,8 +58,12 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
 
         let (width, height) = img.dimensions();
 
-        // Generate thumbnail (128px max dimension) as WebP with transparency support
-        let thumbnail_data = generate_thumbnail(&img, 128)?;
+        // Only generate thumbnail for images >= 20KB
+        let thumbnail_data = if file_size >= THUMBNAIL_SIZE_THRESHOLD {
+            Some(generate_thumbnail(&img, 128)?)
+        } else {
+            None
+        };
 
         Ok::<_, String>((thumbnail_data, width, height))
     })

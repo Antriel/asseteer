@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { getDatabase } from '$lib/database/connection';
   import { getThumbnail } from '$lib/database/queries';
 
@@ -24,16 +25,16 @@
       const db = await getDatabase();
       const uint8Array = await getThumbnail(db, assetId);
 
-      if (!uint8Array) {
-        error = 'Thumbnail not found';
-        return;
+      if (uint8Array) {
+        // Thumbnail exists in database - use it
+        const blob = new Blob([uint8Array], { type: 'image/webp' });
+        thumbnailUrl = URL.createObjectURL(blob);
+      } else {
+        // No thumbnail - load original file (works for both regular files and zip entries)
+        const bytes = await invoke<number[]>('get_asset_bytes', { assetId });
+        const blob = new Blob([new Uint8Array(bytes)]);
+        thumbnailUrl = URL.createObjectURL(blob);
       }
-
-      // Create blob from bytes (WebP format with alpha support)
-      const blob = new Blob([uint8Array], { type: 'image/webp' });
-
-      // Create object URL
-      thumbnailUrl = URL.createObjectURL(blob);
     } catch (err) {
       console.error('Failed to load thumbnail:', err);
       error = String(err);
