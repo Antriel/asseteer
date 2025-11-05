@@ -19,21 +19,10 @@
     ],
     "security": {
       "csp": null,
-      "capabilities": [
-        {
-          "identifier": "main-capability",
-          "description": "Main application capabilities",
-          "windows": ["main"],
-          "permissions": [
-            "dialog:allow-open",
-            "core:event:default",
-            "sql:allow-load",
-            "sql:allow-execute",
-            "sql:allow-select",
-            "sql:allow-close"
-          ]
-        }
-      ]
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
     }
   },
   "plugins": {
