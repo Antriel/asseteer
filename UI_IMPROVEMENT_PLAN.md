@@ -155,17 +155,48 @@ class AssetsState {
   // Update loadAssets to accept optional type filter
   async loadAssets(assetType?: 'image' | 'audio') {
     this.isLoading = true;
-    const db = await getDatabase();
+    try {
+      const db = await getDatabase();
 
-    this.assets = await searchAssets(
-      db,
-      this.searchText || undefined,
-      assetType, // Pass type filter to query
-      this.pageSize,
-      this.currentOffset
-    );
+      this.assets = await searchAssets(
+        db,
+        this.searchText || undefined,
+        assetType, // Pass type filter to query
+        this.pageSize,
+        this.currentOffset
+      );
+    } catch (error) {
+      console.error('Failed to load assets:', error);
+      this.assets = [];
+      // Optionally show toast notification
+      // showToast('Failed to load assets: ' + error, 'error');
+    } finally {
+      this.isLoading = false;
+    }
+  }
 
-    this.isLoading = false;
+  // Load assets with advanced filters (used by FilterState)
+  async loadAssetsWithFilters(assetType?: 'image' | 'audio', filters?: FilterQuery) {
+    this.isLoading = true;
+    try {
+      const db = await getDatabase();
+
+      this.assets = await searchAssetsWithFilters(
+        db,
+        this.searchText || undefined,
+        assetType,
+        filters,
+        this.pageSize,
+        this.currentOffset
+      );
+    } catch (error) {
+      console.error('Failed to load assets with filters:', error);
+      this.assets = [];
+      // Optionally show toast notification
+      // showToast('Failed to load assets: ' + error, 'error');
+    } finally {
+      this.isLoading = false;
+    }
   }
 
   // Update search to use current tab filter
@@ -269,7 +300,7 @@ export async function getAssetTypeCounts(
   let { assets }: Props = $props();
 
   // Computed grid column classes based on thumbnail size
-  const gridClasses = $derived(() => {
+  const gridClasses = $derived.by(() => {
     switch (viewState.thumbnailSize) {
       case 'small': return 'grid-cols-6 xl:grid-cols-8';
       case 'medium': return 'grid-cols-4 xl:grid-cols-6';
@@ -328,7 +359,7 @@ Replace existing `AssetThumbnail.svelte` for images with larger, responsive thum
   let isLoading = $state(true);
   let error = $state<string | null>(null);
 
-  const sizeClasses = $derived(() => {
+  const sizeClasses = $derived.by(() => {
     switch (size) {
       case 'small': return 'h-32';
       case 'medium': return 'h-48';
@@ -713,15 +744,22 @@ class ViewState {
   // Convert file path to Tauri-compatible URL
   const audioSrc = $derived(convertFileSrc(audioPath));
 
-  function togglePlay() {
+  async function togglePlay() {
     if (isPlaying) {
       audioElement.pause();
+      isPlaying = false;
       onPause?.();
     } else {
-      audioElement.play();
-      onPlay?.();
+      try {
+        await audioElement.play();
+        isPlaying = true;
+        onPlay?.();
+      } catch (error) {
+        console.error('Playback failed:', error);
+        // Optionally show error to user
+        // showToast('Audio playback failed: ' + error, 'error');
+      }
     }
-    isPlaying = !isPlaying;
   }
 
   function handleTimeUpdate() {
@@ -931,6 +969,10 @@ class ViewState {
 **New State**: `src/lib/state/filters.svelte.ts`
 
 ```typescript
+import { assetsState } from './assets.svelte';
+import { viewState } from './view.svelte';
+import type { FilterQuery } from '$lib/database/queries';
+
 class FilterState {
   // Common filters
   formats = $state({
@@ -990,8 +1032,9 @@ class FilterState {
   }
 
   apply() {
-    // Trigger asset reload with filters
-    assetsState.loadAssetsWithFilters(this.buildFilterQuery());
+    // Trigger asset reload with filters using current tab
+    const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
+    assetsState.loadAssetsWithFilters(assetType, this.buildFilterQuery());
   }
 
   reset() {
@@ -1010,8 +1053,9 @@ class FilterState {
     this.durationMax = null;
     this.sampleRate = '';
 
-    // Reload without filters
-    assetsState.loadAssets();
+    // Reload without filters using current tab
+    const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
+    assetsState.loadAssets(assetType);
   }
 
   buildFilterQuery(): FilterQuery {
