@@ -12,7 +12,7 @@
 
   let { asset, isActive = false, onPlay, onPause }: Props = $props();
 
-  let audioElement: HTMLAudioElement;
+  let audioElement = $state<HTMLAudioElement>();
   let isPlaying = $state(false);
   let currentTime = $state(0);
   let duration = $state(0);
@@ -85,6 +85,7 @@
   });
 
   async function togglePlay() {
+    if (!audioElement) return;
     if (isPlaying) {
       audioElement.pause();
       isPlaying = false;
@@ -101,10 +102,12 @@
   }
 
   function handleTimeUpdate() {
+    if (!audioElement) return;
     currentTime = audioElement.currentTime;
   }
 
   function handleLoadedMetadata() {
+    if (!audioElement) return;
     duration = audioElement.duration;
   }
 
@@ -114,6 +117,7 @@
   }
 
   function seek(e: MouseEvent) {
+    if (!audioElement) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const x = e.clientX - rect.left;
     const percentage = x / rect.width;
@@ -166,7 +170,13 @@
   </button>
 
   <!-- Progress bar -->
-  <div class="flex-1 cursor-pointer" onclick={seek}>
+  <div
+    class="flex-1 cursor-pointer"
+    role="button"
+    tabindex="0"
+    onclick={seek}
+    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') seek(e as any); }}
+  >
     <div class="h-1 bg-default rounded-sm overflow-hidden">
       <div
         class="h-full bg-accent transition-[width] duration-100"

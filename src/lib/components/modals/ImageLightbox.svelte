@@ -123,8 +123,21 @@
   });
 </script>
 
-<div class="fixed inset-0 bg-black/90 flex items-center justify-center z-[1000]" onclick={onClose}>
-  <div class="relative w-[90vw] h-[90vh] flex flex-col" onclick={(e) => e.stopPropagation()}>
+<div
+  class="fixed inset-0 bg-black/90 flex items-center justify-center z-[1000]"
+  role="button"
+  tabindex="0"
+  onclick={onClose}
+  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClose(); }}
+>
+  <div
+    class="relative w-[90vw] h-[90vh] flex flex-col"
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => e.stopPropagation()}
+  >
     <!-- Close button -->
     <button
       class="absolute top-4 right-4 w-12 h-12 bg-black/50 text-white border-none rounded-full text-3xl cursor-pointer z-10 hover:bg-black/70 transition-colors"
