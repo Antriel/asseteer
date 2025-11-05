@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import type { Asset } from '$lib/types';
   import { formatFileSize } from '$lib/state/assets.svelte';
   import AssetThumbnail from './AssetThumbnail.svelte';
@@ -10,6 +11,27 @@
   }
 
   let { assets, isLoading = false }: Props = $props();
+
+  let containerElement: HTMLDivElement;
+  let scrollTop = $state(0);
+  let containerHeight = $state(0);
+
+  // Row height: thumbnail (64px) + padding (16px top/bottom) = 80px + 1px border
+  const rowHeight = 81;
+  const bufferRows = 5; // Extra rows above and below for smooth scrolling
+
+  // Calculate virtual scrolling parameters
+  const totalRows = $derived(assets.length);
+  const totalHeight = $derived(totalRows * rowHeight);
+  const visibleRows = $derived(Math.ceil(containerHeight / rowHeight) + 1);
+
+  const startRow = $derived(Math.max(0, Math.floor(scrollTop / rowHeight) - bufferRows));
+  const endRow = $derived(Math.min(totalRows, startRow + visibleRows + bufferRows * 2));
+
+  const startIndex = $derived(startRow);
+  const endIndex = $derived(endRow);
+  const visibleAssets = $derived(assets.slice(startIndex, endIndex));
+  const offsetY = $derived(startRow * rowHeight);
 
   function formatDimensions(asset: Asset): string {
     if (asset.width && asset.height) {
@@ -28,9 +50,41 @@
     }
     return asset.path;
   }
+
+  function handleScroll(event: Event) {
+    const target = event.target as HTMLDivElement;
+    scrollTop = target.scrollTop;
+  }
+
+  function updateContainerHeight() {
+    if (containerElement) {
+      containerHeight = containerElement.clientHeight;
+    }
+  }
+
+  onMount(() => {
+    updateContainerHeight();
+
+    // Update on window resize
+    const resizeObserver = new ResizeObserver(() => {
+      updateContainerHeight();
+    });
+
+    if (containerElement) {
+      resizeObserver.observe(containerElement);
+    }
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  });
 </script>
 
-<div class="flex-1 flex flex-col overflow-auto">
+<div
+  bind:this={containerElement}
+  class="relative overflow-y-auto h-full"
+  onscroll={handleScroll}
+>
   {#if isLoading}
     <div class="flex items-center justify-center h-full">
       <p class="text-secondary">Loading...</p>
@@ -40,8 +94,8 @@
       <p class="text-secondary">No assets found.</p>
     </div>
   {:else}
-    <table class="w-full">
-      <thead class="sticky top-0 bg-secondary border-b border-default">
+    <table class="w-full" style="height: {totalHeight}px;">
+      <thead class="sticky top-0 bg-secondary border-b border-default z-10">
         <tr>
           <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Preview</th>
           <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Name</th>
@@ -51,8 +105,15 @@
         </tr>
       </thead>
       <tbody>
-        {#each assets as asset (asset.id)}
-          <tr class="border-b border-default hover:bg-secondary">
+        <!-- Spacer for items before visible range -->
+        {#if startIndex > 0}
+          <tr style="height: {offsetY}px;"><td colspan="5"></td></tr>
+        {/if}
+
+        <!-- Visible items -->
+        {#each visibleAssets as asset, idx (asset.id)}
+          {@const index = startIndex + idx}
+          <tr class="border-b border-default hover:bg-secondary" style="height: {rowHeight}px;">
             <td class="px-4 py-2">
               <AssetThumbnail assetId={asset.id} assetType={asset.asset_type} />
             </td>
@@ -75,6 +136,11 @@
             </td>
           </tr>
         {/each}
+
+        <!-- Spacer for items after visible range -->
+        {#if endIndex < assets.length}
+          <tr style="height: {totalHeight - offsetY - (visibleAssets.length * rowHeight)}px;"><td colspan="5"></td></tr>
+        {/if}
       </tbody>
     </table>
   {/if}
