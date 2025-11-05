@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { getDatabase } from '$lib/database/connection';
 import { getPendingAssetCounts } from '$lib/database/queries';
 import type { PendingCount, ProcessingCategory, CategoryProgress } from '$lib/types';
@@ -11,11 +12,11 @@ import type { PendingCount, ProcessingCategory, CategoryProgress } from '$lib/ty
  * and allows independent control of each category.
  */
 class ProcessingState {
-  // Per-category progress tracking
-  categoryProgress = $state(new Map<ProcessingCategory, CategoryProgress>());
+  // Per-category progress tracking (using SvelteMap for reactivity)
+  categoryProgress = $state(new SvelteMap<ProcessingCategory, CategoryProgress>());
 
-  // Categories enabled for processing
-  enabledCategories = $state(new Set<ProcessingCategory>(['image', 'audio']));
+  // Categories enabled for processing (using SvelteSet for reactivity)
+  enabledCategories = $state(new SvelteSet<ProcessingCategory>(['image', 'audio']));
 
   // Pending asset count (from database)
   pendingCount = $state<PendingCount>({ images: 0, audio: 0, total: 0 });
@@ -72,6 +73,13 @@ class ProcessingState {
    * Start processing for a specific category
    */
   async startProcessing(category: ProcessingCategory) {
+    // Check if category has pending items
+    const pendingCount = this.getPendingCountForCategory(category);
+    if (pendingCount === 0) {
+      console.log(`[Processing] Skipping ${category}: No pending assets`);
+      return; // Gracefully skip instead of throwing error
+    }
+
     try {
       await invoke('start_processing', { category });
       console.log(`[Processing] Started ${category}`);
@@ -88,12 +96,19 @@ class ProcessingState {
    * Start processing for all enabled categories
    */
   async startAllEnabled() {
-    const promises = Array.from(this.enabledCategories).map((category) =>
-      this.startProcessing(category).catch((error) => {
-        console.error(`Failed to start ${category}:`, error);
-        // Continue with other categories even if one fails
-      })
-    );
+    const promises = Array.from(this.enabledCategories)
+      .filter((category) => this.getPendingCountForCategory(category) > 0) // Only start categories with pending items
+      .map((category) =>
+        this.startProcessing(category).catch((error) => {
+          console.error(`Failed to start ${category}:`, error);
+          // Continue with other categories even if one fails
+        })
+      );
+
+    if (promises.length === 0) {
+      console.log('[Processing] No enabled categories have pending assets');
+      return;
+    }
 
     await Promise.all(promises);
   }
@@ -129,12 +144,16 @@ class ProcessingState {
   /**
    * Stop processing for a specific category
    */
-  async stop(category: ProcessingCategory) {
+  async stop(category: ProcessingCategory, skipPendingRefresh = false) {
     try {
       await invoke('stop_processing', { category });
       console.log(`[Processing] Stopped ${category}`);
       // State will be updated by backend or can be refreshed
       await this.refreshProgress(category);
+      // Refresh pending count since stopped assets remain unprocessed
+      if (!skipPendingRefresh) {
+        await this.refreshPendingCount();
+      }
     } catch (error) {
       console.error(`[Processing] Failed to stop ${category}:`, error);
       throw error;
@@ -169,9 +188,11 @@ class ProcessingState {
   async stopAll() {
     const promises = Array.from(this.categoryProgress.entries())
       .filter(([_, progress]) => progress.isRunning)
-      .map(([category]) => this.stop(category).catch(console.error));
+      .map(([category]) => this.stop(category, true).catch(console.error)); // Skip individual refreshes
 
     await Promise.all(promises);
+    // Refresh pending count once after all categories stopped
+    await this.refreshPendingCount();
   }
 
   /**
@@ -220,8 +241,16 @@ class ProcessingState {
     } else {
       this.enabledCategories.add(category);
     }
-    // Force reactivity update
-    this.enabledCategories = new Set(this.enabledCategories);
+    // SvelteSet handles reactivity automatically, no need to reassign
+  }
+
+  /**
+   * Get pending count for a specific category
+   */
+  getPendingCountForCategory(category: ProcessingCategory): number {
+    if (category === 'image') return this.pendingCount.images;
+    if (category === 'audio') return this.pendingCount.audio;
+    return 0;
   }
 
   /**
@@ -314,4 +343,36 @@ export function getStatusColor(state: ProcessingState): string {
   if (anyPaused) return 'text-orange-500';
   if (overall.failed > 0) return 'text-yellow-500';
   return 'text-blue-500';
+}
+
+/**
+ * Check if a category can be started
+ */
+export function canStartCategory(state: ProcessingState, category: ProcessingCategory): boolean {
+  const progress = state.categoryProgress.get(category);
+  const pendingCount = state.getPendingCountForCategory(category);
+
+  // Can start if: has pending items AND not currently running
+  return pendingCount > 0 && (!progress || !progress.isRunning);
+}
+
+/**
+ * Get status for a specific category
+ */
+export function getCategoryStatus(
+  state: ProcessingState,
+  category: ProcessingCategory
+): 'idle' | 'running' | 'paused' | 'completed' {
+  const progress = state.categoryProgress.get(category);
+
+  if (!progress || !progress.isRunning) {
+    // Check if completed (all processed)
+    if (progress && progress.total > 0 && progress.completed + progress.failed === progress.total) {
+      return 'completed';
+    }
+    return 'idle';
+  }
+
+  if (progress.isPaused) return 'paused';
+  return 'running';
 }

@@ -325,6 +325,7 @@ impl WorkQueue {
     pub async fn stop(&self, category: ProcessingCategory) {
         if let Some(state) = self.category_states.read().await.get(&category) {
             state.stop_signal.store(true, Ordering::SeqCst);
+            state.pause_signal.store(false, Ordering::SeqCst); // Clear pause state when stopping
             state.is_running.store(false, Ordering::SeqCst);
         }
 
@@ -334,12 +335,14 @@ impl WorkQueue {
             states.values().all(|s| !s.is_running.load(Ordering::SeqCst))
         };
 
-        // If all categories stopped, abort all workers
+        // If all categories stopped, abort all workers and clear handles
         if all_stopped {
-            let handles = self.worker_handles.write().await;
+            let mut handles = self.worker_handles.write().await;
             for handle in handles.iter() {
                 handle.abort();
             }
+            // Clear handles so new workers can be spawned on next start
+            handles.clear();
         }
     }
 

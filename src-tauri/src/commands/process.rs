@@ -123,6 +123,7 @@ pub async fn resume_processing(
 pub async fn stop_processing(
     category: String,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
     let cat = ProcessingCategory::from_str(&category)?;
 
@@ -132,6 +133,13 @@ pub async fn stop_processing(
 
     state.work_queue.stop(cat).await;
     println!("[ProcessingQueue] Processing stopped for category '{}'", category);
+
+    // Emit immediate progress update with stopped state
+    let progress = state.work_queue.get_progress(Some(cat)).await;
+    if let Some(prog) = progress.first() {
+        let event_name = format!("processing-progress-{}", category);
+        let _ = app.emit(&event_name, prog);
+    }
 
     Ok(())
 }
