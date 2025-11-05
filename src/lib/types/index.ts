@@ -91,3 +91,17 @@ export interface PendingCount {
   audio: number;
   total: number;
 }
+
+export type ProcessingCategory = 'image' | 'audio';
+
+export interface CategoryProgress {
+  category: string;
+  total: number;
+  completed: number;
+  failed: number;
+  is_paused: boolean;
+  is_running: boolean;
+  // Computed properties (added in frontend)
+  isPaused?: boolean;
+  isRunning?: boolean;
+}

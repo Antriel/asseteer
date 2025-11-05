@@ -1,4 +1,5 @@
-- [ ] Clean up CSS, make it prettier.
+- [x] Clean up CSS.
+- [ ] Make UI prettier.
 - [ ] Fix Vite errors.
 - [ ] Don't make thumbnails for images with smaller size. Make sure to properly handle displaying such asset directly instead of trying to load the thumbnail.
 - [ ] Table view should also load lightbox when clicking on thumbnail.
@@ -7,4 +8,5 @@
 - [ ] We could lazy-load thumbnails without the user processing all the files at once, by simply doing it when they are needed.
 - [ ] Processing should be split into categories, pre-process images, audio... later we will have advanced processing like CLIP.
 - [ ] Unzipping stuff in `get_asset_bytes` should probably be multithreaded, and properly async for the frontend, in the future. E.g. when loading cloud view of assets. Is there a faster zip crate maybe? Can unzipping itself be multithreaded?
+- [ ] Separate projects instead of single default one.
 

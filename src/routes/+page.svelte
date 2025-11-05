@@ -5,7 +5,7 @@
   import { viewState } from '$lib/state/view.svelte';
   import { getDatabase } from '$lib/database/connection';
   import { getAssetTypeCounts } from '$lib/database/queries';
-  import type { ProcessingProgress } from '$lib/state/tasks.svelte';
+  import type { CategoryProgress } from '$lib/types';
 
   import ScanControl from '$lib/components/ScanControl.svelte';
   import TaskProgress from '$lib/components/TaskProgress.svelte';
@@ -37,16 +37,19 @@
       await refreshAssetCounts();
     });
 
-    // Listen for processing completion to refresh counts
-    const unlistenComplete = await listen<ProcessingProgress>('processing-complete', async () => {
+    // Listen for category-specific processing completion to refresh counts
+    const handleProcessingComplete = async () => {
       console.log('[Main] Processing complete, refreshing asset counts and reloading assets');
       await refreshAssetCounts();
       // Reload current tab's assets
       const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
       await assetsState.loadAssets(currentType);
-    });
+    };
 
-    unlistenFns.push(unlistenScan, unlistenComplete);
+    const unlistenImageComplete = await listen<CategoryProgress>('processing-complete-image', handleProcessingComplete);
+    const unlistenAudioComplete = await listen<CategoryProgress>('processing-complete-audio', handleProcessingComplete);
+
+    unlistenFns.push(unlistenScan, unlistenImageComplete, unlistenAudioComplete);
   });
 
   onDestroy(() => {

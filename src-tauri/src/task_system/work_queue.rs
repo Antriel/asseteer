@@ -1,9 +1,10 @@
 /// Work queue with worker pool for processing assets
-use crate::models::Asset;
+use crate::models::{Asset, ProcessingCategory};
 use crate::task_system::processor::{process_asset, ProcessingResult};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use serde::Serialize;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -13,9 +14,10 @@ use tokio::time::{interval, Duration};
 const BATCH_UPDATE_INTERVAL_SEC: u64 = 2;
 const EMIT_PROGRESS_EVERY_N_ASSETS: usize = 10;
 
-/// Progress statistics for the processing job
+/// Progress statistics for a processing category
 #[derive(Debug, Clone, Serialize)]
 pub struct ProcessingProgress {
+    pub category: String,
     pub total: usize,
     pub completed: usize,
     pub failed: usize,
@@ -23,16 +25,35 @@ pub struct ProcessingProgress {
     pub is_running: bool,
 }
 
-/// Work queue manages asset processing with a worker pool
-pub struct WorkQueue {
-    work_tx: Sender<Asset>,
-    work_rx: Receiver<Asset>,
+/// Internal category state tracking
+#[derive(Debug, Clone)]
+struct CategoryState {
     pause_signal: Arc<AtomicBool>,
     stop_signal: Arc<AtomicBool>,
     total_assets: Arc<AtomicUsize>,
     completed_assets: Arc<AtomicUsize>,
     failed_assets: Arc<AtomicUsize>,
     is_running: Arc<AtomicBool>,
+}
+
+impl CategoryState {
+    fn new() -> Self {
+        Self {
+            pause_signal: Arc::new(AtomicBool::new(false)),
+            stop_signal: Arc::new(AtomicBool::new(false)),
+            total_assets: Arc::new(AtomicUsize::new(0)),
+            completed_assets: Arc::new(AtomicUsize::new(0)),
+            failed_assets: Arc::new(AtomicUsize::new(0)),
+            is_running: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+/// Work queue manages asset processing with a worker pool
+pub struct WorkQueue {
+    work_tx: Sender<Asset>,
+    work_rx: Receiver<Asset>,
+    category_states: Arc<RwLock<HashMap<ProcessingCategory, CategoryState>>>,
     worker_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
@@ -43,38 +64,43 @@ impl WorkQueue {
         Self {
             work_tx,
             work_rx,
-            pause_signal: Arc::new(AtomicBool::new(false)),
-            stop_signal: Arc::new(AtomicBool::new(false)),
-            total_assets: Arc::new(AtomicUsize::new(0)),
-            completed_assets: Arc::new(AtomicUsize::new(0)),
-            failed_assets: Arc::new(AtomicUsize::new(0)),
-            is_running: Arc::new(AtomicBool::new(false)),
+            category_states: Arc::new(RwLock::new(HashMap::new())),
             worker_handles: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
-    /// Start processing assets from the work queue
+    /// Get or create category state
+    async fn ensure_category_state(&self, category: ProcessingCategory) -> CategoryState {
+        let mut states = self.category_states.write().await;
+        states.entry(category).or_insert_with(CategoryState::new).clone()
+    }
+
+    /// Start processing assets from the work queue for a specific category
     pub async fn start(
         &self,
+        category: ProcessingCategory,
         assets: Vec<Asset>,
         db: SqlitePool,
         app_handle: AppHandle,
     ) -> Result<(), String> {
-        // Check if already running
-        if self
+        // Get or create category state
+        let state = self.ensure_category_state(category).await;
+
+        // Check if this category is already running
+        if state
             .is_running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
-            return Err("Processing is already running".to_string());
+            return Err(format!("Processing for category '{}' is already running", category.as_str()));
         }
 
-        // Reset signals and counters
-        self.pause_signal.store(false, Ordering::SeqCst);
-        self.stop_signal.store(false, Ordering::SeqCst);
-        self.total_assets.store(assets.len(), Ordering::SeqCst);
-        self.completed_assets.store(0, Ordering::SeqCst);
-        self.failed_assets.store(0, Ordering::SeqCst);
+        // Reset signals and counters for this category
+        state.pause_signal.store(false, Ordering::SeqCst);
+        state.stop_signal.store(false, Ordering::SeqCst);
+        state.total_assets.store(assets.len(), Ordering::SeqCst);
+        state.completed_assets.store(0, Ordering::SeqCst);
+        state.failed_assets.store(0, Ordering::SeqCst);
 
         // Queue all assets
         for asset in assets {
@@ -83,33 +109,37 @@ impl WorkQueue {
                 .map_err(|e| format!("Failed to queue asset: {}", e))?;
         }
 
-        // Calculate number of workers based on CPU cores (leave 1 core free for system/UI)
-        let num_workers = std::cmp::max(2, num_cpus::get().saturating_sub(1));
-        println!("[WorkQueue] Starting {} workers (detected {} CPUs)", num_workers, num_cpus::get());
+        // Check if we need to spawn workers (first category being started)
+        let handles = self.worker_handles.read().await;
+        let needs_workers = handles.is_empty();
+        drop(handles);
 
-        // Spawn workers
-        let mut handles = Vec::new();
-        for worker_id in 0..num_workers {
-            let handle = self.spawn_worker(worker_id, db.clone(), app_handle.clone());
-            handles.push(handle);
+        if needs_workers {
+            // Calculate number of workers based on CPU cores (leave 1 core free for system/UI)
+            let num_workers = std::cmp::max(2, num_cpus::get().saturating_sub(1));
+            println!("[WorkQueue] Starting {} workers (detected {} CPUs)", num_workers, num_cpus::get());
+
+            // Spawn workers
+            let mut handles = Vec::new();
+            for worker_id in 0..num_workers {
+                let handle = self.spawn_worker(worker_id, db.clone(), app_handle.clone()).await;
+                handles.push(handle);
+            }
+
+            // Store worker handles
+            *self.worker_handles.write().await = handles;
         }
 
-        // Store worker handles
-        *self.worker_handles.write().await = handles;
-
-        // Spawn progress emitter task
-        self.spawn_progress_emitter(app_handle.clone());
+        // Spawn progress emitter task for this category
+        self.spawn_progress_emitter(category, app_handle.clone()).await;
 
         Ok(())
     }
 
     /// Spawn a worker task that processes assets from the queue
-    fn spawn_worker(&self, worker_id: usize, db: SqlitePool, _app_handle: AppHandle) -> tokio::task::JoinHandle<()> {
+    async fn spawn_worker(&self, worker_id: usize, db: SqlitePool, _app_handle: AppHandle) -> tokio::task::JoinHandle<()> {
         let work_rx = self.work_rx.clone();
-        let pause_signal = self.pause_signal.clone();
-        let stop_signal = self.stop_signal.clone();
-        let completed_assets = self.completed_assets.clone();
-        let failed_assets = self.failed_assets.clone();
+        let category_states = self.category_states.clone();
 
         tokio::spawn(async move {
             println!("[Worker {}] Started", worker_id);
@@ -118,29 +148,58 @@ impl WorkQueue {
             let mut results_buffer: Vec<ProcessingResult> = Vec::with_capacity(20);
 
             loop {
-                // Check stop signal
-                if stop_signal.load(Ordering::SeqCst) {
-                    println!("[Worker {}] Stopped", worker_id);
-                    break;
-                }
-
-                // Check pause signal
-                if pause_signal.load(Ordering::SeqCst) {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    continue;
-                }
-
                 // Try to get work from queue (non-blocking)
                 match work_rx.try_recv() {
                     Ok(asset) => {
+                        // Determine asset category
+                        let category = match asset.asset_type.as_str() {
+                            "image" => ProcessingCategory::Image,
+                            "audio" => ProcessingCategory::Audio,
+                            _ => {
+                                println!("[Worker {}] Unknown asset type: {}", worker_id, asset.asset_type);
+                                continue;
+                            }
+                        };
+
+                        // Get category state
+                        let state = {
+                            let states = category_states.read().await;
+                            match states.get(&category) {
+                                Some(s) => s.clone(),
+                                None => {
+                                    // Category not initialized, skip this asset
+                                    println!("[Worker {}] Category {:?} not initialized", worker_id, category);
+                                    continue;
+                                }
+                            }
+                        };
+
+                        // Check stop signal for this category
+                        if state.stop_signal.load(Ordering::SeqCst) {
+                            // Category stopped, skip this asset
+                            println!("[Worker {}] Skipping asset (category {:?} stopped)", worker_id, category);
+                            continue;
+                        }
+
+                        // Wait while paused
+                        while state.pause_signal.load(Ordering::SeqCst) && !state.stop_signal.load(Ordering::SeqCst) {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+
+                        // Check again if stopped after pause
+                        if state.stop_signal.load(Ordering::SeqCst) {
+                            println!("[Worker {}] Skipping asset (category {:?} stopped after pause)", worker_id, category);
+                            continue;
+                        }
+
                         // Process the asset
                         let result = process_asset(&asset, &db).await;
 
-                        // Update counters
+                        // Update category-specific counters
                         if result.success {
-                            completed_assets.fetch_add(1, Ordering::SeqCst);
+                            state.completed_assets.fetch_add(1, Ordering::SeqCst);
                         } else {
-                            failed_assets.fetch_add(1, Ordering::SeqCst);
+                            state.failed_assets.fetch_add(1, Ordering::SeqCst);
                             println!(
                                 "[Worker {}] Failed to process asset {}: {:?}",
                                 worker_id, asset.filename, result.error
@@ -149,21 +208,26 @@ impl WorkQueue {
 
                         results_buffer.push(result);
 
-                        // Emit progress event every N assets processed
+                        // Clear buffer periodically
                         if results_buffer.len() >= EMIT_PROGRESS_EVERY_N_ASSETS {
                             results_buffer.clear();
                         }
                     }
                     Err(crossbeam::channel::TryRecvError::Empty) => {
-                        // No work available, check if we're done
+                        // No work available, wait a bit
                         tokio::time::sleep(Duration::from_millis(50)).await;
 
-                        // If queue is empty and we're not paused, we might be done
-                        if work_rx.is_empty() && !pause_signal.load(Ordering::SeqCst) {
+                        // Check if all categories are stopped
+                        let all_stopped = {
+                            let states = category_states.read().await;
+                            states.values().all(|s| !s.is_running.load(Ordering::SeqCst))
+                        };
+
+                        if all_stopped && work_rx.is_empty() {
                             // Give a small grace period for more work to arrive
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             if work_rx.is_empty() {
-                                println!("[Worker {}] No more work, exiting", worker_id);
+                                println!("[Worker {}] No more work and all categories stopped, exiting", worker_id);
                                 break;
                             }
                         }
@@ -175,21 +239,14 @@ impl WorkQueue {
                 }
             }
 
-            // Check if this is the last worker to exit
-            // We'll mark as not running when all workers are joined
             println!("[Worker {}] Finished", worker_id);
         })
     }
 
-    /// Spawn a task that periodically emits progress events
-    fn spawn_progress_emitter(&self, app_handle: AppHandle) {
-        let total_assets = self.total_assets.clone();
-        let completed_assets = self.completed_assets.clone();
-        let failed_assets = self.failed_assets.clone();
-        let pause_signal = self.pause_signal.clone();
-        let stop_signal = self.stop_signal.clone();
-        let is_running = self.is_running.clone();
-        let worker_handles = self.worker_handles.clone();
+    /// Spawn a task that periodically emits progress events for a category
+    async fn spawn_progress_emitter(&self, category: ProcessingCategory, app_handle: AppHandle) {
+        let state = self.ensure_category_state(category).await;
+        let category_str = category.as_str().to_string();
 
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(BATCH_UPDATE_INTERVAL_SEC));
@@ -198,57 +255,51 @@ impl WorkQueue {
                 ticker.tick().await;
 
                 // Check if we should stop
-                if stop_signal.load(Ordering::SeqCst) {
+                if state.stop_signal.load(Ordering::SeqCst) {
                     break;
                 }
 
-                // Skip emitting progress if paused (workers aren't doing anything)
-                if pause_signal.load(Ordering::SeqCst) {
-                    continue;
-                }
+                // Get current progress
+                let total = state.total_assets.load(Ordering::SeqCst);
+                let completed = state.completed_assets.load(Ordering::SeqCst);
+                let failed = state.failed_assets.load(Ordering::SeqCst);
+                let is_paused = state.pause_signal.load(Ordering::SeqCst);
+                let is_running = state.is_running.load(Ordering::SeqCst);
 
-                // Emit progress event
+                // Emit progress event with category-specific event name
                 let progress = ProcessingProgress {
-                    total: total_assets.load(Ordering::SeqCst),
-                    completed: completed_assets.load(Ordering::SeqCst),
-                    failed: failed_assets.load(Ordering::SeqCst),
-                    is_paused: pause_signal.load(Ordering::SeqCst),
-                    is_running: is_running.load(Ordering::SeqCst),
+                    category: category_str.clone(),
+                    total,
+                    completed,
+                    failed,
+                    is_paused,
+                    is_running,
                 };
 
-                let _ = app_handle.emit("processing-progress", progress.clone());
+                let event_name = format!("processing-progress-{}", category_str);
+                let _ = app_handle.emit(&event_name, progress.clone());
 
-                // Check if all work is done
-                if progress.completed + progress.failed >= progress.total && progress.total > 0 {
+                // Check if all work is done for this category
+                if completed + failed >= total && total > 0 {
                     println!(
-                        "[Progress Emitter] All work done: {}/{} assets processed",
-                        progress.completed, progress.total
+                        "[Progress Emitter] Category '{}' complete: {}/{} assets processed",
+                        category_str, completed, total
                     );
 
-                    // Wait for all workers to finish
-                    let all_finished = {
-                        let handles = worker_handles.read().await;
-                        handles.iter().all(|handle| handle.is_finished())
-                    };
-
-                    if !all_finished {
-                        // Still have active workers, wait and continue checking
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                        continue;
-                    }
-
-                    // All workers finished, mark as not running
-                    is_running.store(false, Ordering::SeqCst);
+                    // Mark as not running
+                    state.is_running.store(false, Ordering::SeqCst);
 
                     // Emit final progress
                     let final_progress = ProcessingProgress {
-                        total: total_assets.load(Ordering::SeqCst),
-                        completed: completed_assets.load(Ordering::SeqCst),
-                        failed: failed_assets.load(Ordering::SeqCst),
+                        category: category_str.clone(),
+                        total,
+                        completed,
+                        failed,
                         is_paused: false,
                         is_running: false,
                     };
-                    let _ = app_handle.emit("processing-complete", final_progress);
+                    let complete_event_name = format!("processing-complete-{}", category_str);
+                    let _ = app_handle.emit(&complete_event_name, final_progress);
 
                     break;
                 }
@@ -256,46 +307,96 @@ impl WorkQueue {
         });
     }
 
-    /// Pause processing (workers will stop between assets)
-    pub fn pause(&self) {
-        self.pause_signal.store(true, Ordering::SeqCst);
-    }
-
-    /// Resume processing
-    pub fn resume(&self) {
-        self.pause_signal.store(false, Ordering::SeqCst);
-    }
-
-    /// Stop processing completely
-    pub async fn stop(&self) {
-        self.stop_signal.store(true, Ordering::SeqCst);
-        self.is_running.store(false, Ordering::SeqCst);
-
-        // Wait for all workers to finish
-        let handles = self.worker_handles.write().await;
-        for handle in handles.iter() {
-            handle.abort();
+    /// Pause processing for a specific category
+    pub async fn pause(&self, category: ProcessingCategory) {
+        if let Some(state) = self.category_states.read().await.get(&category) {
+            state.pause_signal.store(true, Ordering::SeqCst);
         }
     }
 
-    /// Get current processing progress
-    pub fn get_progress(&self) -> ProcessingProgress {
-        ProcessingProgress {
-            total: self.total_assets.load(Ordering::SeqCst),
-            completed: self.completed_assets.load(Ordering::SeqCst),
-            failed: self.failed_assets.load(Ordering::SeqCst),
-            is_paused: self.pause_signal.load(Ordering::SeqCst),
-            is_running: self.is_running.load(Ordering::SeqCst),
+    /// Resume processing for a specific category
+    pub async fn resume(&self, category: ProcessingCategory) {
+        if let Some(state) = self.category_states.read().await.get(&category) {
+            state.pause_signal.store(false, Ordering::SeqCst);
         }
     }
 
-    /// Check if processing is currently running
-    pub fn is_running(&self) -> bool {
-        self.is_running.load(Ordering::SeqCst)
+    /// Stop processing for a specific category
+    pub async fn stop(&self, category: ProcessingCategory) {
+        if let Some(state) = self.category_states.read().await.get(&category) {
+            state.stop_signal.store(true, Ordering::SeqCst);
+            state.is_running.store(false, Ordering::SeqCst);
+        }
+
+        // Check if all categories are stopped
+        let all_stopped = {
+            let states = self.category_states.read().await;
+            states.values().all(|s| !s.is_running.load(Ordering::SeqCst))
+        };
+
+        // If all categories stopped, abort all workers
+        if all_stopped {
+            let handles = self.worker_handles.write().await;
+            for handle in handles.iter() {
+                handle.abort();
+            }
+        }
     }
 
-    /// Check if processing is paused
-    pub fn is_paused(&self) -> bool {
-        self.pause_signal.load(Ordering::SeqCst)
+    /// Get processing progress for a specific category or all categories
+    pub async fn get_progress(&self, category: Option<ProcessingCategory>) -> Vec<ProcessingProgress> {
+        let states = self.category_states.read().await;
+
+        match category {
+            Some(cat) => {
+                // Return progress for specific category
+                if let Some(state) = states.get(&cat) {
+                    vec![ProcessingProgress {
+                        category: cat.as_str().to_string(),
+                        total: state.total_assets.load(Ordering::SeqCst),
+                        completed: state.completed_assets.load(Ordering::SeqCst),
+                        failed: state.failed_assets.load(Ordering::SeqCst),
+                        is_paused: state.pause_signal.load(Ordering::SeqCst),
+                        is_running: state.is_running.load(Ordering::SeqCst),
+                    }]
+                } else {
+                    vec![]
+                }
+            }
+            None => {
+                // Return progress for all categories
+                states
+                    .iter()
+                    .map(|(cat, state)| ProcessingProgress {
+                        category: cat.as_str().to_string(),
+                        total: state.total_assets.load(Ordering::SeqCst),
+                        completed: state.completed_assets.load(Ordering::SeqCst),
+                        failed: state.failed_assets.load(Ordering::SeqCst),
+                        is_paused: state.pause_signal.load(Ordering::SeqCst),
+                        is_running: state.is_running.load(Ordering::SeqCst),
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// Check if a specific category is currently running
+    pub async fn is_running(&self, category: ProcessingCategory) -> bool {
+        self.category_states
+            .read()
+            .await
+            .get(&category)
+            .map(|s| s.is_running.load(Ordering::SeqCst))
+            .unwrap_or(false)
+    }
+
+    /// Check if a specific category is paused
+    pub async fn is_paused(&self, category: ProcessingCategory) -> bool {
+        self.category_states
+            .read()
+            .await
+            .get(&category)
+            .map(|s| s.pause_signal.load(Ordering::SeqCst))
+            .unwrap_or(false)
     }
 }

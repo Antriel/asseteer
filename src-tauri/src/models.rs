@@ -70,6 +70,36 @@ impl AssetType {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ProcessingCategory {
+    Image,
+    Audio,
+}
+
+impl ProcessingCategory {
+    pub fn as_str(&self) -> &str {
+        match self {
+            ProcessingCategory::Image => "image",
+            ProcessingCategory::Audio => "audio",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        match s.to_lowercase().as_str() {
+            "image" => Ok(ProcessingCategory::Image),
+            "audio" => Ok(ProcessingCategory::Audio),
+            _ => Err(format!("Invalid processing category: {}", s)),
+        }
+    }
+
+    pub fn to_asset_type(&self) -> AssetType {
+        match self {
+            ProcessingCategory::Image => AssetType::Image,
+            ProcessingCategory::Audio => AssetType::Audio,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingCount {
     pub images: usize,
