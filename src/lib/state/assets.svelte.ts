@@ -8,11 +8,10 @@ class AssetsState {
   isLoading = $state(false);
   totalCount = $state(0);
   searchText = $state('');
-  currentOffset = $state(0);
-  pageSize = 100;
 
   /**
    * Load assets from the database with optional type filter
+   * Loads ALL assets since we use virtualization for efficient rendering
    */
   async loadAssets(assetType?: 'image' | 'audio') {
     this.isLoading = true;
@@ -20,13 +19,14 @@ class AssetsState {
     try {
       const db = await getDatabase();
 
-      // Search assets with current parameters
+      // Load all assets (no pagination needed with virtualization)
+      // Using a high limit to effectively load all assets
       const result = await dbSearchAssets(
         db,
         this.searchText || undefined,
         assetType,
-        this.pageSize,
-        this.currentOffset
+        999999, // High limit to load all assets
+        0       // No offset
       );
       this.assets = result;
 
@@ -45,7 +45,6 @@ class AssetsState {
    */
   searchAssets(text: string, assetType?: 'image' | 'audio') {
     this.searchText = text;
-    this.currentOffset = 0;
     this.loadAssets(assetType);
   }
 
