@@ -10,4 +10,5 @@
 - [x] Processing should be split into categories, pre-process images, audio... later we will have advanced processing like CLIP.
 - [ ] Unzipping stuff in `get_asset_bytes` should probably be multithreaded, and properly async for the frontend, in the future. E.g. when loading cloud view of assets. Is there a faster zip crate maybe? Can unzipping itself be multithreaded?
 - [ ] Separate projects instead of single default one.
+- [ ] Investigate DB size.
 
