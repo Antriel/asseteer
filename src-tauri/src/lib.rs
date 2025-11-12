@@ -4,6 +4,7 @@ mod commands;
 mod task_system;
 mod utils;
 mod audio;
+pub mod clap_model;
 
 use database::{initialize_db, close_db, DbPool};
 use task_system::WorkQueue;

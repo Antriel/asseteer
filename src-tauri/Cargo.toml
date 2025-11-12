@@ -53,8 +53,14 @@ num-complex = "0.4"  # Complex numbers for FFT
 ort = { version = "2.0.0-rc.10", features = ["cuda", "load-dynamic"] }
 tokenizers = "0.15"  # CLIP BPE tokenizer
 
+# Candle for pure Rust ML inference
+candle-core = "0.8"
+candle-nn = "0.8"
+hf-hub = "0.3"
+
 # Utilities
 base64 = "0.22"
 chrono = "0.4"
 num_cpus = "1"
+anyhow = "1.0"
 
