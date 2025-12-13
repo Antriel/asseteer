@@ -1,0 +1,16 @@
+# CLAP Python Prototype Dependencies
+# For testing laion/clap-htsat-fused model
+
+transformers>=4.30.0
+torch>=2.0.0
+librosa>=0.10.0
+numpy>=1.24.0
+soundfile>=0.12.0
+
+# For HTTP server
+flask>=3.0.0
+requests>=2.31.0  # For testing server
+
+# For ONNX export
+onnx>=1.14.0
+onnxscript>=0.1.0
