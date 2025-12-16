@@ -53,13 +53,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS assets_fts USING fts5(
 pub const CREATE_FTS_TRIGGERS: &str = r#"
 CREATE TRIGGER IF NOT EXISTS assets_ai AFTER INSERT ON assets BEGIN
     INSERT INTO assets_fts(rowid, filename, path_segments)
-    VALUES (new.id, new.filename, REPLACE(new.path, '/', ' '));
+    VALUES (new.id, new.filename, REPLACE(REPLACE(new.path, '/', ' '), '\', ' '));
 END;
 
 CREATE TRIGGER IF NOT EXISTS assets_au AFTER UPDATE ON assets BEGIN
     DELETE FROM assets_fts WHERE rowid = old.id;
     INSERT INTO assets_fts(rowid, filename, path_segments)
-    VALUES (new.id, new.filename, REPLACE(new.path, '/', ' '));
+    VALUES (new.id, new.filename, REPLACE(REPLACE(new.path, '/', ' '), '\', ' '));
 END;
 
 CREATE TRIGGER IF NOT EXISTS assets_ad AFTER DELETE ON assets BEGIN
