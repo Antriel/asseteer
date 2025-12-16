@@ -19,6 +19,7 @@ pub const CREATE_ASSETS_INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(asset_type);
 CREATE INDEX IF NOT EXISTS idx_assets_path ON assets(path);
 CREATE INDEX IF NOT EXISTS idx_assets_modified ON assets(modified_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_unique ON assets(path, COALESCE(zip_entry, ''));
 "#;
 
 pub const CREATE_IMAGE_METADATA_TABLE: &str = r#"

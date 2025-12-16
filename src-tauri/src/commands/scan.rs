@@ -275,7 +275,7 @@ async fn insert_pending_assets(
         let path_str = asset.path.to_string_lossy().to_string();
 
         let _result = sqlx::query(
-            "INSERT INTO assets (
+            "INSERT OR IGNORE INTO assets (
                 filename, path, zip_entry, asset_type, format, file_size,
                 created_at, modified_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
