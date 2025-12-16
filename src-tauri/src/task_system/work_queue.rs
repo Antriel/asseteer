@@ -324,14 +324,13 @@ impl WorkQueue {
             states.values().all(|s| !s.is_running.load(Ordering::SeqCst))
         };
 
-        // If all categories stopped, abort all workers and clear handles
+        // If all categories stopped, wait for workers to finish gracefully
         if all_stopped {
             let mut handles = self.worker_handles.write().await;
-            for handle in handles.iter() {
-                handle.abort();
+            // Workers check stop_signal and exit on their own - just wait for them
+            for handle in handles.drain(..) {
+                let _ = handle.await;
             }
-            // Clear handles so new workers can be spawned on next start
-            handles.clear();
         }
     }
 
