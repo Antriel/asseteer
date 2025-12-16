@@ -31,18 +31,7 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     let asset_id = asset.id;
     let file_size = asset.file_size;
 
-    // Clone asset data needed for the blocking task
-    let asset_clone = Asset {
-        id: asset.id,
-        filename: asset.filename.clone(),
-        path: asset.path.clone(),
-        zip_entry: asset.zip_entry.clone(),
-        asset_type: asset.asset_type.clone(),
-        format: asset.format.clone(),
-        file_size: asset.file_size,
-        created_at: asset.created_at,
-        modified_at: asset.modified_at,
-    };
+    let asset_clone = asset.clone();
 
     // 20KB threshold for thumbnail generation
     const THUMBNAIL_SIZE_THRESHOLD: i64 = 20 * 1024; // 20KB in bytes
@@ -123,18 +112,7 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
 
     let asset_id = asset.id;
 
-    // Clone asset data needed for the blocking task
-    let asset_clone = Asset {
-        id: asset.id,
-        filename: asset.filename.clone(),
-        path: asset.path.clone(),
-        zip_entry: asset.zip_entry.clone(),
-        asset_type: asset.asset_type.clone(),
-        format: asset.format.clone(),
-        file_size: asset.file_size,
-        created_at: asset.created_at,
-        modified_at: asset.modified_at,
-    };
+    let asset_clone = asset.clone();
 
     // Run CPU-intensive work in blocking thread
     let result = tokio::task::spawn_blocking(move || {
