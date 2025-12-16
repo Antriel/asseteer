@@ -33,29 +33,19 @@ class ProcessingState {
 
     const categories: ProcessingCategory[] = ['image', 'audio'];
 
-    for (const category of categories) {
-      // Listen for category-specific progress updates
-      const unlistenProgress = await listen<CategoryProgress>(
-        `processing-progress-${category}`,
-        (event) => {
-          console.log(`[Processing] ${category} progress:`, event.payload);
-          this.updateCategoryProgress(category, event.payload);
-        }
-      );
+    const listenerPromises = categories.flatMap((category) => [
+      listen<CategoryProgress>(`processing-progress-${category}`, (event) => {
+        console.log(`[Processing] ${category} progress:`, event.payload);
+        this.updateCategoryProgress(category, event.payload);
+      }),
+      listen<CategoryProgress>(`processing-complete-${category}`, async (event) => {
+        console.log(`[Processing] ${category} complete:`, event.payload);
+        this.updateCategoryProgress(category, event.payload);
+        await this.refreshPendingCount();
+      }),
+    ]);
 
-      // Listen for category-specific completion
-      const unlistenComplete = await listen<CategoryProgress>(
-        `processing-complete-${category}`,
-        async (event) => {
-          console.log(`[Processing] ${category} complete:`, event.payload);
-          this.updateCategoryProgress(category, event.payload);
-          // Refresh pending count after processing completes
-          await this.refreshPendingCount();
-        }
-      );
-
-      this.unlistenFns.push(unlistenProgress, unlistenComplete);
-    }
+    this.unlistenFns = await Promise.all(listenerPromises);
   }
 
   /**
