@@ -11,83 +11,48 @@ export async function searchAssets(
 	limit: number = 50,
 	offset: number = 0
 ): Promise<Asset[]> {
-	// Prepare search text for FTS5 (add * wildcard)
-	const ftsQuery = searchText?.trim() ? `${searchText.trim()}*` : null;
+	const baseSelect = `
+		SELECT
+			assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
+			assets.format, assets.file_size, assets.created_at, assets.modified_at,
+			image_metadata.width, image_metadata.height,
+			audio_metadata.duration_ms, audio_metadata.sample_rate, audio_metadata.channels
+		FROM assets
+	`;
 
-	let query: string;
-	let params: unknown[];
+	const joins = `
+		LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
+		LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
+	`;
+
+	const ftsQuery = searchText?.trim() ? `${searchText.trim()}*` : null;
+	const conditions: string[] = [];
+	const params: unknown[] = [];
 
 	if (ftsQuery) {
-		// Full-text search with FTS5
-		if (assetType) {
-			query = `
-				SELECT
-					assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
-					assets.format, assets.file_size, assets.created_at, assets.modified_at,
-					image_metadata.width, image_metadata.height,
-					audio_metadata.duration_ms, audio_metadata.sample_rate, audio_metadata.channels
-				FROM assets
-				INNER JOIN assets_fts ON assets.id = assets_fts.rowid
-				LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
-				LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
-				WHERE assets_fts MATCH ? AND assets.asset_type = ?
-				ORDER BY assets.filename COLLATE NOCASE ASC
-				LIMIT ? OFFSET ?
-			`;
-			params = [ftsQuery, assetType, limit, offset];
-		} else {
-			query = `
-				SELECT
-					assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
-					assets.format, assets.file_size, assets.created_at, assets.modified_at,
-					image_metadata.width, image_metadata.height,
-					audio_metadata.duration_ms, audio_metadata.sample_rate, audio_metadata.channels
-				FROM assets
-				INNER JOIN assets_fts ON assets.id = assets_fts.rowid
-				LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
-				LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
-				WHERE assets_fts MATCH ?
-				ORDER BY assets.filename COLLATE NOCASE ASC
-				LIMIT ? OFFSET ?
-			`;
-			params = [ftsQuery, limit, offset];
-		}
-	} else {
-		// Browse all assets (no FTS)
-		if (assetType) {
-			query = `
-				SELECT
-					assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
-					assets.format, assets.file_size, assets.created_at, assets.modified_at,
-					image_metadata.width, image_metadata.height,
-					audio_metadata.duration_ms, audio_metadata.sample_rate, audio_metadata.channels
-				FROM assets
-				LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
-				LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
-				WHERE assets.asset_type = ?
-				ORDER BY assets.filename COLLATE NOCASE ASC
-				LIMIT ? OFFSET ?
-			`;
-			params = [assetType, limit, offset];
-		} else {
-			query = `
-				SELECT
-					assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
-					assets.format, assets.file_size, assets.created_at, assets.modified_at,
-					image_metadata.width, image_metadata.height,
-					audio_metadata.duration_ms, audio_metadata.sample_rate, audio_metadata.channels
-				FROM assets
-				LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
-				LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
-				ORDER BY assets.filename COLLATE NOCASE ASC
-				LIMIT ? OFFSET ?
-			`;
-			params = [limit, offset];
-		}
+		conditions.push('assets_fts MATCH ?');
+		params.push(ftsQuery);
 	}
 
-	const results = await db.select<Asset[]>(query, params);
-	return results;
+	if (assetType) {
+		conditions.push('assets.asset_type = ?');
+		params.push(assetType);
+	}
+
+	const ftsJoin = ftsQuery ? 'INNER JOIN assets_fts ON assets.id = assets_fts.rowid' : '';
+	const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+	const query = `
+		${baseSelect}
+		${ftsJoin}
+		${joins}
+		${whereClause}
+		ORDER BY assets.filename COLLATE NOCASE ASC
+		LIMIT ? OFFSET ?
+	`;
+
+	params.push(limit, offset);
+	return db.select<Asset[]>(query, params);
 }
 
 /**
