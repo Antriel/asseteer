@@ -1,6 +1,6 @@
 /// Work queue with worker pool for processing assets
 use crate::models::{Asset, ProcessingCategory};
-use crate::task_system::processor::{process_asset, ProcessingResult};
+use crate::task_system::processor::process_asset;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -12,7 +12,6 @@ use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 
 const BATCH_UPDATE_INTERVAL_SEC: u64 = 2;
-const EMIT_PROGRESS_EVERY_N_ASSETS: usize = 10;
 
 /// Progress statistics for a processing category
 #[derive(Debug, Clone, Serialize)]
@@ -144,9 +143,6 @@ impl WorkQueue {
         tokio::spawn(async move {
             println!("[Worker {}] Started", worker_id);
 
-            // Buffer for batch results (for potential batch DB updates in future)
-            let mut results_buffer: Vec<ProcessingResult> = Vec::with_capacity(20);
-
             loop {
                 // Try to get work from queue (non-blocking)
                 match work_rx.try_recv() {
@@ -204,13 +200,6 @@ impl WorkQueue {
                                 "[Worker {}] Failed to process asset {}: {:?}",
                                 worker_id, asset.filename, result.error
                             );
-                        }
-
-                        results_buffer.push(result);
-
-                        // Clear buffer periodically
-                        if results_buffer.len() >= EMIT_PROGRESS_EVERY_N_ASSETS {
-                            results_buffer.clear();
                         }
                     }
                     Err(crossbeam::channel::TryRecvError::Empty) => {
