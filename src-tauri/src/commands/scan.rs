@@ -1,11 +1,23 @@
 use crate::{models::*, AppState};
+use serde::Serialize;
 use sqlx;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::State;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, State};
 use walkdir::WalkDir;
 use zip::ZipArchive;
+
+/// Progress event payload for scan operations
+#[derive(Clone, Serialize)]
+pub struct ScanProgress {
+    pub phase: String,
+    pub files_found: usize,
+    pub files_inserted: usize,
+    pub files_total: usize,
+    pub zips_scanned: usize,
+    pub current_path: Option<String>,
+}
 
 /// Supported image extensions
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
@@ -33,6 +45,7 @@ struct DiscoveredAsset {
 /// Start a new scan session
 #[tauri::command]
 pub async fn start_scan(
+    app: AppHandle,
     state: State<'_, AppState>,
     root_path: String,
 ) -> Result<i64, String> {
@@ -45,16 +58,15 @@ pub async fn start_scan(
     // Create scan session
     let session_id = create_scan_session(&state, &root_path).await?;
 
-    // Discover files
-    let files = discover_files(&root_path_buf)?;
+    // Discover files with progress events
+    let files = discover_files(&app, &root_path_buf)?;
     let total = files.len();
 
     // Update session with total count
     update_session_total(&state, session_id, total).await?;
 
-    // For MVP, we'll process files synchronously and insert them as pending
-    // In Week 2, we'll add actual processing with thumbnails
-    insert_pending_assets(&state, session_id, files).await?;
+    // Insert assets with progress events
+    insert_pending_assets(&app, &state, session_id, files).await?;
 
     // Mark session as complete
     update_session_status(&state, session_id, "complete").await?;
@@ -128,8 +140,28 @@ async fn update_session_status(
 }
 
 /// Discover all supported asset files in a directory (including zip entries)
-fn discover_files(root_path: &Path) -> Result<Vec<DiscoveredAsset>, String> {
+fn discover_files(app: &AppHandle, root_path: &Path) -> Result<Vec<DiscoveredAsset>, String> {
     let mut assets = Vec::new();
+    let mut zips_scanned = 0usize;
+    let mut last_emit = Instant::now();
+    const EMIT_INTERVAL_MS: u128 = 100;
+
+    let emit_progress = |app: &AppHandle, assets: &[DiscoveredAsset], zips: usize, path: Option<&str>| {
+        let _ = app.emit(
+            "scan-progress",
+            ScanProgress {
+                phase: "discovering".to_string(),
+                files_found: assets.len(),
+                files_inserted: 0,
+                files_total: 0,
+                zips_scanned: zips,
+                current_path: path.map(String::from),
+            },
+        );
+    };
+
+    // Initial progress event
+    emit_progress(app, &assets, 0, Some(&root_path.to_string_lossy()));
 
     for entry in WalkDir::new(root_path)
         .follow_links(false)
@@ -155,7 +187,7 @@ fn discover_files(root_path: &Path) -> Result<Vec<DiscoveredAsset>, String> {
 
                 // Check if it's a supported media file
                 if let Some(asset_type) = detect_asset_type(path) {
-                    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+                    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
                     let file_size = metadata.len() as i64;
 
                     assets.push(DiscoveredAsset {
@@ -166,12 +198,24 @@ fn discover_files(root_path: &Path) -> Result<Vec<DiscoveredAsset>, String> {
                         asset_type,
                         file_size,
                     });
+
+                    // Emit progress periodically
+                    if last_emit.elapsed().as_millis() >= EMIT_INTERVAL_MS {
+                        emit_progress(app, &assets, zips_scanned, Some(&path.to_string_lossy()));
+                        last_emit = Instant::now();
+                    }
                 }
                 // Check if it's a zip file
                 else if ext_str == "zip" {
                     // Process zip entries
                     match discover_zip_entries(path) {
-                        Ok(mut zip_assets) => assets.append(&mut zip_assets),
+                        Ok(mut zip_assets) => {
+                            assets.append(&mut zip_assets);
+                            zips_scanned += 1;
+                            // Always emit after processing a zip (can be slow)
+                            emit_progress(app, &assets, zips_scanned, Some(&path.to_string_lossy()));
+                            last_emit = Instant::now();
+                        }
                         Err(e) => {
                             eprintln!("Warning: Failed to process zip file {}: {}", path.display(), e);
                             // Continue scanning even if one zip fails
@@ -181,6 +225,9 @@ fn discover_files(root_path: &Path) -> Result<Vec<DiscoveredAsset>, String> {
             }
         }
     }
+
+    // Final progress event for discovery phase
+    emit_progress(app, &assets, zips_scanned, None);
 
     Ok(assets)
 }
@@ -260,6 +307,7 @@ fn detect_asset_type_from_ext(ext: &str) -> Option<AssetType> {
 
 /// Insert discovered files as pending assets (no processing yet)
 async fn insert_pending_assets(
+    app: &AppHandle,
     state: &State<'_, AppState>,
     _session_id: i64,
     assets: Vec<DiscoveredAsset>,
@@ -268,6 +316,24 @@ async fn insert_pending_assets(
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs() as i64;
+
+    let total = assets.len();
+    let mut inserted = 0usize;
+    let mut last_emit = Instant::now();
+    const EMIT_INTERVAL_MS: u128 = 100;
+
+    // Emit start of inserting phase
+    let _ = app.emit(
+        "scan-progress",
+        ScanProgress {
+            phase: "inserting".to_string(),
+            files_found: total,
+            files_inserted: 0,
+            files_total: total,
+            zips_scanned: 0,
+            current_path: None,
+        },
+    );
 
     let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
 
@@ -292,11 +358,39 @@ async fn insert_pending_assets(
         .await
         .map_err(|e| e.to_string())?;
 
-        // Asset inserted, no processing tasks needed
-        // Processing will check for missing metadata via LEFT JOIN
+        inserted += 1;
+
+        // Emit progress periodically
+        if last_emit.elapsed().as_millis() >= EMIT_INTERVAL_MS {
+            let _ = app.emit(
+                "scan-progress",
+                ScanProgress {
+                    phase: "inserting".to_string(),
+                    files_found: total,
+                    files_inserted: inserted,
+                    files_total: total,
+                    zips_scanned: 0,
+                    current_path: Some(asset.filename.clone()),
+                },
+            );
+            last_emit = Instant::now();
+        }
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;
+
+    // Final event
+    let _ = app.emit(
+        "scan-progress",
+        ScanProgress {
+            phase: "complete".to_string(),
+            files_found: total,
+            files_inserted: total,
+            files_total: total,
+            zips_scanned: 0,
+            current_path: None,
+        },
+    );
 
     Ok(())
 }
