@@ -42,21 +42,8 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 fast_image_resize = "5.0"
 webp = "0.3"
 
-# Audio processing
+# Audio metadata extraction
 symphonia = { version = "0.5", features = ["all"] }
-rubato = "0.15"  # Audio resampling
-rustfft = "6.1"  # FFT for STFT
-ndarray = "0.15"  # Array operations
-num-complex = "0.4"  # Complex numbers for FFT
-
-# ML inference for CLAP
-ort = { version = "2.0.0-rc.10", features = ["cuda", "load-dynamic"] }
-tokenizers = "0.15"  # CLIP BPE tokenizer
-
-# Candle for pure Rust ML inference
-candle-core = "0.8"
-candle-nn = "0.8"
-hf-hub = "0.3"
 
 # Utilities
 base64 = "0.22"
