@@ -106,3 +106,27 @@ pub struct PendingCount {
     pub audio: usize,
     pub total: usize,
 }
+
+/// Processing error stored in database
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ProcessingError {
+    pub id: i64,
+    pub asset_id: i64,
+    pub category: String,
+    pub error_message: String,
+    pub occurred_at: i64,
+    pub retry_count: i32,
+    pub resolved_at: Option<i64>,
+}
+
+/// Processing error with asset info for frontend display
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ProcessingErrorDetail {
+    pub id: i64,
+    pub asset_id: i64,
+    pub filename: String,
+    pub path: String,
+    pub error_message: String,
+    pub occurred_at: i64,
+    pub retry_count: i32,
+}

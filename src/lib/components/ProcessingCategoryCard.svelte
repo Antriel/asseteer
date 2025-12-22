@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ProcessingCategory, CategoryProgress } from '$lib/types';
   import { processingState, getCategoryStatus } from '$lib/state/tasks.svelte';
+  import ProcessingDetails from './ProcessingDetails.svelte';
 
   interface Props {
     category: ProcessingCategory;
@@ -202,6 +203,9 @@
           </div>
         {/if}
       </div>
+
+      <!-- Processing details (current file, ETA, errors) -->
+      <ProcessingDetails {category} {progress} />
     </div>
   {/if}
 </div>

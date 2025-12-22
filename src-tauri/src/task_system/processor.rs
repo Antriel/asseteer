@@ -78,11 +78,22 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
             .execute(db)
             .await
             {
-                Ok(_) => ProcessingResult {
-                    asset_id,
-                    success: true,
-                    error: None,
-                },
+                Ok(_) => {
+                    // Mark any existing errors as resolved
+                    let _ = sqlx::query(
+                        "UPDATE processing_errors SET resolved_at = ? WHERE asset_id = ? AND resolved_at IS NULL"
+                    )
+                    .bind(now)
+                    .bind(asset_id)
+                    .execute(db)
+                    .await;
+
+                    ProcessingResult {
+                        asset_id,
+                        success: true,
+                        error: None,
+                    }
+                }
                 Err(e) => ProcessingResult {
                     asset_id,
                     success: false,
@@ -180,11 +191,22 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
             .execute(db)
             .await
             {
-                Ok(_) => ProcessingResult {
-                    asset_id,
-                    success: true,
-                    error: None,
-                },
+                Ok(_) => {
+                    // Mark any existing errors as resolved
+                    let _ = sqlx::query(
+                        "UPDATE processing_errors SET resolved_at = ? WHERE asset_id = ? AND resolved_at IS NULL"
+                    )
+                    .bind(now)
+                    .bind(asset_id)
+                    .execute(db)
+                    .await;
+
+                    ProcessingResult {
+                        asset_id,
+                        success: true,
+                        error: None,
+                    }
+                }
                 Err(e) => ProcessingResult {
                     asset_id,
                     success: false,

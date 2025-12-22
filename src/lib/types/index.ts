@@ -47,7 +47,21 @@ export interface CategoryProgress {
   failed: number;
   is_paused: boolean;
   is_running: boolean;
+  // Processing details
+  current_file: string | null;
+  processing_rate: number;
+  eta_seconds: number | null;
   // Computed properties (added in frontend)
   isPaused?: boolean;
   isRunning?: boolean;
+}
+
+export interface ProcessingErrorDetail {
+  id: number;
+  asset_id: number;
+  filename: string;
+  path: string;
+  error_message: string;
+  occurred_at: number;
+  retry_count: number;
 }

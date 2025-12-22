@@ -79,3 +79,21 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
     error TEXT
 )
 "#;
+
+pub const CREATE_PROCESSING_ERRORS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS processing_errors (
+    id INTEGER PRIMARY KEY,
+    asset_id INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    category TEXT NOT NULL,
+    error_message TEXT NOT NULL,
+    occurred_at INTEGER NOT NULL,
+    retry_count INTEGER DEFAULT 0,
+    resolved_at INTEGER
+)
+"#;
+
+pub const CREATE_PROCESSING_ERRORS_INDEXES: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_processing_errors_asset ON processing_errors(asset_id);
+CREATE INDEX IF NOT EXISTS idx_processing_errors_category ON processing_errors(category);
+CREATE INDEX IF NOT EXISTS idx_processing_errors_unresolved ON processing_errors(category, resolved_at) WHERE resolved_at IS NULL
+"#;

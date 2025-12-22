@@ -22,6 +22,10 @@ pub struct ProcessingProgress {
     pub failed: usize,
     pub is_paused: bool,
     pub is_running: bool,
+    // Processing details
+    pub current_file: Option<String>,
+    pub processing_rate: f64,
+    pub eta_seconds: Option<u64>,
 }
 
 /// Internal category state tracking
@@ -33,6 +37,9 @@ struct CategoryState {
     completed_assets: Arc<AtomicUsize>,
     failed_assets: Arc<AtomicUsize>,
     is_running: Arc<AtomicBool>,
+    // Processing details tracking
+    current_file: Arc<RwLock<Option<String>>>,
+    started_at: Arc<RwLock<Option<i64>>>,
 }
 
 impl CategoryState {
@@ -44,6 +51,8 @@ impl CategoryState {
             completed_assets: Arc::new(AtomicUsize::new(0)),
             failed_assets: Arc::new(AtomicUsize::new(0)),
             is_running: Arc::new(AtomicBool::new(false)),
+            current_file: Arc::new(RwLock::new(None)),
+            started_at: Arc::new(RwLock::new(None)),
         }
     }
 }
@@ -188,8 +197,20 @@ impl WorkQueue {
                             continue;
                         }
 
+                        // Set current file before processing
+                        {
+                            let mut current = state.current_file.write().await;
+                            *current = Some(asset.filename.clone());
+                        }
+
                         // Process the asset
                         let result = process_asset(&asset, &db).await;
+
+                        // Clear current file after processing
+                        {
+                            let mut current = state.current_file.write().await;
+                            *current = None;
+                        }
 
                         // Update category-specific counters
                         if result.success {
@@ -200,6 +221,25 @@ impl WorkQueue {
                                 "[Worker {}] Failed to process asset {}: {:?}",
                                 worker_id, asset.filename, result.error
                             );
+
+                            // Save error to database
+                            if let Some(error_msg) = &result.error {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs() as i64;
+
+                                let _ = sqlx::query(
+                                    "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
+                                     VALUES (?, ?, ?, ?, 0)"
+                                )
+                                .bind(asset.id)
+                                .bind(category.as_str())
+                                .bind(error_msg)
+                                .bind(now)
+                                .execute(&db)
+                                .await;
+                            }
                         }
                     }
                     Err(crossbeam::channel::TryRecvError::Empty) => {
@@ -237,6 +277,16 @@ impl WorkQueue {
         let state = self.ensure_category_state(category).await;
         let category_str = category.as_str().to_string();
 
+        // Record start time
+        let start_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        {
+            let mut started = state.started_at.write().await;
+            *started = Some(start_time);
+        }
+
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(BATCH_UPDATE_INTERVAL_SEC));
 
@@ -255,6 +305,14 @@ impl WorkQueue {
                 let is_paused = state.pause_signal.load(Ordering::SeqCst);
                 let is_running = state.is_running.load(Ordering::SeqCst);
 
+                // Get current file and started_at for ETA calculation
+                let current_file = state.current_file.read().await.clone();
+                let started_at = *state.started_at.read().await;
+
+                // Calculate processing rate and ETA
+                let (processing_rate, eta_seconds) =
+                    calculate_eta(started_at, completed + failed, total, is_paused);
+
                 // Emit progress event with category-specific event name
                 let progress = ProcessingProgress {
                     category: category_str.clone(),
@@ -263,6 +321,9 @@ impl WorkQueue {
                     failed,
                     is_paused,
                     is_running,
+                    current_file,
+                    processing_rate,
+                    eta_seconds,
                 };
 
                 let event_name = format!("processing-progress-{}", category_str);
@@ -286,6 +347,9 @@ impl WorkQueue {
                         failed,
                         is_paused: false,
                         is_running: false,
+                        current_file: None,
+                        processing_rate: 0.0,
+                        eta_seconds: None,
                     };
                     let complete_event_name = format!("processing-complete-{}", category_str);
                     let _ = app_handle.emit(&complete_event_name, final_progress);
@@ -342,13 +406,21 @@ impl WorkQueue {
             Some(cat) => {
                 // Return progress for specific category
                 if let Some(state) = states.get(&cat) {
+                    let total = state.total_assets.load(Ordering::SeqCst);
+                    let completed = state.completed_assets.load(Ordering::SeqCst);
+                    let failed = state.failed_assets.load(Ordering::SeqCst);
+                    let is_paused = state.pause_signal.load(Ordering::SeqCst);
+
                     vec![ProcessingProgress {
                         category: cat.as_str().to_string(),
-                        total: state.total_assets.load(Ordering::SeqCst),
-                        completed: state.completed_assets.load(Ordering::SeqCst),
-                        failed: state.failed_assets.load(Ordering::SeqCst),
-                        is_paused: state.pause_signal.load(Ordering::SeqCst),
+                        total,
+                        completed,
+                        failed,
+                        is_paused,
                         is_running: state.is_running.load(Ordering::SeqCst),
+                        current_file: None,
+                        processing_rate: 0.0,
+                        eta_seconds: None,
                     }]
                 } else {
                     vec![]
@@ -358,13 +430,18 @@ impl WorkQueue {
                 // Return progress for all categories
                 states
                     .iter()
-                    .map(|(cat, state)| ProcessingProgress {
-                        category: cat.as_str().to_string(),
-                        total: state.total_assets.load(Ordering::SeqCst),
-                        completed: state.completed_assets.load(Ordering::SeqCst),
-                        failed: state.failed_assets.load(Ordering::SeqCst),
-                        is_paused: state.pause_signal.load(Ordering::SeqCst),
-                        is_running: state.is_running.load(Ordering::SeqCst),
+                    .map(|(cat, state)| {
+                        ProcessingProgress {
+                            category: cat.as_str().to_string(),
+                            total: state.total_assets.load(Ordering::SeqCst),
+                            completed: state.completed_assets.load(Ordering::SeqCst),
+                            failed: state.failed_assets.load(Ordering::SeqCst),
+                            is_paused: state.pause_signal.load(Ordering::SeqCst),
+                            is_running: state.is_running.load(Ordering::SeqCst),
+                            current_file: None,
+                            processing_rate: 0.0,
+                            eta_seconds: None,
+                        }
                     })
                     .collect()
             }
@@ -389,5 +466,41 @@ impl WorkQueue {
             .get(&category)
             .map(|s| s.pause_signal.load(Ordering::SeqCst))
             .unwrap_or(false)
+    }
+}
+
+/// Calculate processing rate and ETA
+fn calculate_eta(
+    started_at: Option<i64>,
+    processed: usize,
+    total: usize,
+    is_paused: bool,
+) -> (f64, Option<u64>) {
+    if is_paused || processed == 0 {
+        return (0.0, None);
+    }
+
+    let Some(start) = started_at else {
+        return (0.0, None);
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let elapsed_secs = (now - start) as f64;
+    if elapsed_secs <= 0.0 {
+        return (0.0, None);
+    }
+
+    let rate = processed as f64 / elapsed_secs;
+    let remaining = total.saturating_sub(processed);
+
+    if rate > 0.0 {
+        let eta = (remaining as f64 / rate).ceil() as u64;
+        (rate, Some(eta))
+    } else {
+        (0.0, None)
     }
 }

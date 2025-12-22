@@ -58,5 +58,20 @@ pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
+    // Create processing errors table
+    sqlx::query(CREATE_PROCESSING_ERRORS_TABLE)
+        .execute(pool)
+        .await?;
+
+    // Create processing errors indexes
+    for index_sql in CREATE_PROCESSING_ERRORS_INDEXES
+        .split(';')
+        .filter(|s| !s.trim().is_empty())
+    {
+        sqlx::query(index_sql.trim())
+            .execute(pool)
+            .await?;
+    }
+
     Ok(())
 }

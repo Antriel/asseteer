@@ -3,7 +3,12 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { getDatabase } from '$lib/database/connection';
 import { getPendingAssetCounts } from '$lib/database/queries';
-import type { PendingCount, ProcessingCategory, CategoryProgress } from '$lib/types';
+import type {
+  PendingCount,
+  ProcessingCategory,
+  CategoryProgress,
+  ProcessingErrorDetail,
+} from '$lib/types';
 
 /**
  * Category-aware processing state management
@@ -244,6 +249,56 @@ class ProcessingState {
   }
 
   /**
+   * Fetch processing errors for a category
+   */
+  async fetchErrors(category?: ProcessingCategory): Promise<ProcessingErrorDetail[]> {
+    try {
+      const errors = await invoke<ProcessingErrorDetail[]>('get_processing_errors', {
+        category: category || null,
+      });
+      return errors;
+    } catch (error) {
+      console.error('[Processing] Failed to fetch errors:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Retry failed assets for a category
+   */
+  async retryFailed(category: ProcessingCategory): Promise<number> {
+    try {
+      const count = await invoke<number>('retry_failed_assets', { category });
+      console.log(`[Processing] Retrying ${count} failed ${category} assets`);
+
+      // Refresh progress after starting retry
+      await this.refreshProgress(category);
+
+      return count;
+    } catch (error) {
+      console.error(`[Processing] Failed to retry ${category}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Clear processing errors
+   */
+  async clearErrors(category?: ProcessingCategory, onlyResolved = true): Promise<number> {
+    try {
+      const count = await invoke<number>('clear_processing_errors', {
+        category: category || null,
+        onlyResolved,
+      });
+      console.log(`[Processing] Cleared ${count} errors`);
+      return count;
+    } catch (error) {
+      console.error('[Processing] Failed to clear errors:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Clean up event listeners
    */
   cleanup() {
@@ -365,4 +420,34 @@ export function getCategoryStatus(
 
   if (progress.isPaused) return 'paused';
   return 'running';
+}
+
+/**
+ * Format ETA seconds for display
+ */
+export function formatEta(seconds: number | null): string {
+  if (seconds === null || seconds <= 0) return '--';
+
+  if (seconds < 60) {
+    return `${Math.round(seconds)}s`;
+  } else if (seconds < 3600) {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.round(seconds % 60);
+    return `${mins}m ${secs}s`;
+  } else {
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${mins}m`;
+  }
+}
+
+/**
+ * Format processing rate for display
+ */
+export function formatRate(rate: number): string {
+  if (rate <= 0) return '--';
+  if (rate < 1) {
+    return `${(rate * 60).toFixed(1)}/min`;
+  }
+  return `${rate.toFixed(1)}/s`;
 }

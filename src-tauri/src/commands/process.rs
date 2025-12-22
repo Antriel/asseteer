@@ -1,4 +1,4 @@
-use crate::models::{Asset, ProcessingCategory};
+use crate::models::{Asset, ProcessingCategory, ProcessingErrorDetail};
 use crate::task_system::ProcessingProgress;
 use crate::AppState;
 use tauri::{AppHandle, Emitter, State};
@@ -156,5 +156,143 @@ pub async fn get_processing_progress(
     };
 
     Ok(state.work_queue.get_progress(cat).await)
+}
+
+/// Get unresolved processing errors for a category
+#[tauri::command]
+pub async fn get_processing_errors(
+    category: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ProcessingErrorDetail>, String> {
+    let errors = match &category {
+        Some(cat) => {
+            sqlx::query_as::<_, ProcessingErrorDetail>(
+                "SELECT e.id, e.asset_id, a.filename, a.path, e.error_message,
+                        e.occurred_at, e.retry_count
+                 FROM processing_errors e
+                 JOIN assets a ON e.asset_id = a.id
+                 WHERE e.resolved_at IS NULL AND e.category = ?
+                 ORDER BY e.occurred_at DESC"
+            )
+            .bind(cat)
+            .fetch_all(&state.pool)
+            .await
+        }
+        None => {
+            sqlx::query_as::<_, ProcessingErrorDetail>(
+                "SELECT e.id, e.asset_id, a.filename, a.path, e.error_message,
+                        e.occurred_at, e.retry_count
+                 FROM processing_errors e
+                 JOIN assets a ON e.asset_id = a.id
+                 WHERE e.resolved_at IS NULL
+                 ORDER BY e.occurred_at DESC"
+            )
+            .fetch_all(&state.pool)
+            .await
+        }
+    };
+
+    errors.map_err(|e| format!("Failed to fetch errors: {}", e))
+}
+
+/// Retry failed assets for a category
+#[tauri::command]
+pub async fn retry_failed_assets(
+    category: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<usize, String> {
+    let cat = ProcessingCategory::from_str(&category)?;
+
+    // Check if already running
+    if state.work_queue.is_running(cat).await {
+        return Err(format!(
+            "Processing for category '{}' is already running",
+            category
+        ));
+    }
+
+    // Get assets with unresolved errors for this category
+    let assets: Vec<Asset> = sqlx::query_as(
+        "SELECT DISTINCT a.* FROM assets a
+         JOIN processing_errors e ON a.id = e.asset_id
+         WHERE e.category = ? AND e.resolved_at IS NULL
+         ORDER BY a.id"
+    )
+    .bind(&category)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("Failed to query failed assets: {}", e))?;
+
+    if assets.is_empty() {
+        return Err(format!(
+            "No failed assets to retry for category '{}'",
+            category
+        ));
+    }
+
+    let count = assets.len();
+    println!(
+        "[ProcessingQueue] Retrying {} failed {} assets",
+        count, category
+    );
+
+    // Increment retry count for these errors
+    sqlx::query(
+        "UPDATE processing_errors
+         SET retry_count = retry_count + 1
+         WHERE category = ? AND resolved_at IS NULL"
+    )
+    .bind(&category)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("Failed to update retry count: {}", e))?;
+
+    // Start processing
+    state
+        .work_queue
+        .start(cat, assets, state.pool.clone(), app)
+        .await?;
+
+    Ok(count)
+}
+
+/// Clear processing errors
+#[tauri::command]
+pub async fn clear_processing_errors(
+    category: Option<String>,
+    only_resolved: bool,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    let result = match (&category, only_resolved) {
+        (Some(cat), true) => {
+            sqlx::query(
+                "DELETE FROM processing_errors WHERE category = ? AND resolved_at IS NOT NULL"
+            )
+            .bind(cat)
+            .execute(&state.pool)
+            .await
+        }
+        (Some(cat), false) => {
+            sqlx::query("DELETE FROM processing_errors WHERE category = ?")
+                .bind(cat)
+                .execute(&state.pool)
+                .await
+        }
+        (None, true) => {
+            sqlx::query("DELETE FROM processing_errors WHERE resolved_at IS NOT NULL")
+                .execute(&state.pool)
+                .await
+        }
+        (None, false) => {
+            sqlx::query("DELETE FROM processing_errors")
+                .execute(&state.pool)
+                .await
+        }
+    };
+
+    result
+        .map(|r| r.rows_affected())
+        .map_err(|e| format!("Failed to clear errors: {}", e))
 }
 
