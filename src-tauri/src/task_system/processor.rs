@@ -3,6 +3,10 @@ use crate::models::Asset;
 use crate::utils::load_asset_bytes;
 use image::{DynamicImage, GenericImageView};
 use sqlx::SqlitePool;
+use std::time::Duration;
+
+/// Timeout for processing a single asset (30 seconds)
+const PROCESSING_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Result of processing an asset
 #[derive(Debug)]
@@ -36,30 +40,33 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     // 20KB threshold for thumbnail generation
     const THUMBNAIL_SIZE_THRESHOLD: i64 = 20 * 1024; // 20KB in bytes
 
-    // Run CPU-intensive work in blocking thread
-    let result = tokio::task::spawn_blocking(move || {
-        // Load image bytes (from filesystem or zip)
-        let bytes = load_asset_bytes(&asset_clone)?;
+    // Run CPU-intensive work in blocking thread with timeout
+    let result = tokio::time::timeout(
+        PROCESSING_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            // Load image bytes (from filesystem or zip)
+            let bytes = load_asset_bytes(&asset_clone)?;
 
-        // Load image from memory
-        let img = image::load_from_memory(&bytes)
-            .map_err(|e| format!("Failed to decode image: {}", e))?;
+            // Load image from memory
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| format!("Failed to decode image: {}", e))?;
 
-        let (width, height) = img.dimensions();
+            let (width, height) = img.dimensions();
 
-        // Only generate thumbnail for images >= 20KB
-        let thumbnail_data = if file_size >= THUMBNAIL_SIZE_THRESHOLD {
-            Some(generate_thumbnail(&img, 128)?)
-        } else {
-            None
-        };
+            // Only generate thumbnail for images >= 20KB
+            let thumbnail_data = if file_size >= THUMBNAIL_SIZE_THRESHOLD {
+                Some(generate_thumbnail(&img, 128)?)
+            } else {
+                None
+            };
 
-        Ok::<_, String>((thumbnail_data, width, height))
-    })
+            Ok::<_, String>((thumbnail_data, width, height))
+        }),
+    )
     .await;
 
     match result {
-        Ok(Ok((thumbnail_data, width, height))) => {
+        Ok(Ok(Ok((thumbnail_data, width, height)))) => {
             // Insert into image_metadata table
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -101,15 +108,20 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
                 },
             }
         }
-        Ok(Err(e)) => ProcessingResult {
+        Ok(Ok(Err(e))) => ProcessingResult {
             asset_id,
             success: false,
             error: Some(e),
         },
-        Err(e) => ProcessingResult {
+        Ok(Err(e)) => ProcessingResult {
             asset_id,
             success: false,
             error: Some(format!("Task join error: {}", e)),
+        },
+        Err(_) => ProcessingResult {
+            asset_id,
+            success: false,
+            error: Some("Processing timed out".to_string()),
         },
     }
 }
@@ -125,54 +137,57 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
 
     let asset_clone = asset.clone();
 
-    // Run CPU-intensive work in blocking thread
-    let result = tokio::task::spawn_blocking(move || {
-        // Load audio bytes (from filesystem or zip)
-        let bytes = load_asset_bytes(&asset_clone)?;
+    // Run CPU-intensive work in blocking thread with timeout
+    let result = tokio::time::timeout(
+        PROCESSING_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            // Load audio bytes (from filesystem or zip)
+            let bytes = load_asset_bytes(&asset_clone)?;
 
-        // Create a cursor from the bytes for reading
-        let cursor = std::io::Cursor::new(bytes);
-        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+            // Create a cursor from the bytes for reading
+            let cursor = std::io::Cursor::new(bytes);
+            let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
-        // Set up hint from file extension
-        let mut hint = Hint::new();
-        hint.with_extension(&asset_clone.format);
+            // Set up hint from file extension
+            let mut hint = Hint::new();
+            hint.with_extension(&asset_clone.format);
 
-        // Probe the media format
-        let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
-            .map_err(|e| format!("Failed to probe audio format: {}", e))?;
+            // Probe the media format
+            let probed = symphonia::default::get_probe()
+                .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+                .map_err(|e| format!("Failed to probe audio format: {}", e))?;
 
-        let format = probed.format;
-        let track = format
-            .default_track()
-            .ok_or_else(|| "No audio track found".to_string())?;
+            let format = probed.format;
+            let track = format
+                .default_track()
+                .ok_or_else(|| "No audio track found".to_string())?;
 
-        // Extract codec parameters
-        let codec_params = &track.codec_params;
-        let sample_rate = codec_params.sample_rate.unwrap_or(0) as i32;
-        let channels = codec_params
-            .channels
-            .map(|c| c.count() as i32)
-            .unwrap_or(0);
+            // Extract codec parameters
+            let codec_params = &track.codec_params;
+            let sample_rate = codec_params.sample_rate.unwrap_or(0) as i32;
+            let channels = codec_params
+                .channels
+                .map(|c| c.count() as i32)
+                .unwrap_or(0);
 
-        // Calculate duration in milliseconds
-        let duration_ms = if let Some(n_frames) = codec_params.n_frames {
-            if sample_rate > 0 {
-                (n_frames as f64 / sample_rate as f64 * 1000.0) as i64
+            // Calculate duration in milliseconds
+            let duration_ms = if let Some(n_frames) = codec_params.n_frames {
+                if sample_rate > 0 {
+                    (n_frames as f64 / sample_rate as f64 * 1000.0) as i64
+                } else {
+                    0
+                }
             } else {
                 0
-            }
-        } else {
-            0
-        };
+            };
 
-        Ok::<_, String>((duration_ms, sample_rate, channels))
-    })
+            Ok::<_, String>((duration_ms, sample_rate, channels))
+        }),
+    )
     .await;
 
     match result {
-        Ok(Ok((duration_ms, sample_rate, channels))) => {
+        Ok(Ok(Ok((duration_ms, sample_rate, channels)))) => {
             // Insert into audio_metadata table
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -214,15 +229,20 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
                 },
             }
         }
-        Ok(Err(e)) => ProcessingResult {
+        Ok(Ok(Err(e))) => ProcessingResult {
             asset_id,
             success: false,
             error: Some(e),
         },
-        Err(e) => ProcessingResult {
+        Ok(Err(e)) => ProcessingResult {
             asset_id,
             success: false,
             error: Some(format!("Task join error: {}", e)),
+        },
+        Err(_) => ProcessingResult {
+            asset_id,
+            success: false,
+            error: Some("Processing timed out".to_string()),
         },
     }
 }
