@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::Read;
+use std::io::{Cursor, Read, Seek};
 use zip::ZipArchive;
 use crate::models::Asset;
 
@@ -9,7 +9,7 @@ use crate::models::Asset;
 /// Otherwise, it will be read directly from the filesystem.
 pub fn load_asset_bytes(asset: &Asset) -> Result<Vec<u8>, String> {
     if let Some(zip_entry_path) = &asset.zip_entry {
-        // Asset is inside a zip file
+        // Asset is inside a zip file (possibly nested)
         load_from_zip(&asset.path, zip_entry_path)
     } else {
         // Asset is a regular file
@@ -23,20 +23,68 @@ fn load_from_filesystem(path: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to read file {}: {}", path, e))
 }
 
-/// Load bytes from a zip archive entry
+/// Load bytes from a zip archive entry (supports nested zips)
+///
+/// The entry_path can contain nested zips, e.g., "inner.zip/folder/image.png"
+/// which means: open inner.zip inside the outer zip, then extract folder/image.png
 fn load_from_zip(zip_path: &str, entry_path: &str) -> Result<Vec<u8>, String> {
     let zip_file = File::open(zip_path)
         .map_err(|e| format!("Failed to open zip file {}: {}", zip_path, e))?;
 
-    let mut archive = ZipArchive::new(zip_file)
+    let archive = ZipArchive::new(zip_file)
         .map_err(|e| format!("Failed to read zip archive {}: {}", zip_path, e))?;
 
-    let mut entry = archive.by_name(entry_path)
-        .map_err(|e| format!("Failed to find entry {} in zip {}: {}", entry_path, zip_path, e))?;
+    load_from_zip_recursive(archive, entry_path, zip_path)
+}
 
-    let mut buffer = Vec::new();
-    entry.read_to_end(&mut buffer)
-        .map_err(|e| format!("Failed to read entry {} from zip {}: {}", entry_path, zip_path, e))?;
+/// Recursively extract from potentially nested zip archives
+fn load_from_zip_recursive<R: Read + Seek>(
+    mut archive: ZipArchive<R>,
+    entry_path: &str,
+    context: &str,  // For error messages
+) -> Result<Vec<u8>, String> {
+    // Check if entry_path contains a nested zip
+    // We look for ".zip/" pattern which indicates a nested zip to traverse
+    if let Some(zip_boundary) = find_nested_zip_boundary(entry_path) {
+        let (nested_zip_path, remaining_path) = entry_path.split_at(zip_boundary);
+        let remaining_path = &remaining_path[1..]; // Skip the '/'
 
-    Ok(buffer)
+        // Extract the nested zip into memory
+        let mut entry = archive.by_name(nested_zip_path)
+            .map_err(|e| format!("Failed to find nested zip {} in {}: {}", nested_zip_path, context, e))?;
+
+        let mut buffer = Vec::new();
+        entry.read_to_end(&mut buffer)
+            .map_err(|e| format!("Failed to read nested zip {} from {}: {}", nested_zip_path, context, e))?;
+
+        // Open the nested zip and continue recursively
+        let cursor = Cursor::new(buffer);
+        let nested_archive = ZipArchive::new(cursor)
+            .map_err(|e| format!("Failed to open nested zip {} from {}: {}", nested_zip_path, context, e))?;
+
+        let nested_context = format!("{}/{}", context, nested_zip_path);
+        load_from_zip_recursive(nested_archive, remaining_path, &nested_context)
+    } else {
+        // No more nested zips, extract the final file
+        let mut entry = archive.by_name(entry_path)
+            .map_err(|e| format!("Failed to find entry {} in {}: {}", entry_path, context, e))?;
+
+        let mut buffer = Vec::new();
+        entry.read_to_end(&mut buffer)
+            .map_err(|e| format!("Failed to read entry {} from {}: {}", entry_path, context, e))?;
+
+        Ok(buffer)
+    }
+}
+
+/// Find the boundary index where a nested zip ends (position after ".zip")
+/// Returns None if no nested zip is found in the path
+///
+/// Example: "inner.zip/folder/image.png" -> Some(9) (position after "inner.zip")
+/// Example: "folder/image.png" -> None
+fn find_nested_zip_boundary(path: &str) -> Option<usize> {
+    // Look for ".zip/" pattern (case-insensitive for the extension)
+    let path_lower = path.to_lowercase();
+
+    path_lower.find(".zip/").map(|pos| pos + 4) // Position after ".zip"
 }

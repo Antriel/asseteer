@@ -2,6 +2,7 @@ use crate::{models::*, AppState};
 use serde::Serialize;
 use sqlx;
 use std::fs::File;
+use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
@@ -237,26 +238,40 @@ fn discover_zip_entries(zip_path: &Path) -> Result<Vec<DiscoveredAsset>, String>
     let file = File::open(zip_path)
         .map_err(|e| format!("Failed to open zip: {}", e))?;
 
-    let mut archive = ZipArchive::new(file)
+    let archive = ZipArchive::new(file)
         .map_err(|e| format!("Failed to read zip archive: {}", e))?;
 
+    discover_zip_entries_recursive(archive, zip_path, "")
+}
+
+/// Recursively discover assets in a zip archive (handles nested zips)
+///
+/// - `archive`: The zip archive to scan
+/// - `zip_path`: Path to the outermost zip file on disk
+/// - `prefix`: Path prefix for nested zips (e.g., "inner.zip/" for entries inside inner.zip)
+fn discover_zip_entries_recursive<R: Read + Seek>(
+    mut archive: ZipArchive<R>,
+    zip_path: &Path,
+    prefix: &str,
+) -> Result<Vec<DiscoveredAsset>, String> {
     let mut assets = Vec::new();
+
+    // First pass: collect entry info (we need indices because we can't hold multiple borrows)
+    let mut entries_info: Vec<(usize, String, u64)> = Vec::new();
 
     for i in 0..archive.len() {
         let entry = archive.by_index(i)
             .map_err(|e| format!("Failed to read zip entry: {}", e))?;
 
-        // Skip directories
-        if entry.is_dir() {
-            continue;
+        if !entry.is_dir() {
+            entries_info.push((i, entry.name().to_string(), entry.size()));
         }
+    }
 
-        let entry_path = entry.name().to_string();
+    // Second pass: process entries
+    for (idx, entry_name, entry_size) in entries_info {
+        let entry_path_buf = PathBuf::from(&entry_name);
 
-        // Extract filename and extension from the entry path
-        let entry_path_buf = PathBuf::from(&entry_path);
-
-        // Get the filename to check for macOS metadata files
         let filename = entry_path_buf
             .file_name()
             .unwrap_or_default()
@@ -270,14 +285,47 @@ fn discover_zip_entries(zip_path: &Path) -> Result<Vec<DiscoveredAsset>, String>
         if let Some(ext) = entry_path_buf.extension() {
             let ext_str = ext.to_string_lossy().to_lowercase();
 
-            if let Some(asset_type) = detect_asset_type_from_ext(&ext_str) {
+            // Check if it's a nested zip file
+            if ext_str == "zip" {
+                // Read the nested zip into memory
+                let mut entry = archive.by_index(idx)
+                    .map_err(|e| format!("Failed to read nested zip entry: {}", e))?;
+
+                let mut buffer = Vec::new();
+                entry.read_to_end(&mut buffer)
+                    .map_err(|e| format!("Failed to read nested zip content: {}", e))?;
+
+                // Create a cursor for the nested zip and recursively scan
+                let cursor = Cursor::new(buffer);
+                match ZipArchive::new(cursor) {
+                    Ok(nested_archive) => {
+                        // Build the new prefix: current prefix + this zip's entry name + "/"
+                        let nested_prefix = format!("{}{}/", prefix, entry_name);
+
+                        match discover_zip_entries_recursive(nested_archive, zip_path, &nested_prefix) {
+                            Ok(mut nested_assets) => {
+                                assets.append(&mut nested_assets);
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: Failed to process nested zip {}{}: {}", prefix, entry_name, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Failed to open nested zip {}{}: {}", prefix, entry_name, e);
+                    }
+                }
+            } else if let Some(asset_type) = detect_asset_type_from_ext(&ext_str) {
+                // Regular media file
+                let full_entry_path = format!("{}{}", prefix, entry_name);
+
                 assets.push(DiscoveredAsset {
                     filename: filename.to_string(),
                     path: zip_path.to_path_buf(),
-                    zip_entry: Some(entry_path),
+                    zip_entry: Some(full_entry_path),
                     format: ext_str.to_string(),
                     asset_type,
-                    file_size: entry.size() as i64,
+                    file_size: entry_size as i64,
                 });
             }
         }
