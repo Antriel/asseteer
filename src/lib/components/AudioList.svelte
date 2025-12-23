@@ -3,11 +3,19 @@
   import type { Asset } from '$lib/types';
   import AudioPlayer from './AudioPlayer.svelte';
 
+  // Extended asset type with optional similarity score
+  type AudioAsset = Asset & { similarity?: number };
+
   interface Props {
-    assets: Asset[];
+    assets: AudioAsset[];
+    showSimilarity?: boolean;
   }
 
-  let { assets }: Props = $props();
+  let { assets, showSimilarity = false }: Props = $props();
+
+  function formatSimilarity(similarity: number): string {
+    return `${Math.round(similarity * 100)}%`;
+  }
 
   let selectedAsset = $state<Asset | null>(null);
   let isPlaying = $state(false);
@@ -161,6 +169,13 @@
                 <span>{formatFileSize(asset.file_size)}</span>
               </div>
             </div>
+
+            <!-- Similarity score (semantic search) -->
+            {#if showSimilarity && asset.similarity !== undefined}
+              <div class="flex-shrink-0 px-2 py-1 bg-purple-100 dark:bg-purple-900/30 rounded text-xs font-medium text-purple-700 dark:text-purple-300">
+                {formatSimilarity(asset.similarity)}
+              </div>
+            {/if}
 
             <!-- Playing indicator -->
             {#if selectedAsset?.id === asset.id}

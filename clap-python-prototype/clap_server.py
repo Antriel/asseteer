@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
 """
-CLAP HTTP Server
+CLAP HTTP Server (FastAPI)
 
 Provides HTTP endpoints for generating CLAP embeddings.
 Used by Asseteer Tauri app for audio search functionality.
 
 Endpoints:
-    POST /embed/text   - Generate text embedding
-    POST /embed/audio  - Generate audio embedding from file path
-    GET  /health       - Health check
+    POST /embed/text         - Generate text embedding
+    POST /embed/audio        - Generate audio embedding from file path
+    POST /embed/audio/upload - Generate audio embedding from raw bytes
+    GET  /health             - Health check
+
+Run with:
+    python clap_server.py
+    # or
+    uvicorn clap_server:app --host 127.0.0.1 --port 5555
 """
 
-import sys
+import io
 import logging
 from pathlib import Path
-from flask import Flask, request, jsonify
+from contextlib import asynccontextmanager
 
-# Import the existing ClapTester class
+import librosa
+import numpy as np
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from pydantic import BaseModel
+
 from clap_test import ClapTester
 
 # Configure logging
@@ -26,137 +36,108 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Create Flask app
-app = Flask(__name__)
-
 # Global model instance (loaded once at startup)
-clap_model = None
+clap_model: ClapTester | None = None
 
 
-def initialize_model():
-    """Load CLAP model at startup"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load model on startup, cleanup on shutdown"""
     global clap_model
-
-    logger.info("Initializing CLAP model...")
-    try:
-        clap_model = ClapTester(model_name="laion/clap-htsat-fused")
-        logger.info("✓ CLAP model loaded successfully")
-        logger.info(f"  - Device: {clap_model.device}")
-        logger.info(f"  - Embedding dimension: {clap_model.model.config.projection_dim}")
-    except Exception as e:
-        logger.error(f"Failed to load CLAP model: {e}")
-        sys.exit(1)
+    logger.info("Loading CLAP model...")
+    clap_model = ClapTester(model_name="laion/clap-htsat-fused")
+    logger.info(f"Model loaded on {clap_model.device}")
+    yield
+    logger.info("Shutting down CLAP server...")
 
 
-@app.route('/health', methods=['GET'])
-def health():
+app = FastAPI(
+    title="CLAP Embedding Server",
+    description="HTTP API for CLAP audio-text embeddings",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+
+# Request/Response models
+class TextRequest(BaseModel):
+    text: str
+
+
+class AudioPathRequest(BaseModel):
+    audio_path: str
+
+
+class EmbeddingResponse(BaseModel):
+    embedding: list[float]
+
+
+class HealthResponse(BaseModel):
+    status: str
+    model: str
+    device: str
+    embedding_dim: int
+
+
+@app.get("/health", response_model=HealthResponse)
+async def health():
     """Health check endpoint"""
-    return jsonify({
-        'status': 'ok',
-        'model': 'laion/clap-htsat-fused',
-        'device': clap_model.device if clap_model else 'unknown',
-        'embedding_dim': clap_model.model.config.projection_dim if clap_model else 512
-    })
+    return HealthResponse(
+        status="ok",
+        model="laion/clap-htsat-fused",
+        device=clap_model.device if clap_model else "unknown",
+        embedding_dim=512
+    )
 
 
-@app.route('/embed/text', methods=['POST'])
-def embed_text():
+@app.post("/embed/text", response_model=EmbeddingResponse)
+async def embed_text(request: TextRequest):
     """
-    Generate text embedding
+    Generate text embedding.
 
     Request body:
-        {
-            "text": "footsteps on wood"
-        }
+        {"text": "footsteps on wood"}
 
     Response:
-        {
-            "embedding": [0.123, -0.456, ...]  // 512-dim array
-        }
+        {"embedding": [0.123, -0.456, ...]}  // 512-dim array
     """
-    try:
-        # Parse request
-        data = request.get_json()
-        if not data or 'text' not in data:
-            return jsonify({'error': 'Missing "text" field in request body'}), 400
+    if not request.text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
 
-        text = data['text']
-        if not text or not text.strip():
-            return jsonify({'error': '"text" field cannot be empty'}), 400
+    logger.info(f"Encoding text: '{request.text}'")
+    embedding = clap_model.encode_text(request.text)
+    logger.info(f"Text embedding generated (dim: {len(embedding)})")
 
-        logger.info(f"Encoding text: '{text}'")
-
-        # Generate embedding
-        embedding = clap_model.encode_text(text)
-
-        # Convert to list for JSON serialization
-        embedding_list = embedding.tolist()
-
-        logger.info(f"✓ Text embedding generated (dim: {len(embedding_list)})")
-
-        return jsonify({
-            'embedding': embedding_list
-        })
-
-    except Exception as e:
-        logger.error(f"Error encoding text: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+    return EmbeddingResponse(embedding=embedding.tolist())
 
 
-@app.route('/embed/audio', methods=['POST'])
-def embed_audio():
+@app.post("/embed/audio", response_model=EmbeddingResponse)
+async def embed_audio(request: AudioPathRequest):
     """
-    Generate audio embedding from file path
+    Generate audio embedding from file path.
 
     Request body:
-        {
-            "audio_path": "/path/to/audio.wav"
-        }
+        {"audio_path": "/path/to/audio.wav"}
 
     Response:
-        {
-            "embedding": [0.123, -0.456, ...]  // 512-dim array
-        }
+        {"embedding": [0.123, -0.456, ...]}  // 512-dim array
     """
-    try:
-        # Parse request
-        data = request.get_json()
-        if not data or 'audio_path' not in data:
-            return jsonify({'error': 'Missing "audio_path" field in request body'}), 400
+    path = Path(request.audio_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {request.audio_path}")
 
-        audio_path = data['audio_path']
-        if not audio_path:
-            return jsonify({'error': '"audio_path" field cannot be empty'}), 400
+    logger.info(f"Encoding audio: {request.audio_path}")
+    audio = clap_model.load_audio(str(path))
+    embedding = clap_model.encode_audio(audio)
+    logger.info(f"Audio embedding generated (dim: {len(embedding)})")
 
-        # Check file exists
-        audio_file = Path(audio_path)
-        if not audio_file.exists():
-            return jsonify({'error': f'Audio file not found: {audio_path}'}), 404
-
-        logger.info(f"Encoding audio: {audio_path}")
-
-        # Load and encode audio
-        audio = clap_model.load_audio(str(audio_path))
-        embedding = clap_model.encode_audio(audio)
-
-        # Convert to list for JSON serialization
-        embedding_list = embedding.tolist()
-
-        logger.info(f"✓ Audio embedding generated (dim: {len(embedding_list)})")
-
-        return jsonify({
-            'embedding': embedding_list
-        })
-
-    except Exception as e:
-        logger.error(f"Error encoding audio: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+    return EmbeddingResponse(embedding=embedding.tolist())
 
 
-@app.route('/embed/audio/upload', methods=['POST'])
-def embed_audio_upload():
+@app.post("/embed/audio/upload", response_model=EmbeddingResponse)
+async def embed_audio_upload(audio: UploadFile = File(...)):
     """
-    Generate audio embedding from uploaded binary data
+    Generate audio embedding from uploaded binary data.
 
     Use this endpoint for audio files from zip archives or in-memory sources.
     Accepts multipart/form-data with binary audio file.
@@ -167,89 +148,23 @@ def embed_audio_upload():
         File data: Raw audio bytes (WAV, MP3, FLAC, etc.)
 
     Response:
-        {
-            "embedding": [0.123, -0.456, ...]  // 512-dim array
-        }
+        {"embedding": [0.123, -0.456, ...]}  // 512-dim array
     """
-    try:
-        # Check if audio file was provided
-        if 'audio' not in request.files:
-            return jsonify({'error': 'Missing "audio" file in multipart form data'}), 400
+    content = await audio.read()
 
-        audio_file = request.files['audio']
+    logger.info(f"Encoding uploaded audio: {audio.filename} ({len(content)} bytes)")
 
-        if audio_file.filename == '':
-            return jsonify({'error': 'Empty filename'}), 400
+    # Load audio from bytes
+    target_sr = clap_model.processor.feature_extractor.sampling_rate
+    audio_data, sr = librosa.load(io.BytesIO(content), sr=target_sr, mono=True)
+    logger.info(f"Loaded {len(audio_data) / sr:.2f} seconds of audio")
 
-        logger.info(f"Encoding uploaded audio: {audio_file.filename}")
+    embedding = clap_model.encode_audio(audio_data)
+    logger.info(f"Audio embedding generated (dim: {len(embedding)})")
 
-        # Load audio directly from file-like object (no temp file needed!)
-        # librosa.load() accepts file-like objects
-        target_sr = clap_model.processor.feature_extractor.sampling_rate
-
-        import librosa
-        audio, sr = librosa.load(
-            audio_file,  # File-like object from Flask
-            sr=target_sr,
-            mono=True
-        )
-
-        logger.info(f"  - Loaded {len(audio) / sr:.2f} seconds")
-
-        # Encode audio
-        embedding = clap_model.encode_audio(audio)
-
-        # Convert to list for JSON serialization
-        embedding_list = embedding.tolist()
-
-        logger.info(f"✓ Audio embedding generated (dim: {len(embedding_list)})")
-
-        return jsonify({
-            'embedding': embedding_list
-        })
-
-    except Exception as e:
-        logger.error(f"Error encoding uploaded audio: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+    return EmbeddingResponse(embedding=embedding.tolist())
 
 
-@app.errorhandler(404)
-def not_found(error):
-    """Handle 404 errors"""
-    return jsonify({'error': 'Endpoint not found'}), 404
-
-
-@app.errorhandler(500)
-def internal_error(error):
-    """Handle 500 errors"""
-    return jsonify({'error': 'Internal server error'}), 500
-
-
-def main():
-    """Start the HTTP server"""
-    import argparse
-
-    parser = argparse.ArgumentParser(description='CLAP HTTP Server')
-    parser.add_argument('--host', default='127.0.0.1', help='Host to bind to')
-    parser.add_argument('--port', type=int, default=5555, help='Port to bind to')
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-
-    args = parser.parse_args()
-
-    # Initialize model
-    initialize_model()
-
-    # Start server
-    logger.info(f"Starting CLAP server on {args.host}:{args.port}")
-    logger.info(f"Health check: http://{args.host}:{args.port}/health")
-
-    app.run(
-        host=args.host,
-        port=args.port,
-        debug=args.debug,
-        threaded=True  # Handle multiple requests concurrently
-    )
-
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=5555)

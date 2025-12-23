@@ -73,5 +73,14 @@ pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Create audio embeddings table for CLAP semantic search
+    sqlx::query(CREATE_AUDIO_EMBEDDINGS_TABLE)
+        .execute(pool)
+        .await?;
+
+    sqlx::query(CREATE_AUDIO_EMBEDDINGS_INDEX)
+        .execute(pool)
+        .await?;
+
     Ok(())
 }

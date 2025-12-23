@@ -1,6 +1,7 @@
+mod clap;
+mod commands;
 mod database;
 mod models;
-mod commands;
 mod task_system;
 mod utils;
 
@@ -59,6 +60,12 @@ pub fn run() {
             commands::process::get_processing_errors,
             commands::process::retry_failed_assets,
             commands::process::clear_processing_errors,
+            // CLAP semantic search commands
+            commands::search::search_audio_semantic,
+            commands::search::get_pending_clap_count,
+            commands::search::process_clap_embeddings,
+            commands::search::check_clap_server,
+            commands::search::start_clap_server,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -66,6 +73,9 @@ pub fn run() {
             match event {
                 tauri::RunEvent::Exit => {
                     println!("[APP] Application exiting, cleaning up...");
+
+                    // Stop CLAP server if we started it
+                    clap::stop_server();
 
                     // Close the database pool properly
                     if let Some(state) = app_handle.try_state::<AppState>() {

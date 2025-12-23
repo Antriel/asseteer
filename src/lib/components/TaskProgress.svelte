@@ -8,6 +8,7 @@
   } from '$lib/state/tasks.svelte';
   import type { ProcessingCategory } from '$lib/types';
   import ProcessingCategoryCard from './ProcessingCategoryCard.svelte';
+  import ClapProcessingCard from './ClapProcessingCard.svelte';
   import { onMount, onDestroy } from 'svelte';
 
   // Initialize listeners on mount
@@ -143,6 +144,9 @@
         {disabled}
       />
     {/each}
+
+    <!-- CLAP audio embeddings processing -->
+    <ClapProcessingCard />
   </div>
 
   <!-- Info messages -->

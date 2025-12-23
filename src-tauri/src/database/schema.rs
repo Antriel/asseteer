@@ -97,3 +97,17 @@ CREATE INDEX IF NOT EXISTS idx_processing_errors_asset ON processing_errors(asse
 CREATE INDEX IF NOT EXISTS idx_processing_errors_category ON processing_errors(category);
 CREATE INDEX IF NOT EXISTS idx_processing_errors_unresolved ON processing_errors(category, resolved_at) WHERE resolved_at IS NULL
 "#;
+
+/// CLAP audio embeddings for semantic search
+pub const CREATE_AUDIO_EMBEDDINGS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS audio_embeddings (
+    asset_id INTEGER PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+    embedding BLOB NOT NULL,
+    model_version TEXT NOT NULL DEFAULT 'laion/clap-htsat-fused',
+    created_at INTEGER NOT NULL
+)
+"#;
+
+pub const CREATE_AUDIO_EMBEDDINGS_INDEX: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_audio_embeddings_model ON audio_embeddings(model_version)
+"#;

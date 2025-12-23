@@ -1,5 +1,6 @@
 import type Database from '@tauri-apps/plugin-sql';
 import type { Asset, PendingCount } from '$lib/types';
+import { invoke } from '@tauri-apps/api/core';
 
 /**
  * Search for assets with optional full-text search and filtering
@@ -145,4 +146,69 @@ export async function getPendingAssetCounts(db: Database): Promise<PendingCount>
 		audio,
 		total: images + audio
 	};
+}
+
+// ============================================================================
+// CLAP Semantic Search (uses Tauri commands, not direct SQL)
+// ============================================================================
+
+/**
+ * Result of a semantic search query
+ */
+export interface SemanticSearchResult {
+	asset_id: number;
+	filename: string;
+	path: string;
+	similarity: number;
+}
+
+/**
+ * Result of CLAP embedding processing
+ */
+export interface ProcessClapResult {
+	processed: number;
+	failed: number;
+	errors: string[];
+}
+
+/**
+ * Search audio assets semantically using CLAP embeddings
+ * Falls back to error if CLAP server is unavailable
+ */
+export async function searchAudioSemantic(
+	query: string,
+	limit: number = 50
+): Promise<SemanticSearchResult[]> {
+	return invoke('search_audio_semantic', { query, limit });
+}
+
+/**
+ * Get count of audio assets pending CLAP embedding
+ */
+export async function getPendingClapCount(): Promise<number> {
+	return invoke('get_pending_clap_count');
+}
+
+/**
+ * Process CLAP embeddings for audio assets
+ * @param limit Optional limit on number of assets to process
+ */
+export async function processClapEmbeddings(
+	limit?: number
+): Promise<ProcessClapResult> {
+	return invoke('process_clap_embeddings', { limit });
+}
+
+/**
+ * Check if CLAP server is available
+ */
+export async function checkClapServer(): Promise<boolean> {
+	return invoke('check_clap_server');
+}
+
+/**
+ * Start the CLAP server if not running
+ */
+export async function startClapServer(): Promise<void> {
+	return invoke('start_clap_server');
 }

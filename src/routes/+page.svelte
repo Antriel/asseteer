@@ -3,9 +3,10 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { assetsState } from '$lib/state/assets.svelte';
   import { viewState } from '$lib/state/view.svelte';
+  import { clapState } from '$lib/state/clap.svelte';
   import { getDatabase } from '$lib/database/connection';
   import { getAssetTypeCounts } from '$lib/database/queries';
-  import type { CategoryProgress } from '$lib/types';
+  import type { CategoryProgress, Asset } from '$lib/types';
 
   import ScanControl from '$lib/components/ScanControl.svelte';
   import TaskProgress from '$lib/components/TaskProgress.svelte';
@@ -16,6 +17,7 @@
   import AssetList from '$lib/components/AssetList.svelte';
   import ImageLightbox from '$lib/components/modals/ImageLightbox.svelte';
   import Spinner from '$lib/components/shared/Spinner.svelte';
+  import ToastContainer from '$lib/components/shared/ToastContainer.svelte';
 
   let assetCounts = $state({ images: 0, audio: 0 });
   let unlistenFns: UnlistenFn[] = [];
@@ -57,8 +59,48 @@
   });
 
   // Assets are already filtered by loadAssets() based on the current tab
-  // No need for additional filtering here
+  // For audio tab with semantic search, we need to map semantic results to assets
   let displayedAssets = $derived(assetsState.assets);
+
+  // Check if we're in semantic search mode with results
+  let isSemanticMode = $derived(
+    viewState.activeTab === 'audio' &&
+    clapState.semanticSearchEnabled &&
+    clapState.semanticResults.length > 0
+  );
+
+  // Create a map of asset_id to similarity for the current semantic results
+  let similarityMap = $derived.by(() => {
+    const map = new Map<number, number>();
+    for (const result of clapState.semanticResults) {
+      map.set(result.asset_id, result.similarity);
+    }
+    return map;
+  });
+
+  // Get semantic search assets with similarity scores
+  let semanticAssets = $derived.by(() => {
+    if (!isSemanticMode) return [];
+
+    // Map semantic results to full assets with similarity
+    return clapState.semanticResults
+      .map(result => {
+        const asset = displayedAssets.find(a => a.id === result.asset_id);
+        if (asset) {
+          return { ...asset, similarity: result.similarity };
+        }
+        // Asset not in current list, create minimal version
+        return {
+          id: result.asset_id,
+          filename: result.filename,
+          path: result.path,
+          asset_type: 'audio' as const,
+          format: result.filename.split('.').pop() || 'audio',
+          file_size: 0,
+          similarity: result.similarity
+        } as Asset & { similarity: number };
+      });
+  });
 </script>
 
 <div class="flex flex-col h-screen bg-primary">
@@ -105,7 +147,11 @@
           <AssetList assets={displayedAssets} isLoading={assetsState.isLoading} />
         {/if}
       {:else}
-        <AudioList assets={displayedAssets} />
+        {#if isSemanticMode}
+          <AudioList assets={semanticAssets} showSimilarity={true} />
+        {:else}
+          <AudioList assets={displayedAssets} />
+        {/if}
       {/if}
     {/if}
   </main>
@@ -119,4 +165,7 @@
       onPrev={() => viewState.prevImage(displayedAssets)}
     />
   {/if}
+
+  <!-- Toast Notifications -->
+  <ToastContainer />
 </div>

@@ -11,4 +11,6 @@
 - [ ] Unzipping stuff in `get_asset_bytes` should probably be multithreaded, and properly async for the frontend, in the future. E.g. when loading cloud view of assets. Is there a faster zip crate maybe? Can unzipping itself be multithreaded?
 - [ ] Separate projects instead of single default one.
 - [ ] Investigate DB size.
+- [ ] Should plan out proper UI redesign. Basic structure, individual elements, components, better CSS, etc.
+- [ ] No progress/ETA on clap processing stuff.
 
