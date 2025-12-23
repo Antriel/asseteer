@@ -121,9 +121,17 @@ export async function getThumbnail(
 }
 
 /**
- * Get count of pending assets that need processing
+ * Pending asset counts (images and audio only, clap is fetched separately)
  */
-export async function getPendingAssetCounts(db: Database): Promise<PendingCount> {
+export interface AssetPendingCounts {
+	images: number;
+	audio: number;
+}
+
+/**
+ * Get count of pending assets that need processing (images and audio metadata)
+ */
+export async function getPendingAssetCounts(db: Database): Promise<AssetPendingCounts> {
 	// Count images without metadata
 	const imagesResult = await db.select<Array<{ 'COUNT(*)': number }>>(
 		`SELECT COUNT(*) FROM assets a
@@ -138,13 +146,9 @@ export async function getPendingAssetCounts(db: Database): Promise<PendingCount>
 		 WHERE a.asset_type = 'audio' AND am.asset_id IS NULL`
 	);
 
-	const images = imagesResult[0]['COUNT(*)'];
-	const audio = audioResult[0]['COUNT(*)'];
-
 	return {
-		images,
-		audio,
-		total: images + audio
+		images: imagesResult[0]['COUNT(*)'],
+		audio: audioResult[0]['COUNT(*)']
 	};
 }
 
@@ -163,15 +167,6 @@ export interface SemanticSearchResult {
 }
 
 /**
- * Result of CLAP embedding processing
- */
-export interface ProcessClapResult {
-	processed: number;
-	failed: number;
-	errors: string[];
-}
-
-/**
  * Search audio assets semantically using CLAP embeddings
  * Falls back to error if CLAP server is unavailable
  */
@@ -187,16 +182,6 @@ export async function searchAudioSemantic(
  */
 export async function getPendingClapCount(): Promise<number> {
 	return invoke('get_pending_clap_count');
-}
-
-/**
- * Process CLAP embeddings for audio assets
- * @param limit Optional limit on number of assets to process
- */
-export async function processClapEmbeddings(
-	limit?: number
-): Promise<ProcessClapResult> {
-	return invoke('process_clap_embeddings', { limit });
 }
 
 /**

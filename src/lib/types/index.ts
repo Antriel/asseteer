@@ -35,10 +35,11 @@ export interface ScanSession {
 export interface PendingCount {
   images: number;
   audio: number;
+  clap: number;
   total: number;
 }
 
-export type ProcessingCategory = 'image' | 'audio';
+export type ProcessingCategory = 'image' | 'audio' | 'clap';
 
 export interface CategoryProgress {
   category: string;

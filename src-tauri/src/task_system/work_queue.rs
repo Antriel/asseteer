@@ -1,6 +1,6 @@
 /// Work queue with worker pool for processing assets
 use crate::models::{Asset, ProcessingCategory};
-use crate::task_system::processor::process_asset;
+use crate::task_system::processor::{process_asset, process_clap_embedding};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use tokio::time::{interval, Duration};
 
 const BATCH_UPDATE_INTERVAL_SEC: u64 = 2;
@@ -40,10 +40,12 @@ struct CategoryState {
     // Processing details tracking
     current_file: Arc<RwLock<Option<String>>>,
     started_at: Arc<RwLock<Option<i64>>>,
+    // Concurrency limiter - limits how many workers can process this category simultaneously
+    concurrency_limiter: Arc<Semaphore>,
 }
 
 impl CategoryState {
-    fn new() -> Self {
+    fn new(max_concurrent: usize) -> Self {
         Self {
             pause_signal: Arc::new(AtomicBool::new(false)),
             stop_signal: Arc::new(AtomicBool::new(false)),
@@ -53,14 +55,18 @@ impl CategoryState {
             is_running: Arc::new(AtomicBool::new(false)),
             current_file: Arc::new(RwLock::new(None)),
             started_at: Arc::new(RwLock::new(None)),
+            concurrency_limiter: Arc::new(Semaphore::new(max_concurrent)),
         }
     }
 }
 
+/// Work item containing category and asset
+type WorkItem = (ProcessingCategory, Asset);
+
 /// Work queue manages asset processing with a worker pool
 pub struct WorkQueue {
-    work_tx: Sender<Asset>,
-    work_rx: Receiver<Asset>,
+    work_tx: Sender<WorkItem>,
+    work_rx: Receiver<WorkItem>,
     category_states: Arc<RwLock<HashMap<ProcessingCategory, CategoryState>>>,
     worker_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
 }
@@ -80,7 +86,15 @@ impl WorkQueue {
     /// Get or create category state
     async fn ensure_category_state(&self, category: ProcessingCategory) -> CategoryState {
         let mut states = self.category_states.write().await;
-        states.entry(category).or_insert_with(CategoryState::new).clone()
+        states.entry(category).or_insert_with(|| {
+            // CLAP uses single worker (model inference is internally parallelized)
+            // Image/Audio use many workers (CPU-bound work benefits from parallelism)
+            let max_concurrent = match category {
+                ProcessingCategory::Clap => 1,
+                ProcessingCategory::Image | ProcessingCategory::Audio => 100, // effectively unlimited
+            };
+            CategoryState::new(max_concurrent)
+        }).clone()
     }
 
     /// Start processing assets from the work queue for a specific category
@@ -110,10 +124,10 @@ impl WorkQueue {
         state.completed_assets.store(0, Ordering::SeqCst);
         state.failed_assets.store(0, Ordering::SeqCst);
 
-        // Queue all assets
+        // Queue all assets with their category
         for asset in assets {
             self.work_tx
-                .send(asset)
+                .send((category, asset))
                 .map_err(|e| format!("Failed to queue asset: {}", e))?;
         }
 
@@ -155,17 +169,7 @@ impl WorkQueue {
             loop {
                 // Try to get work from queue (non-blocking)
                 match work_rx.try_recv() {
-                    Ok(asset) => {
-                        // Determine asset category
-                        let category = match asset.asset_type.as_str() {
-                            "image" => ProcessingCategory::Image,
-                            "audio" => ProcessingCategory::Audio,
-                            _ => {
-                                println!("[Worker {}] Unknown asset type: {}", worker_id, asset.asset_type);
-                                continue;
-                            }
-                        };
-
+                    Ok((category, asset)) => {
                         // Get category state
                         let state = {
                             let states = category_states.read().await;
@@ -197,20 +201,32 @@ impl WorkQueue {
                             continue;
                         }
 
+                        // Acquire concurrency permit (limits parallel processing per category)
+                        let _permit = state.concurrency_limiter.acquire().await.unwrap();
+
                         // Set current file before processing
                         {
                             let mut current = state.current_file.write().await;
                             *current = Some(asset.filename.clone());
                         }
 
-                        // Process the asset
-                        let result = process_asset(&asset, &db).await;
+                        // Process the asset based on category
+                        let result = match category {
+                            ProcessingCategory::Image | ProcessingCategory::Audio => {
+                                process_asset(&asset, &db).await
+                            }
+                            ProcessingCategory::Clap => {
+                                process_clap_embedding(&asset, &db).await
+                            }
+                        };
 
                         // Clear current file after processing
                         {
                             let mut current = state.current_file.write().await;
                             *current = None;
                         }
+
+                        // Permit is automatically released when _permit goes out of scope
 
                         // Update category-specific counters
                         if result.success {

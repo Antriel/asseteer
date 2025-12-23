@@ -63,7 +63,6 @@ pub fn run() {
             // CLAP semantic search commands
             commands::search::search_audio_semantic,
             commands::search::get_pending_clap_count,
-            commands::search::process_clap_embeddings,
             commands::search::check_clap_server,
             commands::search::start_clap_server,
         ])

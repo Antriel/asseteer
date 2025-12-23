@@ -1,31 +1,25 @@
 /**
  * CLAP (semantic audio search) state management
+ *
+ * Handles CLAP server management and semantic search.
+ * Embedding processing is handled by the unified task system (tasks.svelte.ts).
  */
 
 import {
 	checkClapServer,
 	startClapServer,
-	processClapEmbeddings,
-	getPendingClapCount,
 	searchAudioSemantic,
-	type SemanticSearchResult,
-	type ProcessClapResult
+	type SemanticSearchResult
 } from '$lib/database/queries';
 
 /**
- * CLAP state for semantic search and embedding processing
+ * CLAP state for server management and semantic search
  */
 class ClapState {
 	// Server status
 	serverAvailable = $state(false);
 	serverChecking = $state(false);
 	serverStarting = $state(false);
-
-	// Embedding processing
-	pendingCount = $state(0);
-	isProcessing = $state(false);
-	processProgress = $state<{ processed: number; total: number } | null>(null);
-	lastProcessResult = $state<ProcessClapResult | null>(null);
 
 	// Semantic search
 	semanticSearchEnabled = $state(false);
@@ -71,53 +65,6 @@ class ClapState {
 		} finally {
 			this.serverStarting = false;
 			console.log('[CLAP State] ensureServer finished, serverAvailable:', this.serverAvailable);
-		}
-	}
-
-	/**
-	 * Refresh pending embedding count
-	 */
-	async refreshPendingCount(): Promise<number> {
-		try {
-			this.pendingCount = await getPendingClapCount();
-			return this.pendingCount;
-		} catch (error) {
-			console.error('[CLAP] Failed to get pending count:', error);
-			return 0;
-		}
-	}
-
-	/**
-	 * Process CLAP embeddings for pending audio assets
-	 */
-	async processEmbeddings(batchSize?: number): Promise<ProcessClapResult | null> {
-		if (this.isProcessing) {
-			console.warn('[CLAP] Already processing');
-			return null;
-		}
-
-		// Ensure server is running
-		if (!(await this.ensureServer())) {
-			throw new Error('CLAP server is not available');
-		}
-
-		this.isProcessing = true;
-		this.processProgress = { processed: 0, total: this.pendingCount };
-
-		try {
-			const result = await processClapEmbeddings(batchSize);
-			this.lastProcessResult = result;
-
-			// Refresh pending count after processing
-			await this.refreshPendingCount();
-
-			return result;
-		} catch (error) {
-			console.error('[CLAP] Processing failed:', error);
-			throw error;
-		} finally {
-			this.isProcessing = false;
-			this.processProgress = null;
 		}
 	}
 

@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { getDatabase } from '$lib/database/connection';
-import { getPendingAssetCounts } from '$lib/database/queries';
+import { getPendingAssetCounts, getPendingClapCount } from '$lib/database/queries';
 import type {
   PendingCount,
   ProcessingCategory,
@@ -21,10 +21,10 @@ class ProcessingState {
   categoryProgress = $state(new SvelteMap<ProcessingCategory, CategoryProgress>());
 
   // Categories enabled for processing (using SvelteSet for reactivity)
-  enabledCategories = $state(new SvelteSet<ProcessingCategory>(['image', 'audio']));
+  enabledCategories = $state(new SvelteSet<ProcessingCategory>(['image', 'audio', 'clap']));
 
   // Pending asset count (from database)
-  pendingCount = $state<PendingCount>({ images: 0, audio: 0, total: 0 });
+  pendingCount = $state<PendingCount>({ images: 0, audio: 0, clap: 0, total: 0 });
 
   // Event listeners
   private unlistenFns: UnlistenFn[] = [];
@@ -36,7 +36,7 @@ class ProcessingState {
     // Clean up existing listeners
     this.cleanup();
 
-    const categories: ProcessingCategory[] = ['image', 'audio'];
+    const categories: ProcessingCategory[] = ['image', 'audio', 'clap'];
 
     const listenerPromises = categories.flatMap((category) => [
       listen<CategoryProgress>(`processing-progress-${category}`, (event) => {
@@ -217,10 +217,18 @@ class ProcessingState {
   async refreshPendingCount() {
     try {
       const db = await getDatabase();
-      const count = await getPendingAssetCounts(db);
-      this.pendingCount = count;
-      console.log('[Processing] Pending count updated:', count);
-      return count;
+      const [assetCounts, clapCount] = await Promise.all([
+        getPendingAssetCounts(db),
+        getPendingClapCount(),
+      ]);
+      this.pendingCount = {
+        images: assetCounts.images,
+        audio: assetCounts.audio,
+        clap: clapCount,
+        total: assetCounts.images + assetCounts.audio + clapCount,
+      };
+      console.log('[Processing] Pending count updated:', this.pendingCount);
+      return this.pendingCount;
     } catch (error) {
       console.error('[Processing] Failed to refresh pending count:', error);
       throw error;
@@ -245,6 +253,7 @@ class ProcessingState {
   getPendingCountForCategory(category: ProcessingCategory): number {
     if (category === 'image') return this.pendingCount.images;
     if (category === 'audio') return this.pendingCount.audio;
+    if (category === 'clap') return this.pendingCount.clap;
     return 0;
   }
 

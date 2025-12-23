@@ -74,6 +74,7 @@ impl AssetType {
 pub enum ProcessingCategory {
     Image,
     Audio,
+    Clap,
 }
 
 impl ProcessingCategory {
@@ -81,6 +82,7 @@ impl ProcessingCategory {
         match self {
             ProcessingCategory::Image => "image",
             ProcessingCategory::Audio => "audio",
+            ProcessingCategory::Clap => "clap",
         }
     }
 
@@ -88,14 +90,16 @@ impl ProcessingCategory {
         match s.to_lowercase().as_str() {
             "image" => Ok(ProcessingCategory::Image),
             "audio" => Ok(ProcessingCategory::Audio),
+            "clap" => Ok(ProcessingCategory::Clap),
             _ => Err(format!("Invalid processing category: {}", s)),
         }
     }
 
-    pub fn to_asset_type(&self) -> AssetType {
+    pub fn to_asset_type(&self) -> Option<AssetType> {
         match self {
-            ProcessingCategory::Image => AssetType::Image,
-            ProcessingCategory::Audio => AssetType::Audio,
+            ProcessingCategory::Image => Some(AssetType::Image),
+            ProcessingCategory::Audio => Some(AssetType::Audio),
+            ProcessingCategory::Clap => None, // CLAP is a processing step, not an asset type
         }
     }
 }

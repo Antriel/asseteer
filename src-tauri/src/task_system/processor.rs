@@ -1,4 +1,5 @@
 /// Unified asset processor - handles both thumbnail generation and metadata extraction
+use crate::clap::{embedding_to_blob, ensure_server_running, get_clap_client};
 use crate::models::Asset;
 use crate::utils::load_asset_bytes;
 use image::{DynamicImage, GenericImageView};
@@ -243,6 +244,86 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
             asset_id,
             success: false,
             error: Some("Processing timed out".to_string()),
+        },
+    }
+}
+
+/// Process CLAP embedding for an audio asset
+pub async fn process_clap_embedding(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
+    let asset_id = asset.id;
+
+    // Ensure CLAP server is running (this is a no-op if already running)
+    if let Err(e) = ensure_server_running().await {
+        return ProcessingResult {
+            asset_id,
+            success: false,
+            error: Some(format!("CLAP server unavailable: {}", e)),
+        };
+    }
+
+    let client = get_clap_client().await;
+
+    // Generate embedding - handle ZIP entries vs regular files
+    let embedding_result = if asset.zip_entry.is_some() {
+        // Audio inside ZIP - load bytes and send to server
+        match load_asset_bytes(asset) {
+            Ok(bytes) => client.embed_audio_bytes(bytes, &asset.filename).await,
+            Err(e) => Err(format!("Failed to load asset bytes: {}", e)),
+        }
+    } else {
+        // Regular file - send path directly
+        client.embed_audio_path(&asset.path).await
+    };
+
+    match embedding_result {
+        Ok(embedding) => {
+            // Store embedding in database
+            let blob = embedding_to_blob(&embedding);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+
+            match sqlx::query(
+                "INSERT INTO audio_embeddings (asset_id, embedding, created_at)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT (asset_id) DO UPDATE SET
+                     embedding = excluded.embedding,
+                     created_at = excluded.created_at",
+            )
+            .bind(asset_id)
+            .bind(&blob)
+            .bind(now)
+            .execute(db)
+            .await
+            {
+                Ok(_) => {
+                    // Mark any existing errors as resolved
+                    let _ = sqlx::query(
+                        "UPDATE processing_errors SET resolved_at = ? WHERE asset_id = ? AND category = 'clap' AND resolved_at IS NULL"
+                    )
+                    .bind(now)
+                    .bind(asset_id)
+                    .execute(db)
+                    .await;
+
+                    ProcessingResult {
+                        asset_id,
+                        success: true,
+                        error: None,
+                    }
+                }
+                Err(e) => ProcessingResult {
+                    asset_id,
+                    success: false,
+                    error: Some(format!("Failed to save embedding: {}", e)),
+                },
+            }
+        }
+        Err(e) => ProcessingResult {
+            asset_id,
+            success: false,
+            error: Some(e),
         },
     }
 }
