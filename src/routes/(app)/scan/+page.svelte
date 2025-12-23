@@ -2,14 +2,15 @@
   import { invoke } from '@tauri-apps/api/core';
   import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { open } from '@tauri-apps/plugin-dialog';
-  import { onDestroy } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { uiState } from '$lib/state/ui.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
   import { processingState } from '$lib/state/tasks.svelte';
   import { viewState } from '$lib/state/view.svelte';
   import Spinner from '$lib/components/shared/Spinner.svelte';
 
-  interface ScanProgress {
+  // Event payload from Rust backend
+  interface ScanProgressEvent {
     phase: 'discovering' | 'inserting' | 'complete';
     files_found: number;
     files_inserted: number;
@@ -19,31 +20,43 @@
   }
 
   let unlisten: UnlistenFn | null = null;
-  let scanPhase = $state<'idle' | 'discovering' | 'inserting' | 'complete'>('idle');
-  let filesFound = $state(0);
-  let filesInserted = $state(0);
-  let filesTotal = $state(0);
-  let zipsScanned = $state(0);
-  let currentPath = $state<string | null>(null);
+
+  // Re-establish listener on mount if scan is in progress
+  onMount(async () => {
+    if (uiState.isScanning && !unlisten) {
+      unlisten = await listen<ScanProgressEvent>('scan-progress', (event) => {
+        handleProgress(event.payload);
+      });
+    }
+  });
 
   onDestroy(() => {
     if (unlisten) {
       unlisten();
+      unlisten = null;
     }
   });
 
-  function formatProgress(progress: ScanProgress): string {
-    if (progress.phase === 'discovering') {
-      const zipInfo = progress.zips_scanned > 0 ? ` (${progress.zips_scanned} zips)` : '';
-      return `Discovering files... ${progress.files_found} found${zipInfo}`;
-    }
-    if (progress.phase === 'inserting') {
-      const pct = progress.files_total > 0
-        ? Math.round((progress.files_inserted / progress.files_total) * 100)
+  function handleProgress(event: ScanProgressEvent) {
+    uiState.scanDetails.phase = event.phase;
+    uiState.scanDetails.filesFound = event.files_found;
+    uiState.scanDetails.filesInserted = event.files_inserted;
+    uiState.scanDetails.filesTotal = event.files_total;
+    uiState.scanDetails.zipsScanned = event.zips_scanned;
+
+    // Update summary progress string
+    const details = uiState.scanDetails;
+    if (event.phase === 'discovering') {
+      const zipInfo = event.zips_scanned > 0 ? ` (${event.zips_scanned} zips)` : '';
+      uiState.scanProgress = `Discovering files... ${event.files_found} found${zipInfo}`;
+    } else if (event.phase === 'inserting') {
+      const pct = event.files_total > 0
+        ? Math.round((event.files_inserted / event.files_total) * 100)
         : 0;
-      return `Saving to database... ${progress.files_inserted}/${progress.files_total} (${pct}%)`;
+      uiState.scanProgress = `Saving to database... ${event.files_inserted}/${event.files_total} (${pct}%)`;
+    } else {
+      uiState.scanProgress = `Scan complete! ${event.files_found} assets discovered.`;
     }
-    return `Scan complete! ${progress.files_found} assets discovered.`;
   }
 
   async function selectFolder() {
@@ -65,28 +78,19 @@
   async function startScan(path: string) {
     uiState.isScanning = true;
     uiState.scanProgress = 'Starting scan...';
-    scanPhase = 'discovering';
-    filesFound = 0;
-    filesInserted = 0;
-    filesTotal = 0;
-    zipsScanned = 0;
-    currentPath = path;
+    uiState.resetScanDetails();
+    uiState.scanDetails.phase = 'discovering';
+    uiState.scanDetails.currentPath = path;
 
     // Set up progress listener
-    unlisten = await listen<ScanProgress>('scan-progress', (event) => {
-      const progress = event.payload;
-      uiState.scanProgress = formatProgress(progress);
-      scanPhase = progress.phase;
-      filesFound = progress.files_found;
-      filesInserted = progress.files_inserted;
-      filesTotal = progress.files_total;
-      zipsScanned = progress.zips_scanned;
+    unlisten = await listen<ScanProgressEvent>('scan-progress', (event) => {
+      handleProgress(event.payload);
     });
 
     try {
       const sessionId = await invoke<number>('start_scan', { rootPath: path });
       uiState.currentSessionId = sessionId;
-      scanPhase = 'complete';
+      uiState.scanDetails.phase = 'complete';
 
       // Reload assets for current tab and refresh pending count
       const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
@@ -99,12 +103,12 @@
       // Clear progress message after delay
       setTimeout(() => {
         uiState.scanProgress = '';
-        scanPhase = 'idle';
+        uiState.scanDetails.phase = 'idle';
       }, 5000);
     } catch (error) {
       console.error('Failed to scan:', error);
       uiState.scanProgress = `Error: ${error}`;
-      scanPhase = 'idle';
+      uiState.scanDetails.phase = 'idle';
     } finally {
       uiState.isScanning = false;
       // Clean up listener
@@ -116,7 +120,9 @@
   }
 
   let progressPercent = $derived(
-    filesTotal > 0 ? Math.round((filesInserted / filesTotal) * 100) : 0
+    uiState.scanDetails.filesTotal > 0
+      ? Math.round((uiState.scanDetails.filesInserted / uiState.scanDetails.filesTotal) * 100)
+      : 0
   );
 </script>
 
@@ -138,28 +144,28 @@
           </div>
 
           <h3 class="text-lg font-semibold text-primary text-center mb-2">
-            {#if scanPhase === 'discovering'}
+            {#if uiState.scanDetails.phase === 'discovering'}
               Discovering Files
-            {:else if scanPhase === 'inserting'}
+            {:else if uiState.scanDetails.phase === 'inserting'}
               Saving to Database
             {:else}
               Scanning...
             {/if}
           </h3>
 
-          {#if scanPhase === 'discovering'}
+          {#if uiState.scanDetails.phase === 'discovering'}
             <div class="text-center mb-4">
-              <p class="text-3xl font-bold text-accent">{filesFound}</p>
+              <p class="text-3xl font-bold text-accent">{uiState.scanDetails.filesFound}</p>
               <p class="text-sm text-secondary">files found</p>
-              {#if zipsScanned > 0}
-                <p class="text-xs text-tertiary mt-1">{zipsScanned} zip archives scanned</p>
+              {#if uiState.scanDetails.zipsScanned > 0}
+                <p class="text-xs text-tertiary mt-1">{uiState.scanDetails.zipsScanned} zip archives scanned</p>
               {/if}
             </div>
-          {:else if scanPhase === 'inserting'}
+          {:else if uiState.scanDetails.phase === 'inserting'}
             <div class="mb-4">
               <div class="flex items-center justify-between text-sm mb-2">
                 <span class="text-secondary">Progress</span>
-                <span class="text-primary font-medium">{filesInserted} / {filesTotal}</span>
+                <span class="text-primary font-medium">{uiState.scanDetails.filesInserted} / {uiState.scanDetails.filesTotal}</span>
               </div>
               <div class="h-2 bg-tertiary rounded-full overflow-hidden">
                 <div
@@ -171,12 +177,12 @@
             </div>
           {/if}
 
-          <p class="text-xs text-tertiary text-center truncate" title={currentPath}>
-            {currentPath}
+          <p class="text-xs text-tertiary text-center truncate" title={uiState.scanDetails.currentPath}>
+            {uiState.scanDetails.currentPath}
           </p>
         </div>
       </div>
-    {:else if scanPhase === 'complete'}
+    {:else if uiState.scanDetails.phase === 'complete'}
       <!-- Scan complete -->
       <div class="text-center">
         <div class="w-20 h-20 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-4">
@@ -185,7 +191,7 @@
           </svg>
         </div>
         <h3 class="text-xl font-semibold text-primary mb-2">Scan Complete</h3>
-        <p class="text-secondary mb-2">{filesFound} assets discovered</p>
+        <p class="text-secondary mb-2">{uiState.scanDetails.filesFound} assets discovered</p>
         <div class="flex items-center justify-center gap-4 mt-6">
           <button
             onclick={selectFolder}
