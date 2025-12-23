@@ -73,8 +73,8 @@ pub async fn ensure_server_running() -> Result<(), String> {
             "5555",
         ])
         .current_dir(&clap_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::inherit()) // Don't pipe - buffer fills and blocks process
+        .stderr(Stdio::inherit())
         .spawn()
         .map_err(|e| format!("Failed to start CLAP server: {} (python: {:?})", e, python_path))?;
 
