@@ -1,35 +1,43 @@
 @import "tailwindcss";
 
-/* Define custom properties for theming */
+/* Define custom properties for theming - Dark minimal by default */
 :root {
-  /* Light mode colors */
-  --color-bg-primary: #ffffff;
-  --color-bg-secondary: #f9fafb;
-  --color-bg-tertiary: #f3f4f6;
-  --color-text-primary: #111827;
-  --color-text-secondary: #6b7280;
-  --color-text-tertiary: #9ca3af;
-  --color-border-default: #e5e7eb;
-  --color-border-light: #f3f4f6;
-  --color-accent: #3b82f6;
-  --color-accent-hover: #2563eb;
-  --color-accent-light: #dbeafe;
+  /* Dark mode colors (default) */
+  --color-bg-primary: #0f1419;
+  --color-bg-secondary: #1a1f26;
+  --color-bg-tertiary: #252b33;
+  --color-bg-elevated: #2d333b;
+  --color-text-primary: #e7e9ea;
+  --color-text-secondary: #8b98a5;
+  --color-text-tertiary: #6e7681;
+  --color-border-default: #2f363d;
+  --color-border-light: #3d444d;
+  --color-accent: #58a6ff;
+  --color-accent-hover: #79b8ff;
+  --color-accent-light: rgba(88, 166, 255, 0.15);
+  --color-success: #3fb950;
+  --color-warning: #d29922;
+  --color-error: #f85149;
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root {
-    /* Dark mode colors */
-    --color-bg-primary: #111827;
-    --color-bg-secondary: #1f2937;
-    --color-bg-tertiary: #374151;
-    --color-text-primary: #f9fafb;
-    --color-text-secondary: #d1d5db;
-    --color-text-tertiary: #9ca3af;
-    --color-border-default: #374151;
-    --color-border-light: #4b5563;
-    --color-accent: #3b82f6;
-    --color-accent-hover: #60a5fa;
-    --color-accent-light: #1e3a8a;
+    /* Light mode colors */
+    --color-bg-primary: #ffffff;
+    --color-bg-secondary: #f6f8fa;
+    --color-bg-tertiary: #eaeef2;
+    --color-bg-elevated: #ffffff;
+    --color-text-primary: #1f2328;
+    --color-text-secondary: #656d76;
+    --color-text-tertiary: #8b949e;
+    --color-border-default: #d0d7de;
+    --color-border-light: #eaeef2;
+    --color-accent: #0969da;
+    --color-accent-hover: #0550ae;
+    --color-accent-light: rgba(9, 105, 218, 0.1);
+    --color-success: #1a7f37;
+    --color-warning: #9a6700;
+    --color-error: #cf222e;
   }
 }
 
@@ -91,6 +99,57 @@ body {
 
 .bg-accent-light {
   background-color: var(--color-accent-light);
+}
+
+.bg-elevated {
+  background-color: var(--color-bg-elevated);
+}
+
+.bg-accent-muted {
+  background-color: var(--color-accent-light);
+}
+
+.text-success {
+  color: var(--color-success);
+}
+
+.text-warning {
+  color: var(--color-warning);
+}
+
+.text-error {
+  color: var(--color-error);
+}
+
+.bg-success {
+  background-color: var(--color-success);
+}
+
+.bg-warning {
+  background-color: var(--color-warning);
+}
+
+.bg-error {
+  background-color: var(--color-error);
+}
+
+/* Transitions */
+.transition-default {
+  transition: all 150ms ease-out;
+}
+
+.transition-colors {
+  transition: color 150ms ease-out, background-color 150ms ease-out, border-color 150ms ease-out;
+}
+
+/* Hover lift effect */
+.hover-lift:hover {
+  transform: translateY(-1px);
+}
+
+/* Sidebar gradient */
+.sidebar-gradient {
+  background: linear-gradient(180deg, var(--color-bg-secondary) 0%, var(--color-bg-primary) 100%);
 }
 
 /* Utility classes for repeated patterns (3+ uses) */

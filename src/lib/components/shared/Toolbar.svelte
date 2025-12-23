@@ -5,6 +5,7 @@
   import { showToast } from '$lib/state/ui.svelte';
   import ViewModeToggle from './ViewModeToggle.svelte';
   import Spinner from './Spinner.svelte';
+  import { SearchIcon } from '$lib/components/icons';
 
   let searchInput = $state('');
 
@@ -73,9 +74,7 @@
         <Spinner size="sm" />
       </div>
     {:else}
-      <svg class="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-secondary pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-      </svg>
+      <SearchIcon size="sm" class="absolute left-2 top-1/2 -translate-y-1/2 text-secondary pointer-events-none" />
     {/if}
     <input
       type="text"

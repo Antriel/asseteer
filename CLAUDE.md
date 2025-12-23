@@ -96,3 +96,18 @@ See `src/lib/database/CLAUDE.md` for query patterns.
 - **Reactivity with Maps**: Use `SvelteMap` from `svelte/reactivity`
 - **State export**: Direct for `$state`, functions for derived values
 - **Tauri plugins**: Use built-in plugins (`@tauri-apps/plugin-dialog`, etc.) over custom commands
+
+## UI Structure
+
+**Routes** (`src/routes/`):
+- `/library` - Asset browser (images/audio tabs)
+- `/processing` - Processing dashboard
+- `/scan` - Folder scanning
+
+**Layout**: Root layout has sidebar + status bar. Processing state initialized once in root layout.
+
+**Icons**: Use `$lib/components/icons` (AudioIcon, PlayIcon, PauseIcon, SearchIcon, etc.) instead of inline SVGs.
+
+**Virtual Scrolling**: Use `VirtualList` for simple lists. ImageGrid/AssetList have specialized implementations.
+
+**Colors**: `bg-primary/secondary/tertiary/elevated`, `text-success/warning/error`, `bg-accent-muted`

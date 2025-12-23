@@ -9,19 +9,8 @@
   import type { ProcessingCategory } from '$lib/types';
   import ProcessingCategoryCard from './ProcessingCategoryCard.svelte';
   import ClapProcessingCard from './ClapProcessingCard.svelte';
-  import { onMount, onDestroy } from 'svelte';
 
-  // Initialize listeners on mount
-  onMount(async () => {
-    await processingState.initializeListeners();
-    await processingState.refreshProgress();
-    await processingState.refreshPendingCount();
-  });
-
-  // Cleanup on destroy
-  onDestroy(() => {
-    processingState.cleanup();
-  });
+  // Note: Listeners are initialized in root layout, no need to initialize here
 
   // Derived state
   let overallProgress = $derived(getOverallProgress(processingState));

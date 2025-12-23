@@ -2,15 +2,17 @@
   import { untrack } from 'svelte';
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import type { Asset } from '$lib/types';
+  import { PlayIcon, PauseIcon } from './icons';
 
   interface Props {
     asset: Asset;
     isActive?: boolean;
+    autoPlay?: boolean;
     onPlay?: () => void;
     onPause?: () => void;
   }
 
-  let { asset, isActive = false, onPlay, onPause }: Props = $props();
+  let { asset, isActive = false, autoPlay = false, onPlay, onPause }: Props = $props();
 
   let audioElement = $state<HTMLAudioElement>();
   let isPlaying = $state(false);
@@ -137,6 +139,18 @@
       isPlaying = false;
     }
   });
+
+  // Auto-play when loading completes and autoPlay is true
+  $effect(() => {
+    if (autoPlay && !loading && audioSrc && audioElement && !isPlaying) {
+      audioElement.play().then(() => {
+        isPlaying = true;
+        onPlay?.();
+      }).catch((error) => {
+        console.error('Auto-play failed:', error);
+      });
+    }
+  });
 </script>
 
 <div class="flex items-center gap-3">
@@ -158,16 +172,12 @@
       class="w-8 h-8 flex items-center justify-center bg-accent text-white border-none rounded-full cursor-pointer hover:opacity-90 transition-opacity flex-shrink-0"
       onclick={togglePlay}
     >
-    {#if isPlaying}
-      <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
-      </svg>
-    {:else}
-      <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
-      </svg>
-    {/if}
-  </button>
+      {#if isPlaying}
+        <PauseIcon size="sm" circled />
+      {:else}
+        <PlayIcon size="sm" circled />
+      {/if}
+    </button>
 
   <!-- Progress bar -->
   <div
