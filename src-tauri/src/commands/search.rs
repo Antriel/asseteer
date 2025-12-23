@@ -70,7 +70,6 @@ pub async fn get_pending_clap_count(state: State<'_, AppState>) -> Result<i64, S
     let row: (i64,) = sqlx::query_as(
         r#"
         SELECT COUNT(*) FROM assets a
-        JOIN audio_metadata am ON a.id = am.asset_id
         LEFT JOIN audio_embeddings ae ON a.id = ae.asset_id
         WHERE a.asset_type = 'audio' AND ae.asset_id IS NULL
         "#,
@@ -82,7 +81,7 @@ pub async fn get_pending_clap_count(state: State<'_, AppState>) -> Result<i64, S
     Ok(row.0)
 }
 
-/// Process CLAP embeddings for audio assets that have metadata but no embedding
+/// Process CLAP embeddings for audio assets that don't have embeddings yet
 #[tauri::command]
 pub async fn process_clap_embeddings(
     limit: Option<usize>,
@@ -102,7 +101,6 @@ pub async fn process_clap_embeddings(
     let query = format!(
         r#"
         SELECT a.* FROM assets a
-        JOIN audio_metadata am ON a.id = am.asset_id
         LEFT JOIN audio_embeddings ae ON a.id = ae.asset_id
         WHERE a.asset_type = 'audio' AND ae.asset_id IS NULL
         ORDER BY a.id
