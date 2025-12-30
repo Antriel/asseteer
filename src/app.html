@@ -4,10 +4,36 @@
     <meta charset="utf-8" />
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Tauri + SvelteKit + Typescript App</title>
+    <title>Asseteer</title>
+    <script>console.log('[HTML] Head script executing', performance.now());</script>
+    <style>
+      #app-loader {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0f1419;
+        color: #e7e9ea;
+        font-family: system-ui, sans-serif;
+        z-index: 9999;
+      }
+      #app-loader.hidden { display: none; }
+    </style>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
+    <div id="app-loader">Loading...</div>
     <div style="display: contents">%sveltekit.body%</div>
+    <script>
+      // Hide loader once SvelteKit renders
+      const observer = new MutationObserver(() => {
+        if (document.querySelector('[data-sveltekit-hydrate]') || document.querySelector('.h-screen')) {
+          document.getElementById('app-loader')?.classList.add('hidden');
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    </script>
   </body>
 </html>

@@ -33,6 +33,7 @@ class ProcessingState {
    * Initialize event listeners for processing events
    */
   async initializeListeners() {
+    console.time('[Processing] initializeListeners');
     // Clean up existing listeners
     this.cleanup();
 
@@ -51,6 +52,7 @@ class ProcessingState {
     ]);
 
     this.unlistenFns = await Promise.all(listenerPromises);
+    console.timeEnd('[Processing] initializeListeners');
   }
 
   /**
@@ -215,12 +217,15 @@ class ProcessingState {
    * Refresh pending asset count from database
    */
   async refreshPendingCount() {
+    console.time('[Processing] refreshPendingCount');
     try {
       const db = await getDatabase();
+      console.time('[Processing] getPendingCounts queries');
       const [assetCounts, clapCount] = await Promise.all([
         getPendingAssetCounts(db),
         getPendingClapCount(),
       ]);
+      console.timeEnd('[Processing] getPendingCounts queries');
       this.pendingCount = {
         images: assetCounts.images,
         audio: assetCounts.audio,
@@ -232,6 +237,8 @@ class ProcessingState {
     } catch (error) {
       console.error('[Processing] Failed to refresh pending count:', error);
       throw error;
+    } finally {
+      console.timeEnd('[Processing] refreshPendingCount');
     }
   }
 

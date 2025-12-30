@@ -8,7 +8,9 @@ let db: Database | null = null;
  */
 export async function getDatabase(): Promise<Database> {
 	if (!db) {
+		console.time('[DB Frontend] Database.load');
 		db = await Database.load('sqlite:asseteer.db');
+		console.timeEnd('[DB Frontend] Database.load');
 	}
 	return db;
 }

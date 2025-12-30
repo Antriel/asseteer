@@ -25,10 +25,14 @@
   }
 
   onMount(async () => {
+    console.log('[Library] onMount started');
+    console.time('[Library] refreshAssetCounts');
     await refreshAssetCounts();
+    console.timeEnd('[Library] refreshAssetCounts');
 
     // Load initial assets (images by default)
-    assetsState.loadAssets('image');
+    console.time('[Library] loadAssets');
+    assetsState.loadAssets('image').then(() => console.timeEnd('[Library] loadAssets'));
 
     // Listen for scan completion to refresh counts
     const unlistenScan = await listen('scan-complete', async () => {
