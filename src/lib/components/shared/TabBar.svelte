@@ -18,9 +18,7 @@
 
 <div class="flex items-center gap-1 border-b border-default bg-secondary px-4">
   <button
-    class="flex items-center gap-2 px-4 py-3 border-b-2 border-transparent font-medium text-secondary transition-all hover:text-primary"
-    class:!text-accent={viewState.activeTab === 'images'}
-    class:!border-accent={viewState.activeTab === 'images'}
+    class="flex items-center gap-2 px-4 py-3 border-b-2 font-medium transition-all hover:text-primary {viewState.activeTab === 'images' ? 'text-accent border-accent' : 'text-secondary border-transparent'}"
     onclick={() => switchTab('images')}
   >
     Images
@@ -28,9 +26,7 @@
   </button>
 
   <button
-    class="flex items-center gap-2 px-4 py-3 border-b-2 border-transparent font-medium text-secondary transition-all hover:text-primary"
-    class:!text-accent={viewState.activeTab === 'audio'}
-    class:!border-accent={viewState.activeTab === 'audio'}
+    class="flex items-center gap-2 px-4 py-3 border-b-2 font-medium transition-all hover:text-primary {viewState.activeTab === 'audio' ? 'text-accent border-accent' : 'text-secondary border-transparent'}"
     onclick={() => switchTab('audio')}
   >
     Audio

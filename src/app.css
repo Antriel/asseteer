@@ -42,6 +42,10 @@
 }
 
 /* Base styles - Tailwind Preflight handles the reset */
+button {
+  cursor: pointer;
+}
+
 html,
 body {
   min-height: 100vh;
@@ -86,6 +90,10 @@ body {
 
 .text-accent {
   color: var(--color-accent);
+}
+
+.border-accent {
+  border-color: var(--color-accent);
 }
 
 .bg-accent {
