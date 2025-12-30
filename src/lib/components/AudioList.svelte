@@ -3,6 +3,7 @@
   import AudioPlayer from './AudioPlayer.svelte';
   import VirtualList from './shared/VirtualList.svelte';
   import { AudioIcon, PlayIcon, PauseIcon } from './icons';
+  import Badge from './shared/Badge.svelte';
 
   // Extended asset type with optional similarity score
   type AudioAsset = Asset & { similarity?: number };
@@ -34,6 +35,14 @@
 
   function formatFileSize(bytes: number): string {
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  function formatLocation(asset: Asset): string {
+    if (asset.zip_entry) {
+      const zipName = asset.path.split(/[\\/]/).pop() || asset.path;
+      return `${zipName}/${asset.zip_entry}`;
+    }
+    return asset.path;
   }
 
   function playAsset(asset: Asset) {
@@ -100,6 +109,7 @@
               class:!bg-accent-light={selectedAsset?.id === asset.id}
               class:!border-accent={selectedAsset?.id === asset.id}
               onclick={() => playAsset(asset)}
+              title={formatLocation(asset)}
             >
               <!-- Audio icon -->
               <div class="w-12 h-12 flex items-center justify-center bg-primary rounded-lg flex-shrink-0">
@@ -108,9 +118,14 @@
 
               <!-- Audio metadata -->
               <div class="flex-1 min-w-0">
-                <p class="font-semibold text-primary whitespace-nowrap overflow-hidden text-ellipsis">
-                  {asset.filename}
-                </p>
+                <div class="flex items-center gap-2">
+                  <p class="font-semibold text-primary whitespace-nowrap overflow-hidden text-ellipsis">
+                    {asset.filename}
+                  </p>
+                  {#if asset.zip_entry}
+                    <Badge variant="info">ZIP</Badge>
+                  {/if}
+                </div>
                 <div class="flex gap-4 mt-1 text-xs text-secondary">
                   {#if asset.duration_ms}
                     <span>{formatDuration(asset.duration_ms)}</span>
