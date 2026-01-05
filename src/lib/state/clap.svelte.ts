@@ -12,6 +12,9 @@ import {
 	type SemanticSearchResult
 } from '$lib/database/queries';
 
+// Maximum number of semantic search results to display
+const MAX_SEMANTIC_RESULTS = 500;
+
 /**
  * CLAP state for server management and semantic search
  */
@@ -26,6 +29,7 @@ class ClapState {
 	semanticResults = $state<SemanticSearchResult[]>([]);
 	isSearching = $state(false);
 	lastSearchQuery = $state('');
+	hasMoreResults = $state(false);
 
 	// Search cancellation tracking
 	private searchVersion = 0;
@@ -74,7 +78,7 @@ class ClapState {
 	/**
 	 * Perform semantic search with cancellation support
 	 */
-	async search(query: string, limit: number = 50): Promise<SemanticSearchResult[]> {
+	async search(query: string, limit: number = MAX_SEMANTIC_RESULTS): Promise<SemanticSearchResult[]> {
 		// Increment version to cancel any in-progress search
 		const currentVersion = ++this.searchVersion;
 
@@ -82,6 +86,7 @@ class ClapState {
 			this.semanticResults = [];
 			this.lastSearchQuery = '';
 			this.isSearching = false;
+			this.hasMoreResults = false;
 			return [];
 		}
 
@@ -89,6 +94,7 @@ class ClapState {
 		this.semanticResults = [];
 		this.isSearching = true;
 		this.lastSearchQuery = query;
+		this.hasMoreResults = false;
 
 		// Ensure server is running
 		if (!(await this.ensureServer())) {
@@ -106,13 +112,15 @@ class ClapState {
 		}
 
 		try {
-			const results = await searchAudioSemantic(query, limit);
+			// Request one extra to detect if there are more results
+			const results = await searchAudioSemantic(query, limit + 1);
 
 			// Only update results if this search is still current
 			if (currentVersion === this.searchVersion) {
-				this.semanticResults = results;
+				this.hasMoreResults = results.length > limit;
+				this.semanticResults = results.slice(0, limit);
 				this.isSearching = false;
-				return results;
+				return this.semanticResults;
 			}
 			// Search was cancelled, don't update state
 			return [];
@@ -135,6 +143,7 @@ class ClapState {
 		this.semanticResults = [];
 		this.lastSearchQuery = '';
 		this.semanticSearchEnabled = false;
+		this.hasMoreResults = false;
 	}
 
 	/**

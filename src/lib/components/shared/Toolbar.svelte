@@ -131,14 +131,32 @@
   <ViewModeToggle />
 
   <!-- Stats -->
-  <div class="ml-auto">
+  <div class="ml-auto flex items-center gap-2">
     {#if isAudioTab && clapState.semanticSearchEnabled && clapState.semanticResults.length > 0}
       <span class="text-sm text-purple-600 dark:text-purple-400">
         {clapState.semanticResults.length} matches
       </span>
-    {:else}
+      {#if clapState.hasMoreResults}
+        <span class="text-xs text-warning" title="Results are limited for performance">
+          (limit reached)
+        </span>
+      {/if}
+    {:else if assetsState.assets.length > 0}
       <span class="text-sm text-secondary">
-        {assetsState.assets.length} {viewState.activeTab}
+        {assetsState.assets.length.toLocaleString()} {viewState.activeTab}
+      </span>
+      {#if assetsState.hasMoreResults}
+        <span class="text-xs text-warning" title="Results are limited for performance. Refine your search to see more specific results.">
+          (limit reached)
+        </span>
+      {/if}
+    {:else if assetsState.searchText?.trim()}
+      <span class="text-sm text-secondary">
+        No results
+      </span>
+    {:else}
+      <span class="text-sm text-tertiary">
+        Search to browse
       </span>
     {/if}
   </div>
