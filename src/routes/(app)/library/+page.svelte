@@ -59,18 +59,13 @@
     unlistenFns.forEach((fn) => fn());
   });
 
-  // Assets are already filtered by loadAssets() based on the current tab
-  let displayedAssets = $derived(assetsState.assets);
-
-  // Check if we're in semantic search mode with results
-  let isSemanticMode = $derived(
+  // Check if we're in semantic search mode on audio tab
+  let isSemanticModeEnabled = $derived(
     viewState.activeTab === 'audio' &&
-    clapState.semanticSearchEnabled &&
-    clapState.semanticResults.length > 0
+    clapState.semanticSearchEnabled
   );
 
-  // Semantic search results now include full asset data, so we can use them directly
-  // Just need to add width/height as null for Asset compatibility
+  // Semantic search results with Asset compatibility (add width/height as null)
   let semanticAssets = $derived(
     clapState.semanticResults.map(result => ({
       ...result,
@@ -79,8 +74,27 @@
     }))
   );
 
-  // Track if user has an active search (for empty state display)
-  let hasSearch = $derived(!!assetsState.searchText?.trim());
+  // Unified "active assets" - what should be displayed based on current mode
+  let activeAssets = $derived(
+    isSemanticModeEnabled ? semanticAssets : assetsState.assets
+  );
+
+  // Unified "has search" - whether there's an active search query
+  let hasActiveSearch = $derived(
+    isSemanticModeEnabled
+      ? !!clapState.lastSearchQuery?.trim()
+      : !!assetsState.searchText?.trim()
+  );
+
+  // Unified "is loading" - whether a search is in progress
+  let isLoading = $derived(
+    isSemanticModeEnabled ? clapState.isSearching : assetsState.isLoading
+  );
+
+  // Unified "has more results" - whether results were truncated
+  let hasMoreResults = $derived(
+    isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults
+  );
 </script>
 
 <div class="flex flex-col h-full overflow-hidden">
@@ -92,12 +106,12 @@
 
   <!-- Main Content Area -->
   <main class="flex-1 overflow-hidden relative">
-    {#if assetsState.isLoading}
+    {#if isLoading}
       <div class="flex flex-col items-center justify-center h-full gap-4">
         <Spinner size="lg" />
-        <p class="text-secondary">Loading assets...</p>
+        <p class="text-secondary">{isSemanticModeEnabled ? 'Searching...' : 'Loading assets...'}</p>
       </div>
-    {:else if !hasSearch && !isSemanticMode && displayedAssets.length === 0}
+    {:else if !hasActiveSearch && activeAssets.length === 0}
       <!-- Empty state: No search query - prompt user to search -->
       <div class="flex flex-col items-center justify-center h-full gap-4">
         <svg class="w-16 h-16 text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -112,7 +126,7 @@
           {/if}
         </p>
       </div>
-    {:else if displayedAssets.length === 0}
+    {:else if activeAssets.length === 0}
       <!-- Empty state: Search returned no results -->
       <div class="flex flex-col items-center justify-center h-full gap-4">
         <svg class="w-16 h-16 text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -124,17 +138,13 @@
     {:else}
       {#if viewState.activeTab === 'images'}
         {#if viewState.layoutMode === 'grid'}
-          <ImageGrid assets={displayedAssets} />
+          <ImageGrid assets={activeAssets} />
         {:else}
           <!-- Table view for images -->
-          <AssetList assets={displayedAssets} isLoading={assetsState.isLoading} />
+          <AssetList assets={activeAssets} isLoading={assetsState.isLoading} />
         {/if}
       {:else}
-        {#if isSemanticMode}
-          <AudioList assets={semanticAssets} showSimilarity={true} />
-        {:else}
-          <AudioList assets={displayedAssets} />
-        {/if}
+        <AudioList assets={activeAssets} showSimilarity={isSemanticModeEnabled} />
       {/if}
     {/if}
   </main>
@@ -144,8 +154,8 @@
     <ImageLightbox
       asset={viewState.lightboxAsset}
       onClose={() => viewState.closeLightbox()}
-      onNext={() => viewState.nextImage(displayedAssets)}
-      onPrev={() => viewState.prevImage(displayedAssets)}
+      onNext={() => viewState.nextImage(activeAssets)}
+      onPrev={() => viewState.prevImage(activeAssets)}
     />
   {/if}
 </div>

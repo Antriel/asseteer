@@ -27,7 +27,10 @@ class AssetsState {
     // Increment version to cancel any in-progress search
     const currentVersion = ++this.searchVersion;
 
+    // Clear previous results and show loading state immediately
+    this.assets = [];
     this.isLoading = true;
+    this.hasMoreResults = false;
 
     try {
       const db = await getDatabase();

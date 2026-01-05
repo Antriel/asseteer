@@ -76,13 +76,28 @@
     }
   }
 
+  // Check if semantic mode is active
+  let isSemanticModeEnabled = $derived(isAudioTab && clapState.semanticSearchEnabled);
+
+  // Unified stats - what to show in the toolbar
+  let activeResultCount = $derived(
+    isSemanticModeEnabled ? clapState.semanticResults.length : assetsState.assets.length
+  );
+  let hasActiveSearch = $derived(
+    isSemanticModeEnabled
+      ? !!clapState.lastSearchQuery?.trim()
+      : !!assetsState.searchText?.trim()
+  );
+  let hasMoreResults = $derived(
+    isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults
+  );
+
   // Placeholder text based on search mode
-  let placeholderText = $derived.by(() => {
-    if (isAudioTab && clapState.semanticSearchEnabled) {
-      return 'Semantic search (e.g., "footsteps on wood")...';
-    }
-    return `Search ${viewState.activeTab}...`;
-  });
+  let placeholderText = $derived(
+    isSemanticModeEnabled
+      ? 'Semantic search (e.g., "footsteps on wood")...'
+      : `Search ${viewState.activeTab}...`
+  );
 </script>
 
 <div class="flex items-center gap-4 px-4 py-3 bg-secondary border-b border-default">
@@ -101,8 +116,8 @@
       value={searchInput}
       oninput={handleSearch}
       class="w-full py-2 px-2 pl-8 border border-default rounded-md bg-primary text-primary placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
-      class:!border-purple-500={isAudioTab && clapState.semanticSearchEnabled}
-      class:!ring-purple-500={isAudioTab && clapState.semanticSearchEnabled}
+      class:!border-purple-500={isSemanticModeEnabled}
+      class:!ring-purple-500={isSemanticModeEnabled}
     />
   </div>
 
@@ -111,13 +126,13 @@
     <button
       onclick={toggleSemanticSearch}
       class="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md transition-colors"
-      class:bg-purple-500={clapState.semanticSearchEnabled}
-      class:text-white={clapState.semanticSearchEnabled}
-      class:bg-secondary={!clapState.semanticSearchEnabled}
-      class:text-secondary={!clapState.semanticSearchEnabled}
-      class:hover:bg-purple-600={clapState.semanticSearchEnabled}
-      class:hover:bg-tertiary={!clapState.semanticSearchEnabled}
-      title={clapState.semanticSearchEnabled ? 'Switch to text search' : 'Switch to semantic search'}
+      class:bg-purple-500={isSemanticModeEnabled}
+      class:text-white={isSemanticModeEnabled}
+      class:bg-secondary={!isSemanticModeEnabled}
+      class:text-secondary={!isSemanticModeEnabled}
+      class:hover:bg-purple-600={isSemanticModeEnabled}
+      class:hover:bg-tertiary={!isSemanticModeEnabled}
+      title={isSemanticModeEnabled ? 'Switch to text search' : 'Switch to semantic search'}
     >
       <!-- Brain/AI icon for semantic search -->
       <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -132,25 +147,16 @@
 
   <!-- Stats -->
   <div class="ml-auto flex items-center gap-2">
-    {#if isAudioTab && clapState.semanticSearchEnabled && clapState.semanticResults.length > 0}
-      <span class="text-sm text-purple-600 dark:text-purple-400">
-        {clapState.semanticResults.length} matches
+    {#if activeResultCount > 0}
+      <span class="text-sm" class:text-purple-600={isSemanticModeEnabled} class:dark:text-purple-400={isSemanticModeEnabled} class:text-secondary={!isSemanticModeEnabled}>
+        {activeResultCount.toLocaleString()} {isSemanticModeEnabled ? 'matches' : viewState.activeTab}
       </span>
-      {#if clapState.hasMoreResults}
-        <span class="text-xs text-warning" title="Results are limited for performance">
-          (limit reached)
-        </span>
-      {/if}
-    {:else if assetsState.assets.length > 0}
-      <span class="text-sm text-secondary">
-        {assetsState.assets.length.toLocaleString()} {viewState.activeTab}
-      </span>
-      {#if assetsState.hasMoreResults}
+      {#if hasMoreResults}
         <span class="text-xs text-warning" title="Results are limited for performance. Refine your search to see more specific results.">
           (limit reached)
         </span>
       {/if}
-    {:else if assetsState.searchText?.trim()}
+    {:else if hasActiveSearch}
       <span class="text-sm text-secondary">
         No results
       </span>
