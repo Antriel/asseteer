@@ -8,6 +8,11 @@
   import { SearchIcon } from '$lib/components/icons';
 
   let searchInput = $state('');
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Debounce delay in ms (shorter for FTS, longer for semantic)
+  const FTS_DEBOUNCE_MS = 150;
+  const SEMANTIC_DEBOUNCE_MS = 300;
 
   // Check if we're on the audio tab
   let isAudioTab = $derived(viewState.activeTab === 'audio');
@@ -16,13 +21,22 @@
     const value = (e.target as HTMLInputElement).value;
     searchInput = value;
 
-    if (isAudioTab && clapState.semanticSearchEnabled) {
-      // Semantic search for audio
-      handleSemanticSearch(value);
-    } else {
-      // Regular FTS search
-      assetsState.searchAssets(value, viewState.activeTab === 'images' ? 'image' : 'audio');
+    // Clear any pending debounced search
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
     }
+
+    const isSemanticMode = isAudioTab && clapState.semanticSearchEnabled;
+    const debounceMs = isSemanticMode ? SEMANTIC_DEBOUNCE_MS : FTS_DEBOUNCE_MS;
+
+    // Debounce the actual search
+    debounceTimer = setTimeout(() => {
+      if (isSemanticMode) {
+        handleSemanticSearch(value);
+      } else {
+        assetsState.searchAssets(value, viewState.activeTab === 'images' ? 'image' : 'audio');
+      }
+    }, debounceMs);
   }
 
   async function handleSemanticSearch(query: string) {
@@ -45,6 +59,11 @@
 
   function toggleSemanticSearch() {
     clapState.toggleSemanticSearch();
+
+    // Clear any pending debounced search
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+    }
 
     if (clapState.semanticSearchEnabled) {
       // Re-run search with semantic mode

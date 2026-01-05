@@ -7,13 +7,19 @@ class AssetsState {
   assets = $state<Asset[]>([]);
   isLoading = $state(false);
   totalCount = $state(0);
-  searchText = $state('');
+  searchText = $state("");
+
+  // Search cancellation tracking
+  private searchVersion = 0;
 
   /**
    * Load assets from the database with optional type filter
    * Loads ALL assets since we use virtualization for efficient rendering
    */
-  async loadAssets(assetType?: 'image' | 'audio') {
+  async loadAssets(assetType?: "image" | "audio") {
+    // Increment version to cancel any in-progress search
+    const currentVersion = ++this.searchVersion;
+
     this.isLoading = true;
 
     try {
@@ -25,25 +31,43 @@ class AssetsState {
         db,
         this.searchText || undefined,
         assetType,
-        999999, // High limit to load all assets
-        0       // No offset
+        999999999, // High limit to load all assets
+        0 // No offset
       );
+
+      // Only update if this search is still current
+      if (currentVersion !== this.searchVersion) {
+        return;
+      }
+
       this.assets = result;
 
       // Load total count
       const count = await getAssetCount(db);
+
+      // Check again after count query
+      if (currentVersion !== this.searchVersion) {
+        return;
+      }
+
       this.totalCount = count;
     } catch (error) {
-      console.error('Failed to load assets:', error);
+      // Only log if this search is still current
+      if (currentVersion === this.searchVersion) {
+        console.error("Failed to load assets:", error);
+      }
     } finally {
-      this.isLoading = false;
+      // Only clear loading if this search is still current
+      if (currentVersion === this.searchVersion) {
+        this.isLoading = false;
+      }
     }
   }
 
   /**
    * Search for assets with optional type filter
    */
-  searchAssets(text: string, assetType?: 'image' | 'audio') {
+  searchAssets(text: string, assetType?: "image" | "audio") {
     this.searchText = text;
     this.loadAssets(assetType);
   }
@@ -51,8 +75,8 @@ class AssetsState {
   /**
    * Get filtered assets by type (for derived computations)
    */
-  getFilteredAssets(assetType: 'image' | 'audio'): Asset[] {
-    return this.assets.filter(a => a.asset_type === assetType);
+  getFilteredAssets(assetType: "image" | "audio"): Asset[] {
+    return this.assets.filter((a) => a.asset_type === assetType);
   }
 }
 

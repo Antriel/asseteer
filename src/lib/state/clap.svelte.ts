@@ -27,6 +27,9 @@ class ClapState {
 	isSearching = $state(false);
 	lastSearchQuery = $state('');
 
+	// Search cancellation tracking
+	private searchVersion = 0;
+
 	/**
 	 * Check if CLAP server is available
 	 */
@@ -69,33 +72,59 @@ class ClapState {
 	}
 
 	/**
-	 * Perform semantic search
+	 * Perform semantic search with cancellation support
 	 */
 	async search(query: string, limit: number = 50): Promise<SemanticSearchResult[]> {
+		// Increment version to cancel any in-progress search
+		const currentVersion = ++this.searchVersion;
+
 		if (!query.trim()) {
 			this.semanticResults = [];
 			this.lastSearchQuery = '';
+			this.isSearching = false;
 			return [];
 		}
 
-		// Ensure server is running
-		if (!(await this.ensureServer())) {
-			throw new Error('CLAP server is not available');
-		}
-
+		// Clear previous results and show loading state immediately
+		this.semanticResults = [];
 		this.isSearching = true;
 		this.lastSearchQuery = query;
 
+		// Ensure server is running
+		if (!(await this.ensureServer())) {
+			// Check if this search was cancelled
+			if (currentVersion !== this.searchVersion) {
+				return [];
+			}
+			this.isSearching = false;
+			throw new Error('CLAP server is not available');
+		}
+
+		// Check if cancelled during server startup
+		if (currentVersion !== this.searchVersion) {
+			return [];
+		}
+
 		try {
 			const results = await searchAudioSemantic(query, limit);
-			this.semanticResults = results;
-			return results;
+
+			// Only update results if this search is still current
+			if (currentVersion === this.searchVersion) {
+				this.semanticResults = results;
+				this.isSearching = false;
+				return results;
+			}
+			// Search was cancelled, don't update state
+			return [];
 		} catch (error) {
-			console.error('[CLAP] Search failed:', error);
-			this.semanticResults = [];
-			throw error;
-		} finally {
-			this.isSearching = false;
+			// Only update state if this search is still current
+			if (currentVersion === this.searchVersion) {
+				console.error('[CLAP] Search failed:', error);
+				this.semanticResults = [];
+				this.isSearching = false;
+				throw error;
+			}
+			return [];
 		}
 	}
 
