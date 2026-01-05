@@ -6,7 +6,7 @@
   import { clapState } from '$lib/state/clap.svelte';
   import { getDatabase } from '$lib/database/connection';
   import { getAssetTypeCounts } from '$lib/database/queries';
-  import type { CategoryProgress, Asset } from '$lib/types';
+  import type { CategoryProgress } from '$lib/types';
 
   import TabBar from '$lib/components/shared/TabBar.svelte';
   import Toolbar from '$lib/components/shared/Toolbar.svelte';
@@ -69,38 +69,15 @@
     clapState.semanticResults.length > 0
   );
 
-  // Create a map of asset_id to similarity for the current semantic results
-  let similarityMap = $derived.by(() => {
-    const map = new Map<number, number>();
-    for (const result of clapState.semanticResults) {
-      map.set(result.asset_id, result.similarity);
-    }
-    return map;
-  });
-
-  // Get semantic search assets with similarity scores
-  let semanticAssets = $derived.by(() => {
-    if (!isSemanticMode) return [];
-
-    // Map semantic results to full assets with similarity
-    return clapState.semanticResults
-      .map(result => {
-        const asset = displayedAssets.find(a => a.id === result.asset_id);
-        if (asset) {
-          return { ...asset, similarity: result.similarity };
-        }
-        // Asset not in current list, create minimal version
-        return {
-          id: result.asset_id,
-          filename: result.filename,
-          path: result.path,
-          asset_type: 'audio' as const,
-          format: result.filename.split('.').pop() || 'audio',
-          file_size: 0,
-          similarity: result.similarity
-        } as Asset & { similarity: number };
-      });
-  });
+  // Semantic search results now include full asset data, so we can use them directly
+  // Just need to add width/height as null for Asset compatibility
+  let semanticAssets = $derived(
+    clapState.semanticResults.map(result => ({
+      ...result,
+      width: null,
+      height: null,
+    }))
+  );
 </script>
 
 <div class="flex flex-col h-full overflow-hidden">

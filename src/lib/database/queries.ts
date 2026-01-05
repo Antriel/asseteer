@@ -157,12 +157,24 @@ export async function getPendingAssetCounts(db: Database): Promise<AssetPendingC
 // ============================================================================
 
 /**
- * Result of a semantic search query
+ * Result of a semantic search query - includes full asset data for direct use
  */
 export interface SemanticSearchResult {
-	asset_id: number;
+	// Asset fields
+	id: number;
 	filename: string;
 	path: string;
+	zip_entry: string | null;
+	asset_type: string;
+	format: string;
+	file_size: number;
+	created_at: number;
+	modified_at: number;
+	// Audio metadata (nullable)
+	duration_ms: number | null;
+	sample_rate: number | null;
+	channels: number | null;
+	// Similarity score
 	similarity: number;
 }
 

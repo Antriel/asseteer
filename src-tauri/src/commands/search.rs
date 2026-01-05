@@ -5,13 +5,43 @@ use crate::AppState;
 use serde::Serialize;
 use tauri::State;
 
-/// Result of a semantic search query
+/// Result of a semantic search query - includes full asset data for direct use
 #[derive(Debug, Clone, Serialize)]
 pub struct SemanticSearchResult {
-    pub asset_id: i64,
+    // Asset fields
+    pub id: i64,
     pub filename: String,
     pub path: String,
+    pub zip_entry: Option<String>,
+    pub asset_type: String,
+    pub format: String,
+    pub file_size: i64,
+    pub created_at: i64,
+    pub modified_at: i64,
+    // Audio metadata (nullable)
+    pub duration_ms: Option<i64>,
+    pub sample_rate: Option<i32>,
+    pub channels: Option<i32>,
+    // Similarity score
     pub similarity: f32,
+}
+
+/// Row returned from semantic search query
+#[derive(sqlx::FromRow)]
+struct SemanticSearchRow {
+    id: i64,
+    filename: String,
+    path: String,
+    zip_entry: Option<String>,
+    asset_type: String,
+    format: String,
+    file_size: i64,
+    created_at: i64,
+    modified_at: i64,
+    duration_ms: Option<i64>,
+    sample_rate: Option<i32>,
+    channels: Option<i32>,
+    embedding: Vec<u8>,
 }
 
 /// Semantic search for audio assets using CLAP embeddings
@@ -27,12 +57,17 @@ pub async fn search_audio_semantic(
     // Get query embedding
     let query_embedding = get_clap_client().await.embed_text(&query).await?;
 
-    // Fetch all embeddings from database
-    let rows: Vec<(i64, String, String, Vec<u8>)> = sqlx::query_as(
+    // Fetch all embeddings from database with full asset and audio metadata
+    let rows: Vec<SemanticSearchRow> = sqlx::query_as(
         r#"
-        SELECT a.id, a.filename, a.path, ae.embedding
+        SELECT
+            a.id, a.filename, a.path, a.zip_entry, a.asset_type, a.format,
+            a.file_size, a.created_at, a.modified_at,
+            am.duration_ms, am.sample_rate, am.channels,
+            ae.embedding
         FROM assets a
         JOIN audio_embeddings ae ON a.id = ae.asset_id
+        LEFT JOIN audio_metadata am ON a.id = am.asset_id
         "#,
     )
     .fetch_all(&state.pool)
@@ -41,14 +76,23 @@ pub async fn search_audio_semantic(
 
     // Compute similarities
     let mut results: Vec<SemanticSearchResult> = rows
-        .iter()
-        .map(|(id, filename, path, embedding_blob)| {
-            let embedding = blob_to_embedding(embedding_blob);
+        .into_iter()
+        .map(|row| {
+            let embedding = blob_to_embedding(&row.embedding);
             let similarity = cosine_similarity(&query_embedding, &embedding);
             SemanticSearchResult {
-                asset_id: *id,
-                filename: filename.clone(),
-                path: path.clone(),
+                id: row.id,
+                filename: row.filename,
+                path: row.path,
+                zip_entry: row.zip_entry,
+                asset_type: row.asset_type,
+                format: row.format,
+                file_size: row.file_size,
+                created_at: row.created_at,
+                modified_at: row.modified_at,
+                duration_ms: row.duration_ms,
+                sample_rate: row.sample_rate,
+                channels: row.channels,
                 similarity,
             }
         })
