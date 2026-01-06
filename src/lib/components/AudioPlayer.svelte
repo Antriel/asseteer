@@ -22,6 +22,7 @@
   let audioSrc = $state<string>('');
   let blobUrl = $state<string | null>(null);
   let loading = $state(true);
+  let shouldAutoPlay = $state(false);
 
   // Load audio when asset changes - track only asset properties
   $effect(() => {
@@ -33,6 +34,15 @@
 
     // Use untrack to prevent state updates from re-triggering the effect
     untrack(() => {
+      // Stop current playback immediately
+      if (audioElement) {
+        audioElement.pause();
+        audioElement.currentTime = 0;
+      }
+      isPlaying = false;
+      currentTime = 0;
+      duration = 0;
+
       // Clean up previous blob URL if exists
       if (blobUrl) {
         URL.revokeObjectURL(blobUrl);
@@ -40,6 +50,8 @@
       }
 
       loading = true;
+      // Remember if we should auto-play once loaded
+      shouldAutoPlay = autoPlay;
 
       // Load the new asset
       (async () => {
@@ -69,6 +81,7 @@
           untrack(() => {
             audioSrc = '';
             loading = false;
+            shouldAutoPlay = false;
           });
         }
       })();
@@ -97,8 +110,12 @@
         await audioElement.play();
         isPlaying = true;
         onPlay?.();
-      } catch (error) {
-        console.error('Playback failed:', error);
+      } catch (error: any) {
+        // Ignore AbortError - it's expected when source changes rapidly
+        if (error.name !== 'AbortError') {
+          console.error('Playback failed:', error);
+        }
+        isPlaying = false;
       }
     }
   }
@@ -140,17 +157,22 @@
     }
   });
 
-  // Auto-play when loading completes and autoPlay is true
-  $effect(() => {
-    if (autoPlay && !loading && audioSrc && audioElement && !isPlaying) {
+  // Handle canplay event - this is when the audio is actually ready to play
+  function handleCanPlay() {
+    if (shouldAutoPlay && audioElement) {
+      shouldAutoPlay = false;
       audioElement.play().then(() => {
         isPlaying = true;
         onPlay?.();
       }).catch((error) => {
-        console.error('Auto-play failed:', error);
+        // Ignore AbortError - it's expected when source changes rapidly
+        if (error.name !== 'AbortError') {
+          console.error('Auto-play failed:', error);
+        }
+        isPlaying = false;
       });
     }
-  });
+  }
 </script>
 
 <div class="flex items-center gap-3">
@@ -164,6 +186,7 @@
       src={audioSrc}
       ontimeupdate={handleTimeUpdate}
       onloadedmetadata={handleLoadedMetadata}
+      oncanplay={handleCanPlay}
       onended={handleEnded}
     ></audio>
 
