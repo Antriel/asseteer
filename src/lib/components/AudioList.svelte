@@ -39,10 +39,21 @@
 
   function formatLocation(asset: Asset): string {
     if (asset.zip_entry) {
-      const zipName = asset.path.split(/[\\/]/).pop() || asset.path;
-      return `${zipName}/${asset.zip_entry}`;
+      return `${asset.path}/${asset.zip_entry}`;
     }
     return asset.path;
+  }
+
+  function formatDirectoryPath(asset: Asset): string {
+    if (asset.zip_entry) {
+      // For zip entries, show full zip path + internal path (without filename)
+      const zipEntryParts = asset.zip_entry.split('/');
+      const internalDir = zipEntryParts.slice(0, -1).join('/');
+      return internalDir ? `${asset.path}/${internalDir}` : asset.path;
+    }
+    // For regular files, show directory path only
+    const parts = asset.path.split(/[\\/]/);
+    return parts.slice(0, -1).join('/') || '/';
   }
 
   function playAsset(asset: Asset) {
@@ -118,10 +129,13 @@
 
               <!-- Audio metadata -->
               <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2">
-                  <p class="font-semibold text-primary whitespace-nowrap overflow-hidden text-ellipsis">
+                <div class="flex items-center gap-2 min-w-0">
+                  <p class="font-semibold text-primary whitespace-nowrap overflow-hidden text-ellipsis flex-shrink-0">
                     {asset.filename}
                   </p>
+                  <span class="text-xs text-secondary whitespace-nowrap overflow-hidden text-ellipsis flex-1 min-w-0" style="direction: rtl;">
+                    {formatDirectoryPath(asset)}
+                  </span>
                   {#if asset.zip_entry}
                     <Badge variant="info">ZIP</Badge>
                   {/if}
