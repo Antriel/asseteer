@@ -2,8 +2,9 @@
   import type { Asset } from '$lib/types';
   import AudioPlayer from './AudioPlayer.svelte';
   import VirtualList from './shared/VirtualList.svelte';
-  import { AudioIcon, PlayIcon, PauseIcon } from './icons';
+  import { AudioIcon, PlayIcon, PauseIcon, FolderIcon } from './icons';
   import Badge from './shared/Badge.svelte';
+  import { openPath } from '@tauri-apps/plugin-opener';
 
   // Extended asset type with optional similarity score
   type AudioAsset = Asset & { similarity?: number };
@@ -64,6 +65,25 @@
     selectedAsset = asset;
     shouldAutoPlay = true;
   }
+
+  async function openDirectory(asset: Asset) {
+    try {
+      let dirPath: string;
+
+      if (asset.zip_entry) {
+        // For zip entries, combine zip path with the directory inside the zip
+        const entryDir = asset.zip_entry.replace(/[^/]+$/, ''); // Remove filename, keep directory
+        dirPath = `${asset.path}\\${entryDir.replace(/\//g, '\\')}`;
+      } else {
+        // For regular files, get the directory containing the file
+        dirPath = asset.path.replace(/[^\\]+$/, '');
+      }
+
+      await openPath(dirPath);
+    } catch (error) {
+      console.error('Failed to open directory:', error);
+    }
+  }
 </script>
 
 <div class="flex flex-col gap-4 p-4 h-full overflow-hidden">
@@ -91,6 +111,13 @@
             <span>{selectedAsset.format.toUpperCase()}</span>
           </div>
         </div>
+        <button
+          class="w-8 h-8 flex items-center justify-center text-secondary hover:text-primary border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
+          onclick={() => openDirectory(selectedAsset!)}
+          title="Open folder"
+        >
+          <FolderIcon size="sm" />
+        </button>
       </div>
       <AudioPlayer
         asset={selectedAsset}
