@@ -75,11 +75,13 @@
       playKey++;
       shouldAutoPlay = true;
       shouldContinuePlaying = true;
-      return;
+    } else {
+      selectedAsset = asset;
+      shouldAutoPlay = true;
+      shouldContinuePlaying = true;
     }
-    selectedAsset = asset;
-    shouldAutoPlay = true;
-    shouldContinuePlaying = true;
+    // Refocus container so keyboard navigation continues working
+    containerRef?.focus();
   }
 
   async function openDirectory(asset: Asset) {
@@ -263,7 +265,7 @@
         <div class="flex flex-col gap-2">
           {#each visibleItems as asset, idx (asset.id)}
             <button
-              class="flex items-center gap-4 p-4 bg-secondary border border-default rounded-lg transition-all hover:border-accent cursor-pointer text-left h-20"
+              class="flex items-center gap-4 p-4 bg-secondary border border-default rounded-lg transition-all hover:border-accent cursor-pointer text-left h-20 focus:outline-none"
               class:!bg-accent-light={selectedAsset?.id === asset.id}
               class:!border-accent={selectedAsset?.id === asset.id}
               onclick={() => playAsset(asset)}
