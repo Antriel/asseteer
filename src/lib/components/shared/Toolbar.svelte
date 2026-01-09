@@ -49,7 +49,8 @@
     }
 
     try {
-      await clapState.search(query);
+      // Pass duration filter to semantic search for pre-filtering before similarity computation
+      await clapState.search(query, undefined, assetsState.durationFilter);
     } catch (error) {
       showToast(`Semantic search failed: ${error}`, 'error');
       // Fall back to FTS

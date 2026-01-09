@@ -11,6 +11,7 @@ import {
 	searchAudioSemantic,
 	type SemanticSearchResult
 } from '$lib/database/queries';
+import type { DurationFilter } from '$lib/state/assets.svelte';
 
 // Maximum number of semantic search results to display
 const MAX_SEMANTIC_RESULTS = 500;
@@ -78,7 +79,7 @@ class ClapState {
 	/**
 	 * Perform semantic search with cancellation support
 	 */
-	async search(query: string, limit: number = MAX_SEMANTIC_RESULTS): Promise<SemanticSearchResult[]> {
+	async search(query: string, limit: number = MAX_SEMANTIC_RESULTS, durationFilter?: DurationFilter): Promise<SemanticSearchResult[]> {
 		// Increment version to cancel any in-progress search
 		const currentVersion = ++this.searchVersion;
 
@@ -113,7 +114,7 @@ class ClapState {
 
 		try {
 			// Request one extra to detect if there are more results
-			const results = await searchAudioSemantic(query, limit + 1);
+			const results = await searchAudioSemantic(query, limit + 1, durationFilter);
 
 			// Only update results if this search is still current
 			if (currentVersion === this.searchVersion) {

@@ -198,9 +198,15 @@ export interface SemanticSearchResult {
  */
 export async function searchAudioSemantic(
 	query: string,
-	limit: number = 50
+	limit: number = 50,
+	durationFilter?: DurationFilter
 ): Promise<SemanticSearchResult[]> {
-	return invoke('search_audio_semantic', { query, limit });
+	return invoke('search_audio_semantic', {
+		query,
+		limit,
+		minDurationMs: durationFilter?.minMs ?? null,
+		maxDurationMs: durationFilter?.maxMs ?? null
+	});
 }
 
 /**

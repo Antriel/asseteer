@@ -49,6 +49,8 @@ struct SemanticSearchRow {
 pub async fn search_audio_semantic(
     query: String,
     limit: usize,
+    min_duration_ms: Option<i64>,
+    max_duration_ms: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SemanticSearchResult>, String> {
     // Ensure server is running
@@ -57,8 +59,22 @@ pub async fn search_audio_semantic(
     // Get query embedding
     let query_embedding = get_clap_client().await.embed_text(&query).await?;
 
-    // Fetch all embeddings from database with full asset and audio metadata
-    let rows: Vec<SemanticSearchRow> = sqlx::query_as(
+    // Build WHERE clause for duration filtering
+    let mut where_clauses: Vec<String> = vec![];
+    if min_duration_ms.is_some() {
+        where_clauses.push("am.duration_ms >= ?".to_string());
+    }
+    if max_duration_ms.is_some() {
+        where_clauses.push("am.duration_ms <= ?".to_string());
+    }
+
+    let where_clause = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
+    };
+
+    let sql = format!(
         r#"
         SELECT
             a.id, a.filename, a.path, a.zip_entry, a.asset_type, a.format,
@@ -68,11 +84,24 @@ pub async fn search_audio_semantic(
         FROM assets a
         JOIN audio_embeddings ae ON a.id = ae.asset_id
         LEFT JOIN audio_metadata am ON a.id = am.asset_id
+        {}
         "#,
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+        where_clause
+    );
+
+    // Build query with optional bindings
+    let mut query = sqlx::query_as::<_, SemanticSearchRow>(&sql);
+    if let Some(min) = min_duration_ms {
+        query = query.bind(min);
+    }
+    if let Some(max) = max_duration_ms {
+        query = query.bind(max);
+    }
+
+    let rows: Vec<SemanticSearchRow> = query
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Compute similarities
     let mut results: Vec<SemanticSearchResult> = rows

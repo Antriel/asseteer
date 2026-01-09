@@ -1,6 +1,7 @@
 <script lang="ts">
   import { assetsState } from '$lib/state/assets.svelte';
   import { viewState } from '$lib/state/view.svelte';
+  import { clapState } from '$lib/state/clap.svelte';
 
   let isOpen = $state(false);
   let minInput = $state('');
@@ -100,15 +101,23 @@
     return 'Duration';
   });
 
+  function reloadWithFilter() {
+    // If semantic search is active, re-run semantic search with the new filter
+    if (clapState.semanticSearchEnabled && clapState.lastSearchQuery) {
+      clapState.search(clapState.lastSearchQuery, undefined, assetsState.durationFilter);
+    } else {
+      // Otherwise reload regular assets
+      const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
+      assetsState.loadAssets(currentType);
+    }
+  }
+
   function applyFilter() {
     const minMs = parseDuration(minInput);
     const maxMs = parseDuration(maxInput);
 
     assetsState.setDurationFilter(minMs, maxMs);
-
-    // Reload assets with the new filter
-    const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
-    assetsState.loadAssets(currentType);
+    reloadWithFilter();
 
     isOpen = false;
   }
@@ -120,9 +129,7 @@
     minInput = preset.min !== null ? formatDuration(preset.min) : '';
     maxInput = preset.max !== null ? formatDuration(preset.max) : '';
 
-    // Reload assets with the new filter
-    const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
-    assetsState.loadAssets(currentType);
+    reloadWithFilter();
 
     isOpen = false;
   }
@@ -132,9 +139,7 @@
     maxInput = '';
     assetsState.setDurationFilter(null, null);
 
-    // Reload assets without the filter
-    const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
-    assetsState.loadAssets(currentType);
+    reloadWithFilter();
 
     isOpen = false;
   }
