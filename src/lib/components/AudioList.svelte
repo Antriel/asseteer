@@ -2,7 +2,7 @@
   import type { Asset } from '$lib/types';
   import AudioPlayer from './AudioPlayer.svelte';
   import VirtualList from './shared/VirtualList.svelte';
-  import { AudioIcon, PlayIcon, PauseIcon, FolderIcon } from './icons';
+  import { AudioIcon, FolderIcon } from './icons';
   import Badge from './shared/Badge.svelte';
   import { openPath } from '@tauri-apps/plugin-opener';
 
@@ -21,7 +21,6 @@
   }
 
   let selectedAsset = $state<Asset | null>(null);
-  let isPlaying = $state(false);
   let shouldAutoPlay = $state(false);
   let playKey = $state(0);
   let audioPlayerRef = $state<ReturnType<typeof AudioPlayer> | null>(null);
@@ -236,12 +235,10 @@
         autoPlay={shouldAutoPlay}
         restartKey={playKey}
         onPlay={() => {
-          isPlaying = true;
           shouldAutoPlay = false;
           shouldContinuePlaying = true;
         }}
         onPause={() => {
-          isPlaying = false;
           // Manual pause (not from onEnded) - stop auto-playing on navigation
           shouldContinuePlaying = false;
         }}
@@ -273,8 +270,8 @@
               title={formatLocation(asset)}
             >
               <!-- Audio icon -->
-              <div class="w-12 h-12 flex items-center justify-center bg-primary rounded-lg flex-shrink-0">
-                <AudioIcon size="lg" class="text-secondary" />
+              <div class="w-12 h-12 flex items-center justify-center rounded-lg flex-shrink-0" class:bg-accent={selectedAsset?.id === asset.id} class:bg-primary={selectedAsset?.id !== asset.id}>
+                <AudioIcon size="lg" class={selectedAsset?.id === asset.id ? 'text-white' : 'text-secondary'} />
               </div>
 
               <!-- Audio metadata -->
@@ -310,16 +307,6 @@
                 </div>
               {/if}
 
-              <!-- Playing indicator -->
-              {#if selectedAsset?.id === asset.id}
-                <div class="flex-shrink-0">
-                  {#if isPlaying}
-                    <PauseIcon size="md" class="text-accent" circled />
-                  {:else}
-                    <PlayIcon size="md" class="text-accent" circled />
-                  {/if}
-                </div>
-              {/if}
             </button>
           {/each}
         </div>
