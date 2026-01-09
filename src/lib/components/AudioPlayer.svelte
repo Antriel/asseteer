@@ -8,11 +8,12 @@
     asset: Asset;
     isActive?: boolean;
     autoPlay?: boolean;
+    restartKey?: number;
     onPlay?: () => void;
     onPause?: () => void;
   }
 
-  let { asset, isActive = false, autoPlay = false, onPlay, onPause }: Props = $props();
+  let { asset, isActive = false, autoPlay = false, restartKey = 0, onPlay, onPause }: Props = $props();
 
   let audioElement = $state<HTMLAudioElement>();
   let isPlaying = $state(false);
@@ -160,6 +161,21 @@
     if (!isActive && isPlaying) {
       audioElement?.pause();
       isPlaying = false;
+    }
+  });
+
+  // Restart playback when restartKey changes (skip initial value of 0)
+  $effect(() => {
+    if (restartKey > 0 && audioElement && audioSrc) {
+      audioElement.currentTime = 0;
+      audioElement.play().then(() => {
+        isPlaying = true;
+        onPlay?.();
+      }).catch((error) => {
+        if (error.name !== 'AbortError') {
+          console.error('Restart play failed:', error);
+        }
+      });
     }
   });
 

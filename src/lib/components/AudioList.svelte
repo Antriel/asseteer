@@ -23,6 +23,7 @@
   let selectedAsset = $state<Asset | null>(null);
   let isPlaying = $state(false);
   let shouldAutoPlay = $state(false);
+  let playKey = $state(0);
 
   // Item height: button with h-20 (80px) + gap-2 (8px) = 88px per item
   const itemHeight = 88;
@@ -64,8 +65,10 @@
   }
 
   function playAsset(asset: Asset) {
-    // If clicking the same asset, just toggle play (handled by player)
     if (selectedAsset?.id === asset.id) {
+      // Same asset - restart playback from beginning
+      playKey++;
+      shouldAutoPlay = true;
       return;
     }
     selectedAsset = asset;
@@ -127,6 +130,7 @@
         asset={selectedAsset}
         isActive={true}
         autoPlay={shouldAutoPlay}
+        restartKey={playKey}
         onPlay={() => {
           isPlaying = true;
           shouldAutoPlay = false;
