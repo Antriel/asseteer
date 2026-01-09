@@ -1,5 +1,6 @@
 import type Database from '@tauri-apps/plugin-sql';
 import type { Asset, PendingCount } from '$lib/types';
+import type { DurationFilter } from '$lib/state/assets.svelte';
 import { invoke } from '@tauri-apps/api/core';
 
 /**
@@ -10,7 +11,8 @@ export async function searchAssets(
 	searchText?: string,
 	assetType?: string,
 	limit: number = 50,
-	offset: number = 0
+	offset: number = 0,
+	durationFilter?: DurationFilter
 ): Promise<Asset[]> {
 	const baseSelect = `
 		SELECT
@@ -38,6 +40,18 @@ export async function searchAssets(
 	if (assetType) {
 		conditions.push('assets.asset_type = ?');
 		params.push(assetType);
+	}
+
+	// Duration filter (only applies to audio assets)
+	if (durationFilter) {
+		if (durationFilter.minMs !== null) {
+			conditions.push('audio_metadata.duration_ms >= ?');
+			params.push(durationFilter.minMs);
+		}
+		if (durationFilter.maxMs !== null) {
+			conditions.push('audio_metadata.duration_ms <= ?');
+			params.push(durationFilter.maxMs);
+		}
 	}
 
 	const ftsJoin = ftsQuery ? 'INNER JOIN assets_fts ON assets.id = assets_fts.rowid' : '';

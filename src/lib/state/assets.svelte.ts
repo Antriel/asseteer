@@ -6,6 +6,12 @@ import { searchAssets as dbSearchAssets, getAssetCount, getAssetCountByType } fr
 // Even with virtual scrolling, tracking millions of items causes performance issues
 const MAX_DISPLAY_LIMIT = 5000;
 
+// Duration filter type
+export interface DurationFilter {
+  minMs: number | null;
+  maxMs: number | null;
+}
+
 // Assets state - create a reactive state object
 class AssetsState {
   assets = $state<Asset[]>([]);
@@ -15,6 +21,8 @@ class AssetsState {
   // Track if there are more results than displayed
   hasMoreResults = $state(false);
   totalMatchingCount = $state(0);
+  // Duration filter for audio assets
+  durationFilter = $state<DurationFilter>({ minMs: null, maxMs: null });
 
   // Search cancellation tracking
   private searchVersion = 0;
@@ -51,12 +59,15 @@ class AssetsState {
 
       // Load assets with a sensible limit
       // Request one extra to detect if there are more results
+      // Only apply duration filter for audio assets
+      const durationFilter = assetType === 'audio' ? this.durationFilter : undefined;
       const result = await dbSearchAssets(
         db,
         this.searchText,
         assetType,
         MAX_DISPLAY_LIMIT + 1,
-        0
+        0,
+        durationFilter
       );
 
       // Only update if this search is still current
@@ -99,6 +110,13 @@ class AssetsState {
   searchAssets(text: string, assetType?: "image" | "audio") {
     this.searchText = text;
     this.loadAssets(assetType);
+  }
+
+  /**
+   * Set duration filter for audio assets
+   */
+  setDurationFilter(minMs: number | null, maxMs: number | null) {
+    this.durationFilter = { minMs, maxMs };
   }
 
   /**

@@ -4,6 +4,7 @@
   import { clapState } from '$lib/state/clap.svelte';
   import { showToast } from '$lib/state/ui.svelte';
   import ViewModeToggle from './ViewModeToggle.svelte';
+  import DurationFilter from './DurationFilter.svelte';
   import Spinner from './Spinner.svelte';
   import { SearchIcon } from '$lib/components/icons';
 
@@ -121,7 +122,7 @@
     />
   </div>
 
-  <!-- Semantic search toggle (audio tab only) -->
+  <!-- Audio-specific filters (semantic search + duration filter) -->
   {#if isAudioTab}
     <button
       onclick={toggleSemanticSearch}
@@ -140,6 +141,9 @@
       </svg>
       <span>Semantic</span>
     </button>
+
+    <!-- Duration filter -->
+    <DurationFilter />
   {/if}
 
   <!-- View mode toggle (images only) -->
