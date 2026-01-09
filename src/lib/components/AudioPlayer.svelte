@@ -57,6 +57,7 @@
   let duration = $state(0);
   let volume = $state(1);
   let audioSrc = $state<string>('');
+  let rafId: number | null = null;
   let blobUrl = $state<string | null>(null);
   let loading = $state(true);
   let showLoading = $state(false);
@@ -149,6 +150,9 @@
         if (loadingTimer) {
           clearTimeout(loadingTimer);
         }
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+        }
       });
     };
   });
@@ -174,10 +178,23 @@
     }
   }
 
-  function handleTimeUpdate() {
-    if (!audioElement) return;
-    currentTime = audioElement.currentTime;
+  // RAF-based time updates for smooth progress bar (only runs while playing)
+  function updateTime() {
+    if (audioElement && isPlaying) {
+      currentTime = audioElement.currentTime;
+      rafId = requestAnimationFrame(updateTime);
+    }
   }
+
+  // Start/stop RAF loop based on playing state
+  $effect(() => {
+    if (isPlaying) {
+      rafId = requestAnimationFrame(updateTime);
+    } else if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+  });
 
   function handleLoadedMetadata() {
     if (!audioElement) return;
@@ -260,7 +277,6 @@
     <audio
       bind:this={audioElement}
       src={audioSrc}
-      ontimeupdate={handleTimeUpdate}
       onloadedmetadata={handleLoadedMetadata}
       oncanplay={handleCanPlay}
       onended={handleEnded}
@@ -288,7 +304,7 @@
   >
     <div class="h-1 bg-default rounded-sm overflow-hidden">
       <div
-        class="h-full bg-accent transition-[width] duration-100"
+        class="h-full bg-accent transition-[width] duration-40"
         style="width: {duration ? (currentTime / duration) * 100 : 0}%"
       ></div>
     </div>
