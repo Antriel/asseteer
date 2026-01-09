@@ -24,6 +24,11 @@
   let isPlaying = $state(false);
   let shouldAutoPlay = $state(false);
   let playKey = $state(0);
+  let audioPlayerRef = $state<ReturnType<typeof AudioPlayer> | null>(null);
+  let virtualListRef = $state<ReturnType<typeof VirtualList> | null>(null);
+  // Track if audio should auto-play on navigation (true while playing or after natural end, false after manual pause)
+  let shouldContinuePlaying = $state(false);
+  let containerRef = $state<HTMLDivElement | null>(null);
 
   // Item height: button with h-20 (80px) + gap-2 (8px) = 88px per item
   const itemHeight = 88;
@@ -69,10 +74,12 @@
       // Same asset - restart playback from beginning
       playKey++;
       shouldAutoPlay = true;
+      shouldContinuePlaying = true;
       return;
     }
     selectedAsset = asset;
     shouldAutoPlay = true;
+    shouldContinuePlaying = true;
   }
 
   async function openDirectory(asset: Asset) {
@@ -93,9 +100,103 @@
       console.error('Failed to open directory:', error);
     }
   }
+
+  function getSelectedIndex(): number {
+    if (!selectedAsset) return -1;
+    return assets.findIndex(a => a.id === selectedAsset!.id);
+  }
+
+  function navigateToIndex(newIndex: number) {
+    if (newIndex < 0 || newIndex >= assets.length) return;
+
+    const newAsset = assets[newIndex];
+    const wasPlaying = shouldContinuePlaying;
+
+    selectedAsset = newAsset;
+
+    // Scroll to make the item visible with 1 item buffer
+    virtualListRef?.scrollToIndex(newIndex, 1);
+
+    if (wasPlaying) {
+      shouldAutoPlay = true;
+      shouldContinuePlaying = true;
+    }
+  }
+
+  function handleKeyDown(e: KeyboardEvent) {
+    const currentIndex = getSelectedIndex();
+
+    // Arrow Up / Shift+Tab - navigate up
+    if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) {
+      e.preventDefault();
+      if (currentIndex <= 0) {
+        // Already at top or no selection - select first item
+        navigateToIndex(0);
+      } else {
+        navigateToIndex(currentIndex - 1);
+      }
+      return;
+    }
+
+    // Arrow Down / Tab - navigate down
+    if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
+      e.preventDefault();
+      if (currentIndex < 0) {
+        // No selection - select first item
+        navigateToIndex(0);
+      } else if (currentIndex < assets.length - 1) {
+        navigateToIndex(currentIndex + 1);
+      }
+      return;
+    }
+
+    // Space - toggle play/pause
+    if (e.key === ' ') {
+      e.preventDefault();
+      if (!selectedAsset && assets.length > 0) {
+        // No selection - select and play first item
+        selectedAsset = assets[0];
+        shouldAutoPlay = true;
+        shouldContinuePlaying = true;
+      } else if (audioPlayerRef) {
+        audioPlayerRef.toggle();
+      }
+      return;
+    }
+
+    // Arrow Left - seek backward 10%
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      if (audioPlayerRef && selectedAsset) {
+        audioPlayerRef.seekByPercent(-0.1);
+      }
+      return;
+    }
+
+    // Arrow Right - seek forward 10%
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      if (audioPlayerRef && selectedAsset) {
+        const result = audioPlayerRef.seekByPercent(0.1);
+        if (result.stopped) {
+          // Seeking past end stopped playback - but keep shouldContinuePlaying true
+          // so navigation will auto-play next item
+        }
+      }
+      return;
+    }
+  }
 </script>
 
-<div class="flex flex-col gap-4 p-4 h-full overflow-hidden">
+<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+<div
+  class="flex flex-col gap-4 p-4 h-full overflow-hidden outline-none"
+  bind:this={containerRef}
+  tabindex="0"
+  role="application"
+  aria-label="Audio list player"
+  onkeydown={handleKeyDown}
+>
   <!-- Single player at the top -->
   {#if selectedAsset}
     <div class="p-4 bg-primary border border-default rounded-lg shadow-lg flex-shrink-0">
@@ -127,6 +228,7 @@
         </button>
       </div>
       <AudioPlayer
+        bind:this={audioPlayerRef}
         asset={selectedAsset}
         isActive={true}
         autoPlay={shouldAutoPlay}
@@ -134,8 +236,18 @@
         onPlay={() => {
           isPlaying = true;
           shouldAutoPlay = false;
+          shouldContinuePlaying = true;
         }}
-        onPause={() => isPlaying = false}
+        onPause={() => {
+          isPlaying = false;
+          // Manual pause (not from onEnded) - stop auto-playing on navigation
+          shouldContinuePlaying = false;
+        }}
+        onEnded={() => {
+          // Natural end - keep shouldContinuePlaying true so navigation auto-plays
+          // Note: onPause is called before onEnded, so we need to restore it
+          shouldContinuePlaying = true;
+        }}
       />
     </div>
   {:else}
@@ -146,7 +258,7 @@
 
   <!-- List of audio assets with virtual scrolling -->
   <div class="flex-1 overflow-hidden">
-    <VirtualList items={assets} {itemHeight} bufferItems={5}>
+    <VirtualList bind:this={virtualListRef} items={assets} {itemHeight} bufferItems={5}>
       {#snippet children({ visibleItems, startIndex })}
         <div class="flex flex-col gap-2">
           {#each visibleItems as asset, idx (asset.id)}
@@ -155,6 +267,7 @@
               class:!bg-accent-light={selectedAsset?.id === asset.id}
               class:!border-accent={selectedAsset?.id === asset.id}
               onclick={() => playAsset(asset)}
+              tabindex="-1"
               title={formatLocation(asset)}
             >
               <!-- Audio icon -->

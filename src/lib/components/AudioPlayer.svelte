@@ -11,9 +11,45 @@
     restartKey?: number;
     onPlay?: () => void;
     onPause?: () => void;
+    onEnded?: () => void;
   }
 
-  let { asset, isActive = false, autoPlay = false, restartKey = 0, onPlay, onPause }: Props = $props();
+  let { asset, isActive = false, autoPlay = false, restartKey = 0, onPlay, onPause, onEnded }: Props = $props();
+
+  // Exported function to seek by percentage delta (e.g., 0.1 for +10%, -0.1 for -10%)
+  // Returns { playing: boolean, stopped: boolean } indicating state after seek
+  export function seekByPercent(delta: number): { playing: boolean; stopped: boolean } {
+    if (!audioElement || !duration) return { playing: false, stopped: false };
+
+    const newTime = currentTime + (delta * duration);
+
+    if (newTime >= duration) {
+      // Seeking past end - stop playback
+      audioElement.currentTime = duration;
+      audioElement.pause();
+      isPlaying = false;
+      onPause?.();
+      onEnded?.();
+      return { playing: false, stopped: true };
+    } else if (newTime <= 0) {
+      // Seeking before start - clamp to 0 and keep playing if was playing
+      audioElement.currentTime = 0;
+      return { playing: isPlaying, stopped: false };
+    } else {
+      audioElement.currentTime = newTime;
+      return { playing: isPlaying, stopped: false };
+    }
+  }
+
+  // Exported function to toggle play/pause from parent
+  export function toggle(): void {
+    togglePlay();
+  }
+
+  // Exported getter for current playing state
+  export function getIsPlaying(): boolean {
+    return isPlaying;
+  }
 
   let audioElement = $state<HTMLAudioElement>();
   let isPlaying = $state(false);
@@ -134,6 +170,7 @@
   function handleEnded() {
     isPlaying = false;
     onPause?.();
+    onEnded?.();
   }
 
   function seek(e: MouseEvent) {

@@ -30,6 +30,35 @@
     scrollTop = target.scrollTop;
   }
 
+  // Scroll to make an index visible, with optional buffer items above/below
+  export function scrollToIndex(index: number, buffer: number = 1) {
+    if (!containerElement || index < 0 || index >= totalItems) return;
+
+    const itemTop = index * itemHeight;
+    const itemBottom = itemTop + itemHeight;
+    const viewTop = scrollTop;
+    const viewBottom = scrollTop + containerHeight;
+
+    // Calculate desired position with buffer
+    const bufferPx = buffer * itemHeight;
+
+    if (itemTop < viewTop + bufferPx) {
+      // Item is above visible area (or too close to top) - scroll up
+      const targetScroll = Math.max(0, itemTop - bufferPx);
+      containerElement.scrollTop = targetScroll;
+      scrollTop = targetScroll;
+    } else if (itemBottom > viewBottom - bufferPx) {
+      // Item is below visible area (or too close to bottom) - scroll down
+      const targetScroll = Math.min(
+        totalHeight - containerHeight,
+        itemBottom - containerHeight + bufferPx
+      );
+      containerElement.scrollTop = targetScroll;
+      scrollTop = targetScroll;
+    }
+    // Otherwise item is already visible with buffer - do nothing
+  }
+
   function updateContainerHeight() {
     if (containerElement) {
       containerHeight = containerElement.clientHeight;
