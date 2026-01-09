@@ -145,6 +145,12 @@
 
   function formatTime(seconds: number): string {
     const mins = Math.floor(seconds / 60);
+    if (seconds < 10) {
+      const secs = seconds % 60;
+      const wholeSecs = Math.floor(secs);
+      const ms = Math.floor((secs - wholeSecs) * 1000);
+      return `${mins}:${wholeSecs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+    }
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   }

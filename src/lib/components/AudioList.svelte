@@ -28,9 +28,15 @@
   const itemHeight = 88;
 
   function formatDuration(ms: number): string {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
+    const totalSeconds = ms / 1000;
+    const minutes = Math.floor(totalSeconds / 60);
+    if (totalSeconds < 10) {
+      const secs = totalSeconds % 60;
+      const wholeSecs = Math.floor(secs);
+      const millis = Math.floor((secs - wholeSecs) * 1000);
+      return `${minutes}:${wholeSecs.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
+    }
+    const remainingSeconds = Math.floor(totalSeconds % 60);
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   }
 
@@ -99,9 +105,7 @@
             {selectedAsset.filename}
           </p>
           <div class="flex gap-4 mt-1 text-xs text-secondary">
-            {#if selectedAsset.duration_ms}
-              <span>{formatDuration(selectedAsset.duration_ms)}</span>
-            {/if}
+            <span>{selectedAsset.duration_ms ? formatDuration(selectedAsset.duration_ms) : '—'}</span>
             {#if selectedAsset.sample_rate}
               <span>{selectedAsset.sample_rate / 1000} kHz</span>
             {/if}
@@ -168,9 +172,7 @@
                   {/if}
                 </div>
                 <div class="flex gap-4 mt-1 text-xs text-secondary">
-                  {#if asset.duration_ms}
-                    <span>{formatDuration(asset.duration_ms)}</span>
-                  {/if}
+                  <span>{asset.duration_ms ? formatDuration(asset.duration_ms) : '—'}</span>
                   {#if asset.sample_rate}
                     <span>{asset.sample_rate / 1000} kHz</span>
                   {/if}
