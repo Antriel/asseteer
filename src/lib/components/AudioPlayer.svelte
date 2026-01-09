@@ -59,6 +59,8 @@
   let audioSrc = $state<string>('');
   let blobUrl = $state<string | null>(null);
   let loading = $state(true);
+  let showLoading = $state(false);
+  let loadingTimer: ReturnType<typeof setTimeout> | null = null;
   let shouldAutoPlay = $state(false);
 
   // Load audio when asset changes - track only asset properties
@@ -87,8 +89,12 @@
       }
 
       loading = true;
-      // Remember if we should auto-play once loaded
-      shouldAutoPlay = autoPlay;
+      showLoading = false;
+      shouldAutoPlay = false; // Reset - will be set after new src is loaded
+      if (loadingTimer) clearTimeout(loadingTimer);
+      loadingTimer = setTimeout(() => {
+        if (loading) showLoading = true;
+      }, 100);
 
       // Load the new asset
       (async () => {
@@ -103,6 +109,9 @@
               blobUrl = newBlobUrl;
               audioSrc = newBlobUrl;
               loading = false;
+              showLoading = false;
+              if (loadingTimer) clearTimeout(loadingTimer);
+              shouldAutoPlay = autoPlay;
             });
           } else {
             // Regular file - use convertFileSrc
@@ -111,6 +120,9 @@
             untrack(() => {
               audioSrc = src;
               loading = false;
+              showLoading = false;
+              if (loadingTimer) clearTimeout(loadingTimer);
+              shouldAutoPlay = autoPlay;
             });
           }
         } catch (error) {
@@ -118,6 +130,8 @@
           untrack(() => {
             audioSrc = '';
             loading = false;
+            showLoading = false;
+            if (loadingTimer) clearTimeout(loadingTimer);
             shouldAutoPlay = false;
           });
         }
@@ -131,6 +145,9 @@
       untrack(() => {
         if (blobUrl) {
           URL.revokeObjectURL(blobUrl);
+        }
+        if (loadingTimer) {
+          clearTimeout(loadingTimer);
         }
       });
     };
@@ -235,11 +252,11 @@
 </script>
 
 <div class="flex items-center gap-3">
-  {#if loading}
+  {#if showLoading}
     <div class="h-8 flex items-center text-sm text-secondary">Loading audio...</div>
-  {:else if !audioSrc}
+  {:else if !loading && !audioSrc}
     <div class="h-8 flex items-center text-sm text-red-500">Failed to load audio</div>
-  {:else}
+  {:else if audioSrc}
     <audio
       bind:this={audioElement}
       src={audioSrc}
