@@ -183,9 +183,9 @@
 
 <div class="flex items-center gap-3">
   {#if loading}
-    <div class="text-sm text-secondary">Loading audio...</div>
+    <div class="h-8 flex items-center text-sm text-secondary">Loading audio...</div>
   {:else if !audioSrc}
-    <div class="text-sm text-red-500">Failed to load audio</div>
+    <div class="h-8 flex items-center text-sm text-red-500">Failed to load audio</div>
   {:else}
     <audio
       bind:this={audioElement}
