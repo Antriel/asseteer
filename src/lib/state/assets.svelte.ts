@@ -1,6 +1,7 @@
 import type { Asset } from '$lib/types';
 import { getDatabase } from '$lib/database/connection';
 import { searchAssets as dbSearchAssets, countSearchResults, getAssetCount, getAssetCountByType } from '$lib/database/queries';
+import { clearThumbnailCache } from '$lib/state/thumbnails.svelte';
 
 // Maximum number of assets to display in the UI
 // Even with virtual scrolling, tracking millions of items causes performance issues
@@ -39,6 +40,7 @@ class AssetsState {
     this.assets = [];
     this.isLoading = true;
     this.hasMoreResults = false;
+    clearThumbnailCache();
 
     try {
       const db = await getDatabase();

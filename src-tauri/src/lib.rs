@@ -51,6 +51,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::assets::get_asset_bytes,
+            commands::assets::ensure_thumbnails,
             commands::scan::start_scan,
             commands::process::start_processing,
             commands::process::pause_processing,

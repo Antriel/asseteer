@@ -1,8 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
-  import { getDatabase } from '$lib/database/connection';
-  import { getThumbnail } from '$lib/database/queries';
+  import { getThumbnailUrl, hasThumbnailFailed, requestThumbnail } from '$lib/state/thumbnails.svelte';
   import Spinner from '$lib/components/shared/Spinner.svelte';
 
   interface Props {
@@ -12,12 +10,8 @@
 
   let { assetId, size = 'medium' }: Props = $props();
 
-  let thumbnailUrl = $state<string | null>(null);
-  let isLoading = $state(true);
-  let error = $state<string | null>(null);
   let containerElement: HTMLDivElement;
-  let hasLoaded = $state(false);
-  let destroyed = false;
+  let isVisible = $state(false);
 
   const sizeClasses = $derived.by(() => {
     switch (size) {
@@ -27,52 +21,23 @@
     }
   });
 
-  async function loadThumbnail() {
-    if (hasLoaded) return;
-    hasLoaded = true;
-
-    try {
-      const db = await getDatabase();
-      const thumbnailData = await getThumbnail(db, assetId);
-
-      if (destroyed) return;
-
-      if (thumbnailData) {
-        const blob = new Blob([thumbnailData], { type: 'image/webp' });
-        thumbnailUrl = URL.createObjectURL(blob);
-      } else {
-        const bytes = await invoke<number[]>('get_asset_bytes', { assetId });
-        if (destroyed) return;
-        const blob = new Blob([new Uint8Array(bytes)]);
-        thumbnailUrl = URL.createObjectURL(blob);
-      }
-    } catch (e) {
-      if (!destroyed) {
-        error = String(e);
-      }
-    } finally {
-      if (!destroyed) {
-        isLoading = false;
-      }
-    }
-  }
-
-  // Revoke blob URLs when they change or on component destroy
+  // Request thumbnail when visible
   $effect(() => {
-    const url = thumbnailUrl;
-    return () => {
-      if (url) {
-        URL.revokeObjectURL(url);
-      }
-    };
+    if (isVisible) {
+      requestThumbnail(assetId);
+    }
   });
+
+  let thumbnailUrl = $derived(getThumbnailUrl(assetId));
+  let thumbnailFailed = $derived(hasThumbnailFailed(assetId));
+  let isLoading = $derived(isVisible && !thumbnailUrl && !thumbnailFailed);
 
   onMount(() => {
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
-            loadThumbnail();
+            isVisible = true;
             observer.unobserve(entry.target);
           }
         });
@@ -88,7 +53,6 @@
     }
 
     return () => {
-      destroyed = true;
       observer.disconnect();
     };
   });
@@ -99,7 +63,7 @@
     <div class="flex items-center justify-center w-full h-full">
       <Spinner size="md" />
     </div>
-  {:else if error || !thumbnailUrl}
+  {:else if thumbnailFailed || !thumbnailUrl}
     <div class="flex items-center justify-center w-full h-full">
       <span class="text-xs text-secondary">No preview</span>
     </div>

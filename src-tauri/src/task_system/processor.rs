@@ -38,15 +38,11 @@ pub async fn process_asset(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     }
 }
 
-/// Process an image asset (thumbnail + dimensions in one go)
+/// Process an image asset (dimensions only, thumbnails are generated lazily)
 async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     let asset_id = asset.id;
-    let file_size = asset.file_size;
 
     let asset_clone = asset.clone();
-
-    // 20KB threshold for thumbnail generation
-    const THUMBNAIL_SIZE_THRESHOLD: i64 = 20 * 1024; // 20KB in bytes
 
     // Run CPU-intensive work in blocking thread with timeout
     let result = tokio::time::timeout(
@@ -61,31 +57,27 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
 
             let (width, height) = img.dimensions();
 
-            // Only generate thumbnail for images >= 20KB
-            let thumbnail_data = if file_size >= THUMBNAIL_SIZE_THRESHOLD {
-                Some(generate_thumbnail(&img, 128)?)
-            } else {
-                None
-            };
-
-            Ok::<_, String>((thumbnail_data, width, height))
+            Ok::<_, String>((width, height))
         }),
     )
     .await;
 
     match result {
-        Ok(Ok(Ok((thumbnail_data, width, height)))) => {
-            // Insert into image_metadata table
+        Ok(Ok(Ok((width, height)))) => {
             let now = unix_now();
 
+            // Insert dimensions only; don't overwrite thumbnail if lazy loading already generated one
             match sqlx::query(
                 "INSERT INTO image_metadata (asset_id, width, height, thumbnail_data, processed_at)
-                 VALUES (?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, NULL, ?)
+                 ON CONFLICT (asset_id) DO UPDATE SET
+                     width = excluded.width,
+                     height = excluded.height,
+                     processed_at = excluded.processed_at",
             )
             .bind(asset_id)
             .bind(width as i32)
             .bind(height as i32)
-            .bind(thumbnail_data)
             .bind(now)
             .execute(db)
             .await
@@ -129,6 +121,29 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
             error: Some("Processing timed out".to_string()),
         },
     }
+}
+
+/// Generate a thumbnail for an asset on demand.
+/// Returns (width, height, thumbnail_data) on success.
+pub async fn generate_thumbnail_for_asset(
+    asset: &Asset,
+) -> Result<(i32, i32, Vec<u8>), String> {
+    let asset_clone = asset.clone();
+
+    tokio::time::timeout(
+        PROCESSING_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            let bytes = load_asset_bytes(&asset_clone)?;
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| format!("Failed to decode image: {}", e))?;
+            let (width, height) = img.dimensions();
+            let thumbnail_data = generate_thumbnail(&img, 128)?;
+            Ok((width as i32, height as i32, thumbnail_data))
+        }),
+    )
+    .await
+    .map_err(|_| "Thumbnail generation timed out".to_string())?
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 /// Process an audio asset (metadata extraction)
