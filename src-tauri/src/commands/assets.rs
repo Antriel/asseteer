@@ -75,41 +75,57 @@ pub async fn ensure_thumbnails(
         .await
         .map_err(|e| format!("Failed to load assets: {}", e))?;
 
-    // Generate thumbnails in parallel using blocking threads
-    let pool = state.pool.clone();
-    let mut generated = Vec::new();
+    // Generate thumbnails in parallel using a JoinSet
+    // Limit concurrency to avoid spawning too many blocking tasks at once
+    let max_concurrent = num_cpus::get().max(2);
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+    let mut join_set = tokio::task::JoinSet::new();
 
     for asset in assets {
-        match generate_thumbnail_for_asset(&asset).await {
-            Ok((width, height, thumbnail_data)) => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
-
-                // Upsert: insert or update thumbnail_data if it was NULL
-                let result = sqlx::query(
-                    "INSERT INTO image_metadata (asset_id, width, height, thumbnail_data, processed_at)
-                     VALUES (?, ?, ?, ?, ?)
-                     ON CONFLICT (asset_id) DO UPDATE SET
-                         thumbnail_data = excluded.thumbnail_data
-                     WHERE image_metadata.thumbnail_data IS NULL",
-                )
-                .bind(asset.id)
-                .bind(width)
-                .bind(height)
-                .bind(&thumbnail_data)
-                .bind(now)
-                .execute(&pool)
-                .await;
-
-                if result.is_ok() {
-                    generated.push(asset.id);
-                }
+        let sem = semaphore.clone();
+        join_set.spawn(async move {
+            let _permit = sem.acquire().await.map_err(|e| e.to_string())?;
+            let id = asset.id;
+            match generate_thumbnail_for_asset(&asset).await {
+                Ok((width, height, data)) => Ok((id, width, height, data)),
+                Err(e) => Err(format!("Asset {}: {}", id, e)),
             }
-            Err(e) => {
-                eprintln!("Failed to generate thumbnail for asset {}: {}", asset.id, e);
+        });
+    }
+
+    // Collect results and write to DB sequentially
+    let pool = state.pool.clone();
+    let mut generated = Vec::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    while let Some(result) = join_set.join_next().await {
+        let Ok(Ok((asset_id, width, height, thumbnail_data))) = result else {
+            if let Ok(Err(e)) = result {
+                eprintln!("Failed to generate thumbnail: {}", e);
             }
+            continue;
+        };
+
+        let db_result = sqlx::query(
+            "INSERT INTO image_metadata (asset_id, width, height, thumbnail_data, processed_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (asset_id) DO UPDATE SET
+                 thumbnail_data = excluded.thumbnail_data
+             WHERE image_metadata.thumbnail_data IS NULL",
+        )
+        .bind(asset_id)
+        .bind(width)
+        .bind(height)
+        .bind(&thumbnail_data)
+        .bind(now)
+        .execute(&pool)
+        .await;
+
+        if db_result.is_ok() {
+            generated.push(asset_id);
         }
     }
 
