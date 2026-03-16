@@ -113,6 +113,9 @@
             <div class="py-2 text-sm text-primary" title={formatLocation(asset)}>
               <div class="flex items-center gap-2">
                 <span>{asset.filename}</span>
+                {#if asset.format === 'gif'}
+                  <Badge variant="info">GIF</Badge>
+                {/if}
                 {#if asset.zip_entry}
                   <Badge variant="info">ZIP</Badge>
                 {/if}

@@ -142,6 +142,9 @@
           onclick={() => handleImageClick(asset)}
         >
           <ImageThumbnail assetId={asset.id} size={viewState.thumbnailSize} />
+          {#if asset.format === 'gif'}
+            <span class="absolute top-1.5 left-1.5 text-[0.625rem] font-bold leading-none px-1 py-0.5 rounded bg-black/60 text-white tracking-wide">GIF</span>
+          {/if}
 
           <div class="p-2 bg-primary">
             <p class="text-xs font-medium text-primary whitespace-nowrap overflow-hidden text-ellipsis" title={asset.filename}>

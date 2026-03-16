@@ -38,7 +38,7 @@ rayon = "1.10"
 zip = { version = "2.2", default-features = false, features = ["deflate", "deflate64", "lzma", "bzip2", "zstd"] }
 
 # Image processing
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 fast_image_resize = "5.0"
 webp = "0.3"
 
