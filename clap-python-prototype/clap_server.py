@@ -72,6 +72,20 @@ class EmbeddingResponse(BaseModel):
     embedding: list[float]
 
 
+class BatchAudioPathRequest(BaseModel):
+    audio_paths: list[str]
+
+
+class BatchEmbeddingItem(BaseModel):
+    path: str
+    embedding: list[float] | None = None
+    error: str | None = None
+
+
+class BatchEmbeddingResponse(BaseModel):
+    results: list[BatchEmbeddingItem]
+
+
 class HealthResponse(BaseModel):
     status: str
     model: str
@@ -91,7 +105,7 @@ async def health():
 
 
 @app.post("/embed/text", response_model=EmbeddingResponse)
-async def embed_text(request: TextRequest):
+def embed_text(request: TextRequest):
     """
     Generate text embedding.
 
@@ -112,7 +126,7 @@ async def embed_text(request: TextRequest):
 
 
 @app.post("/embed/audio", response_model=EmbeddingResponse)
-async def embed_audio(request: AudioPathRequest):
+def embed_audio(request: AudioPathRequest):
     """
     Generate audio embedding from file path.
 
@@ -151,10 +165,20 @@ async def embed_audio_upload(audio: UploadFile = File(...)):
         {"embedding": [0.123, -0.456, ...]}  // 512-dim array
     """
     content = await audio.read()
+    filename = audio.filename
 
-    logger.info(f"Encoding uploaded audio: {audio.filename} ({len(content)} bytes)")
+    import asyncio
+    embedding = await asyncio.get_event_loop().run_in_executor(
+        None, _process_audio_bytes, content, filename
+    )
 
-    # Load audio from bytes
+    return EmbeddingResponse(embedding=embedding)
+
+
+def _process_audio_bytes(content: bytes, filename: str) -> list[float]:
+    """Process audio bytes into embedding (blocking, runs in thread pool)."""
+    logger.info(f"Encoding uploaded audio: {filename} ({len(content)} bytes)")
+
     target_sr = clap_model.processor.feature_extractor.sampling_rate
     audio_data, sr = librosa.load(io.BytesIO(content), sr=target_sr, mono=True)
     logger.info(f"Loaded {len(audio_data) / sr:.2f} seconds of audio")
@@ -162,7 +186,150 @@ async def embed_audio_upload(audio: UploadFile = File(...)):
     embedding = clap_model.encode_audio(audio_data)
     logger.info(f"Audio embedding generated (dim: {len(embedding)})")
 
-    return EmbeddingResponse(embedding=embedding.tolist())
+    return embedding.tolist()
+
+
+@app.post("/embed/audio/batch", response_model=BatchEmbeddingResponse)
+def embed_audio_batch(request: BatchAudioPathRequest):
+    """
+    Generate audio embeddings for multiple file paths in a single batched forward pass.
+
+    Request body:
+        {"audio_paths": ["/path/to/a.wav", "/path/to/b.wav", ...]}
+
+    Response:
+        {"results": [{"path": "...", "embedding": [...]} | {"path": "...", "error": "..."}]}
+    """
+    if not request.audio_paths:
+        raise HTTPException(status_code=400, detail="audio_paths cannot be empty")
+
+    logger.info(f"Batch encoding {len(request.audio_paths)} audio files")
+
+    target_sr = clap_model.processor.feature_extractor.sampling_rate
+
+    # Load all audio files, track which ones succeeded
+    loaded = []  # (index, audio_array)
+    results = [None] * len(request.audio_paths)
+
+    for i, audio_path in enumerate(request.audio_paths):
+        path = Path(audio_path)
+        if not path.exists():
+            results[i] = BatchEmbeddingItem(path=audio_path, error=f"File not found: {audio_path}")
+            continue
+        try:
+            audio_data, sr = librosa.load(str(path), sr=target_sr, mono=True)
+            loaded.append((i, audio_data))
+        except Exception as e:
+            results[i] = BatchEmbeddingItem(path=audio_path, error=str(e))
+
+    if not loaded:
+        return BatchEmbeddingResponse(results=[r for r in results if r is not None])
+
+    # Batch inference - pass all audio arrays to the processor at once
+    audio_arrays = [audio for _, audio in loaded]
+    inputs = clap_model.processor(
+        audios=audio_arrays,
+        sampling_rate=target_sr,
+        return_tensors="pt",
+        padding=True,
+    )
+    inputs = {k: v.to(clap_model.device) for k, v in inputs.items()}
+
+    import torch
+    with torch.no_grad():
+        audio_embeds = clap_model.model.get_audio_features(**inputs)
+
+    embeddings = audio_embeds.cpu().numpy()
+
+    # Normalize and assign results
+    for batch_idx, (orig_idx, _) in enumerate(loaded):
+        emb = embeddings[batch_idx]
+        emb = emb / np.linalg.norm(emb)
+        results[orig_idx] = BatchEmbeddingItem(
+            path=request.audio_paths[orig_idx],
+            embedding=emb.tolist(),
+        )
+
+    logger.info(f"Batch embedding complete: {len(loaded)} succeeded, {len(request.audio_paths) - len(loaded)} failed")
+
+    return BatchEmbeddingResponse(results=[r for r in results if r is not None])
+
+
+@app.post("/embed/audio/batch/upload", response_model=BatchEmbeddingResponse)
+async def embed_audio_batch_upload(files: list[UploadFile] = File(...)):
+    """
+    Generate audio embeddings for multiple uploaded files in a single batched forward pass.
+
+    Request:
+        Content-Type: multipart/form-data
+        Multiple files with field name 'files'
+
+    Response:
+        {"results": [{"path": "filename", "embedding": [...]} | {"path": "filename", "error": "..."}]}
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    # Read all file contents while on the event loop (async I/O)
+    file_data = []
+    for f in files:
+        content = await f.read()
+        file_data.append((f.filename or f"file_{len(file_data)}", content))
+
+    # Offload CPU-heavy work to thread pool
+    import asyncio
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, _process_batch_bytes, file_data
+    )
+    return result
+
+
+def _process_batch_bytes(file_data: list[tuple[str, bytes]]) -> BatchEmbeddingResponse:
+    """Process multiple audio byte buffers into embeddings (blocking)."""
+    logger.info(f"Batch upload encoding {len(file_data)} audio files")
+
+    target_sr = clap_model.processor.feature_extractor.sampling_rate
+
+    loaded = []  # (index, audio_array)
+    results = [None] * len(file_data)
+
+    for i, (filename, content) in enumerate(file_data):
+        try:
+            audio_data, sr = librosa.load(io.BytesIO(content), sr=target_sr, mono=True)
+            loaded.append((i, audio_data))
+        except Exception as e:
+            results[i] = BatchEmbeddingItem(path=filename, error=str(e))
+
+    if not loaded:
+        return BatchEmbeddingResponse(results=[r for r in results if r is not None])
+
+    # Batch inference
+    audio_arrays = [audio for _, audio in loaded]
+    inputs = clap_model.processor(
+        audios=audio_arrays,
+        sampling_rate=target_sr,
+        return_tensors="pt",
+        padding=True,
+    )
+    inputs = {k: v.to(clap_model.device) for k, v in inputs.items()}
+
+    import torch
+    with torch.no_grad():
+        audio_embeds = clap_model.model.get_audio_features(**inputs)
+
+    embeddings = audio_embeds.cpu().numpy()
+
+    for batch_idx, (orig_idx, _) in enumerate(loaded):
+        emb = embeddings[batch_idx]
+        emb = emb / np.linalg.norm(emb)
+        results[orig_idx] = BatchEmbeddingItem(
+            path=file_data[orig_idx][0],
+            embedding=emb.tolist(),
+        )
+
+    logger.info(f"Batch upload complete: {len(loaded)} succeeded, {len(file_data) - len(loaded)} failed")
+
+    return BatchEmbeddingResponse(results=[r for r in results if r is not None])
 
 
 if __name__ == "__main__":

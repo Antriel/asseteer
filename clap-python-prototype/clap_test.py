@@ -32,7 +32,7 @@ class ClapTester:
         self.processor = ClapProcessor.from_pretrained(model_name)
         self.model.eval()  # Set to evaluation mode
 
-        print(f"✓ Model loaded successfully")
+        print(f"OK: Model loaded successfully")
         print(f"  - Audio embedding dim: {self.model.config.projection_dim}")
         print(f"  - Text embedding dim: {self.model.config.projection_dim}")
 
@@ -48,13 +48,10 @@ class ClapTester:
             Audio waveform as numpy array
         """
         target_sr = self.processor.feature_extractor.sampling_rate
-        print(f"Loading audio: {audio_path}")
-        print(f"  - Target sample rate: {target_sr} Hz")
 
         # Load audio with librosa (handles multiple formats)
         audio, sr = librosa.load(audio_path, sr=target_sr, duration=duration, mono=True)
 
-        print(f"  - Loaded {len(audio) / sr:.2f} seconds")
         return audio
 
     def encode_audio(self, audio: np.ndarray) -> np.ndarray:
@@ -206,7 +203,7 @@ def main():
             result = tester.test_audio_text_pair(str(audio_file), query)
             results.append(result)
 
-            print(f"\n✓ Similarity: {result['similarity']:.4f}")
+            print(f"\nOK: Similarity: {result['similarity']:.4f}")
 
     # Print summary
     print(f"\n{'=' * 80}")
@@ -222,9 +219,9 @@ def main():
         print(f"\nSaving embeddings to: {output_path}")
         with open(output_path, "w") as f:
             json.dump(results, f, indent=2)
-        print("✓ Saved")
+        print("OK: Saved")
 
-    print("\n✓ Done!")
+    print("\nOK: Done!")
 
 
 if __name__ == "__main__":
