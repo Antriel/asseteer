@@ -15,6 +15,11 @@
   // Compute display values
   let status = $derived(getCategoryStatus(processingState, category));
   let categoryLabel = $derived(category.charAt(0).toUpperCase() + category.slice(1));
+  let categoryDescription = $derived(
+    category === 'image'
+      ? 'Generates thumbnails and extracts dimensions'
+      : 'Extracts duration, sample rate, and channel info'
+  );
   let total = $derived(progress?.total || 0);
   let completed = $derived(progress?.completed || 0);
   let failed = $derived(progress?.failed || 0);
@@ -98,7 +103,10 @@
   <!-- Header: Category name and status -->
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <h4 class="text-base font-semibold text-primary">{categoryLabel}</h4>
+      <div>
+        <h4 class="text-base font-semibold text-primary">{categoryLabel}</h4>
+        <p class="text-xs text-secondary">{categoryDescription}</p>
+      </div>
       <span class="text-xs px-2 py-1 rounded {statusConfig.bgClass} {statusConfig.textClass}">
         {statusConfig.label}
       </span>

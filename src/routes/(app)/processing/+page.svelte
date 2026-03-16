@@ -67,7 +67,7 @@
   <div class="flex items-center justify-between mb-6">
     <div>
       <h1 class="text-2xl font-bold text-primary">Processing</h1>
-      <p class="text-sm text-secondary mt-1">Manage asset processing tasks</p>
+      <p class="text-sm text-secondary mt-1">Extract metadata, generate thumbnails, and enable search for your assets</p>
     </div>
 
     <!-- Global controls -->
