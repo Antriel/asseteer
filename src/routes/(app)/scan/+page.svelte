@@ -90,6 +90,12 @@
     uiState.scanDetails.phase = 'discovering';
     uiState.scanDetails.currentPath = path;
 
+    // Clean up any existing listener before registering a new one
+    if (unlisten) {
+      unlisten();
+      unlisten = null;
+    }
+
     // Set up progress listener
     unlisten = await listen<ScanProgressEvent>('scan-progress', (event) => {
       handleProgress(event.payload);
