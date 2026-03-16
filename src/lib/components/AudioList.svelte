@@ -2,9 +2,11 @@
   import type { Asset } from '$lib/types';
   import AudioPlayer from './AudioPlayer.svelte';
   import VirtualList from './shared/VirtualList.svelte';
-  import { AudioIcon, FolderIcon } from './icons';
+  import { AudioIcon, FolderIcon, SearchIcon } from './icons';
   import Badge from './shared/Badge.svelte';
   import { openPath } from '@tauri-apps/plugin-opener';
+  import { viewState } from '$lib/state/view.svelte';
+  import { exploreState } from '$lib/state/explore.svelte';
 
   // Extended asset type with optional similarity score
   type AudioAsset = Asset & { similarity?: number };
@@ -81,6 +83,13 @@
     }
     // Refocus container so keyboard navigation continues working
     containerRef?.focus();
+  }
+
+  async function showInExplore(asset: Asset) {
+    const dirPath = asset.path.replace(/\\/g, '/');
+    viewState.setLibraryView('explore');
+    await exploreState.loadRoots();
+    await exploreState.navigateToAssetPath(dirPath);
   }
 
   async function openDirectory(asset: Asset) {
@@ -221,11 +230,20 @@
           </div>
         </div>
         <button
-          class="w-8 h-8 flex items-center justify-center text-secondary hover:text-primary border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
-          onclick={() => openDirectory(selectedAsset!)}
-          title="Open folder"
+          class="w-8 h-8 flex items-center justify-center text-secondary hover:text-accent border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
+          onclick={() => showInExplore(selectedAsset!)}
+          title="Show in Explore view"
         >
           <FolderIcon size="sm" />
+        </button>
+        <button
+          class="w-8 h-8 flex items-center justify-center text-secondary hover:text-primary border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
+          onclick={() => openDirectory(selectedAsset!)}
+          title="Open in file explorer"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
         </button>
       </div>
       <AudioPlayer

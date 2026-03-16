@@ -210,6 +210,194 @@ export async function getPendingAssetCounts(db: Database): Promise<AssetPendingC
 }
 
 // ============================================================================
+// Directory browsing (Explore view)
+// ============================================================================
+
+export interface DirectoryNode {
+	path: string;
+	name: string;
+	childCount: number;
+	assetCount: number;
+}
+
+/**
+ * Get child directories of a given parent path.
+ * If parentPath is null, returns root-level directories (scan roots).
+ *
+ * Uses the assets.path column to derive the directory hierarchy.
+ * Paths are stored as the directory containing the asset file.
+ */
+export async function getDirectoryChildren(
+	db: Database,
+	parentPath: string | null
+): Promise<DirectoryNode[]> {
+	if (parentPath === null) {
+		// Get root directories: distinct top-level paths
+		// We find the shortest unique prefix directories
+		const result = await db.select<Array<{ dir_path: string; asset_count: number }>>(
+			`SELECT
+				path as dir_path,
+				COUNT(*) as asset_count
+			FROM assets
+			GROUP BY path
+			ORDER BY path COLLATE NOCASE`
+		);
+
+		// Build a tree: find root prefixes
+		return buildRootNodes(result);
+	}
+
+	// Get direct child directories of parentPath
+	// Normalize: ensure consistent separator
+	const normalizedParent = parentPath.replace(/\\/g, '/');
+	const prefix = normalizedParent + '/';
+
+	const result = await db.select<Array<{ dir_path: string; asset_count: number }>>(
+		`SELECT
+			path as dir_path,
+			COUNT(*) as asset_count
+		FROM assets
+		WHERE REPLACE(path, '\\', '/') LIKE ? || '%'
+		GROUP BY path
+		ORDER BY path COLLATE NOCASE`,
+		[prefix]
+	);
+
+	// Find immediate children: paths that have exactly one more segment after parent
+	return buildChildNodes(normalizedParent, result);
+}
+
+function buildRootNodes(
+	rows: Array<{ dir_path: string; asset_count: number }>
+): DirectoryNode[] {
+	// Group paths by their root prefix (e.g., "C:/Users/foo/assets")
+	// Find the common shortest prefixes that contain assets
+	const pathMap = new Map<string, { assetCount: number; childPaths: Set<string> }>();
+
+	for (const row of rows) {
+		const normalized = row.dir_path.replace(/\\/g, '/');
+		// Find the scan root: we look for the shortest path that's a prefix of multiple asset paths
+		// For simplicity, take the first 3 segments as root (e.g. C:/Users/folder or /home/user/folder)
+		const segments = normalized.split('/');
+
+		// Find a reasonable root: walk up from the full path until we find common prefixes
+		// Simple heuristic: use the path itself if no children, otherwise find common prefix
+		if (!pathMap.has(normalized)) {
+			pathMap.set(normalized, { assetCount: 0, childPaths: new Set() });
+		}
+		pathMap.get(normalized)!.assetCount += row.asset_count;
+	}
+
+	// Now find the minimal set of root directories
+	// A root is a path that is not a child of any other path in our set
+	const allPaths = [...pathMap.keys()].sort();
+	const roots = new Map<string, { assetCount: number; descendants: number }>();
+
+	for (const path of allPaths) {
+		// Find the shortest ancestor already in roots
+		let foundRoot = false;
+		for (const [rootPath] of roots) {
+			if (path.startsWith(rootPath + '/')) {
+				// This path is under an existing root
+				roots.get(rootPath)!.descendants++;
+				roots.get(rootPath)!.assetCount += pathMap.get(path)!.assetCount;
+				foundRoot = true;
+				break;
+			}
+		}
+		if (!foundRoot) {
+			// Check if this path should absorb any existing roots
+			const absorbed: string[] = [];
+			let totalAssets = pathMap.get(path)!.assetCount;
+			let totalDescendants = 0;
+			for (const [rootPath, rootData] of roots) {
+				if (rootPath.startsWith(path + '/')) {
+					absorbed.push(rootPath);
+					totalAssets += rootData.assetCount;
+					totalDescendants += rootData.descendants + 1;
+				}
+			}
+			for (const a of absorbed) roots.delete(a);
+			roots.set(path, { assetCount: totalAssets, descendants: totalDescendants });
+		}
+	}
+
+	return [...roots.entries()].map(([path, data]) => {
+		const segments = path.split('/');
+		return {
+			path,
+			name: segments[segments.length - 1] || segments[segments.length - 2] || path,
+			childCount: data.descendants,
+			assetCount: data.assetCount,
+		};
+	});
+}
+
+function buildChildNodes(
+	parentPath: string,
+	rows: Array<{ dir_path: string; asset_count: number }>
+): DirectoryNode[] {
+	// Group by immediate child segment
+	const childMap = new Map<string, { fullPath: string; assetCount: number; childPaths: number }>();
+	const parentDepth = parentPath.split('/').length;
+
+	for (const row of rows) {
+		const normalized = row.dir_path.replace(/\\/g, '/');
+		if (!normalized.startsWith(parentPath + '/')) continue;
+
+		const segments = normalized.split('/');
+		// Immediate child is at parentDepth index
+		if (segments.length <= parentDepth) continue;
+
+		const childSegment = segments[parentDepth];
+		const childPath = segments.slice(0, parentDepth + 1).join('/');
+
+		if (!childMap.has(childPath)) {
+			childMap.set(childPath, { fullPath: childPath, assetCount: 0, childPaths: 0 });
+		}
+		const entry = childMap.get(childPath)!;
+		entry.assetCount += row.asset_count;
+		// If the normalized path is longer than immediate child, it's a deeper descendant
+		if (segments.length > parentDepth + 1) {
+			entry.childPaths++;
+		}
+	}
+
+	return [...childMap.entries()].map(([path, data]) => {
+		const segments = path.split('/');
+		return {
+			path,
+			name: segments[segments.length - 1],
+			childCount: data.childPaths,
+			assetCount: data.assetCount,
+		};
+	});
+}
+
+/**
+ * Get assets in a specific directory (exact path match, not recursive)
+ */
+export async function getAssetsInDirectory(
+	db: Database,
+	directoryPath: string
+): Promise<Asset[]> {
+	const normalized = directoryPath.replace(/\\/g, '/');
+	return db.select<Asset[]>(
+		`SELECT
+			assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
+			assets.format, assets.file_size, assets.created_at, assets.modified_at,
+			image_metadata.width, image_metadata.height,
+			audio_metadata.duration_ms, audio_metadata.sample_rate, audio_metadata.channels
+		FROM assets
+		LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
+		LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
+		WHERE REPLACE(assets.path, '\\', '/') = ?
+		ORDER BY assets.filename COLLATE NOCASE ASC`,
+		[normalized]
+	);
+}
+
+// ============================================================================
 // CLAP Semantic Search (uses Tauri commands, not direct SQL)
 // ============================================================================
 

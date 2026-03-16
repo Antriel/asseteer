@@ -3,14 +3,20 @@ import type { Asset } from '$lib/types';
 type AssetViewMode = 'images' | 'audio';
 type LayoutMode = 'grid' | 'table';
 type ThumbnailSize = 'small' | 'medium' | 'large';
+export type LibraryView = 'search' | 'explore';
 
 class ViewState {
   activeTab = $state<AssetViewMode>('images');
   layoutMode = $state<LayoutMode>('grid');
   thumbnailSize = $state<ThumbnailSize>('medium');
+  libraryView = $state<LibraryView>('search');
 
   // Lightbox state
   lightboxAsset = $state<Asset | null>(null);
+
+  setLibraryView(view: LibraryView) {
+    this.libraryView = view;
+  }
 
   setActiveTab(tab: AssetViewMode) {
     this.activeTab = tab;
