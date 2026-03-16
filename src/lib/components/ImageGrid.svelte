@@ -13,6 +13,7 @@
   let containerElement: HTMLDivElement;
   let scrollTop = $state(0);
   let containerHeight = $state(0);
+  let windowWidth = $state(typeof window !== 'undefined' ? window.innerWidth : 1280);
 
   // Computed grid column classes and counts
   const gridClasses = $derived.by(() => {
@@ -25,9 +26,7 @@
 
   // Calculate columns based on viewport width and thumbnail size
   const columnCount = $derived.by(() => {
-    if (typeof window === 'undefined') return 4;
-    const width = window.innerWidth;
-    const isXL = width >= 1280;
+    const isXL = windowWidth >= 1280;
 
     switch (viewState.thumbnailSize) {
       case 'small': return isXL ? 8 : 6;
@@ -72,6 +71,7 @@
     if (containerElement) {
       containerHeight = containerElement.clientHeight;
     }
+    windowWidth = window.innerWidth;
   }
 
   onMount(() => {
@@ -86,8 +86,12 @@
       resizeObserver.observe(containerElement);
     }
 
+    const handleResize = () => { windowWidth = window.innerWidth; };
+    window.addEventListener('resize', handleResize);
+
     return () => {
       resizeObserver.disconnect();
+      window.removeEventListener('resize', handleResize);
     };
   });
 </script>
