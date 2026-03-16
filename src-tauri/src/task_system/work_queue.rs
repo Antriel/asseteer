@@ -5,7 +5,7 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{RwLock, Semaphore};
@@ -42,6 +42,8 @@ struct CategoryState {
     started_at: Arc<RwLock<Option<i64>>>,
     // Concurrency limiter - limits how many workers can process this category simultaneously
     concurrency_limiter: Arc<Semaphore>,
+    // Generation counter - incremented on each start to detect stale work items
+    generation: Arc<AtomicU64>,
 }
 
 impl CategoryState {
@@ -56,12 +58,13 @@ impl CategoryState {
             current_file: Arc::new(RwLock::new(None)),
             started_at: Arc::new(RwLock::new(None)),
             concurrency_limiter: Arc::new(Semaphore::new(max_concurrent)),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 }
 
-/// Work item containing category and asset
-type WorkItem = (ProcessingCategory, Asset);
+/// Work item containing category, generation, and asset
+type WorkItem = (ProcessingCategory, u64, Asset);
 
 /// Work queue manages asset processing with a worker pool
 pub struct WorkQueue {
@@ -120,14 +123,15 @@ impl WorkQueue {
         // Reset signals and counters for this category
         state.pause_signal.store(false, Ordering::SeqCst);
         state.stop_signal.store(false, Ordering::SeqCst);
+        let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
         state.total_assets.store(assets.len(), Ordering::SeqCst);
         state.completed_assets.store(0, Ordering::SeqCst);
         state.failed_assets.store(0, Ordering::SeqCst);
 
-        // Queue all assets with their category
+        // Queue all assets with their category and generation
         for asset in assets {
             self.work_tx
-                .send((category, asset))
+                .send((category, generation, asset))
                 .map_err(|e| format!("Failed to queue asset: {}", e))?;
         }
 
@@ -169,7 +173,7 @@ impl WorkQueue {
             loop {
                 // Try to get work from queue (non-blocking)
                 match work_rx.try_recv() {
-                    Ok((category, asset)) => {
+                    Ok((category, generation, asset)) => {
                         // Get category state
                         let state = {
                             let states = category_states.read().await;
@@ -182,6 +186,11 @@ impl WorkQueue {
                                 }
                             }
                         };
+
+                        // Skip stale items from a previous run
+                        if generation != state.generation.load(Ordering::SeqCst) {
+                            continue;
+                        }
 
                         // Check stop signal for this category
                         if state.stop_signal.load(Ordering::SeqCst) {
