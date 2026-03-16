@@ -11,7 +11,7 @@
 
   // Event payload from Rust backend
   interface ScanProgressEvent {
-    phase: 'discovering' | 'inserting' | 'complete';
+    phase: 'discovering' | 'inserting' | 'scanning' | 'complete';
     files_found: number;
     files_inserted: number;
     files_total: number;
@@ -45,10 +45,18 @@
     uiState.scanDetails.zipsScanned = event.zips_scanned;
 
     // Update summary progress string
-    const details = uiState.scanDetails;
     if (event.phase === 'discovering') {
       const zipInfo = event.zips_scanned > 0 ? ` (${event.zips_scanned} zips)` : '';
       uiState.scanProgress = `Discovering files... ${event.files_found} found${zipInfo}`;
+    } else if (event.phase === 'scanning') {
+      const zipInfo = event.zips_scanned > 0 ? ` (${event.zips_scanned} zips)` : '';
+      if (event.files_total > 0) {
+        // Discovery done, show insertion progress
+        const pct = Math.round((event.files_inserted / event.files_total) * 100);
+        uiState.scanProgress = `Saving to database... ${event.files_inserted}/${event.files_total} (${pct}%)`;
+      } else {
+        uiState.scanProgress = `Scanning... ${event.files_found} found, ${event.files_inserted} saved${zipInfo}`;
+      }
     } else if (event.phase === 'inserting') {
       const pct = event.files_total > 0
         ? Math.round((event.files_inserted / event.files_total) * 100)
@@ -146,6 +154,12 @@
           <h3 class="text-lg font-semibold text-primary text-center mb-2">
             {#if uiState.scanDetails.phase === 'discovering'}
               Discovering Files
+            {:else if uiState.scanDetails.phase === 'scanning'}
+              {#if uiState.scanDetails.filesTotal > 0}
+                Saving to Database
+              {:else}
+                Scanning Files
+              {/if}
             {:else if uiState.scanDetails.phase === 'inserting'}
               Saving to Database
             {:else}
@@ -159,6 +173,38 @@
               <p class="text-sm text-secondary">files found</p>
               {#if uiState.scanDetails.zipsScanned > 0}
                 <p class="text-xs text-tertiary mt-1">{uiState.scanDetails.zipsScanned} zip archives scanned</p>
+              {/if}
+            </div>
+          {:else if uiState.scanDetails.phase === 'scanning'}
+            <div class="mb-4">
+              {#if uiState.scanDetails.filesTotal > 0}
+                <!-- Discovery done: show progress bar for remaining inserts -->
+                <div class="flex items-center justify-between text-sm mb-2">
+                  <span class="text-secondary">Progress</span>
+                  <span class="text-primary font-medium">{uiState.scanDetails.filesInserted} / {uiState.scanDetails.filesTotal}</span>
+                </div>
+                <div class="h-2 bg-tertiary rounded-full overflow-hidden">
+                  <div
+                    class="h-full bg-accent transition-all duration-300"
+                    style="width: {progressPercent}%"
+                  ></div>
+                </div>
+                <p class="text-xs text-tertiary text-center mt-2">{progressPercent}% complete</p>
+              {:else}
+                <!-- Discovery + insertion happening concurrently -->
+                <div class="flex items-center justify-between text-sm mb-2">
+                  <div class="text-center flex-1">
+                    <p class="text-2xl font-bold text-accent">{uiState.scanDetails.filesFound}</p>
+                    <p class="text-xs text-secondary">found</p>
+                  </div>
+                  <div class="text-center flex-1">
+                    <p class="text-2xl font-bold text-success">{uiState.scanDetails.filesInserted}</p>
+                    <p class="text-xs text-secondary">saved</p>
+                  </div>
+                </div>
+                {#if uiState.scanDetails.zipsScanned > 0}
+                  <p class="text-xs text-tertiary text-center mt-1">{uiState.scanDetails.zipsScanned} zip archives scanned</p>
+                {/if}
               {/if}
             </div>
           {:else if uiState.scanDetails.phase === 'inserting'}

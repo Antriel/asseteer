@@ -9,7 +9,7 @@
   import Spinner from '$lib/components/shared/Spinner.svelte';
 
   interface ScanProgress {
-    phase: 'discovering' | 'inserting' | 'complete';
+    phase: 'discovering' | 'inserting' | 'scanning' | 'complete';
     files_found: number;
     files_inserted: number;
     files_total: number;
@@ -23,6 +23,14 @@
     if (progress.phase === 'discovering') {
       const zipInfo = progress.zips_scanned > 0 ? ` (${progress.zips_scanned} zips)` : '';
       return `Discovering files... ${progress.files_found} found${zipInfo}`;
+    }
+    if (progress.phase === 'scanning') {
+      const zipInfo = progress.zips_scanned > 0 ? ` (${progress.zips_scanned} zips)` : '';
+      if (progress.files_total > 0) {
+        const pct = Math.round((progress.files_inserted / progress.files_total) * 100);
+        return `Saving to database... ${progress.files_inserted}/${progress.files_total} (${pct}%)`;
+      }
+      return `Scanning... ${progress.files_found} found, ${progress.files_inserted} saved${zipInfo}`;
     }
     if (progress.phase === 'inserting') {
       const pct = progress.files_total > 0
