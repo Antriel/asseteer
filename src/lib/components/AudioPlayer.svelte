@@ -297,10 +297,18 @@
   <!-- Progress bar -->
   <div
     class="flex-1 cursor-pointer"
-    role="button"
+    role="slider"
     tabindex="0"
+    aria-valuemin={0}
+    aria-valuemax={Math.round(duration)}
+    aria-valuenow={Math.round(currentTime)}
+    aria-label="Seek audio"
     onclick={seek}
-    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') seek(e as any); }}
+    onkeydown={(e) => {
+      if (!audioElement) return;
+      if (e.key === 'ArrowRight') { e.preventDefault(); audioElement.currentTime = Math.min(duration, currentTime + duration * 0.05); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); audioElement.currentTime = Math.max(0, currentTime - duration * 0.05); }
+    }}
   >
     <div class="h-1 bg-default rounded-sm overflow-hidden">
       <div
