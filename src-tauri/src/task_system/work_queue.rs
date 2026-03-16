@@ -13,6 +13,13 @@ use tokio::time::{interval, Duration};
 
 const BATCH_UPDATE_INTERVAL_SEC: u64 = 2;
 
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 /// Progress statistics for a processing category
 #[derive(Debug, Clone, Serialize)]
 pub struct ProcessingProgress {
@@ -211,7 +218,10 @@ impl WorkQueue {
                         }
 
                         // Acquire concurrency permit (limits parallel processing per category)
-                        let _permit = state.concurrency_limiter.acquire().await.unwrap();
+                        let Ok(_permit) = state.concurrency_limiter.acquire().await else {
+                            println!("[Worker {}] Semaphore closed, stopping", worker_id);
+                            break;
+                        };
 
                         // Set current file before processing
                         {
@@ -249,10 +259,7 @@ impl WorkQueue {
 
                             // Save error to database
                             if let Some(error_msg) = &result.error {
-                                let now = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_secs() as i64;
+                                let now = unix_now();
 
                                 let _ = sqlx::query(
                                     "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
@@ -303,10 +310,7 @@ impl WorkQueue {
         let category_str = category.as_str().to_string();
 
         // Record start time
-        let start_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let start_time = unix_now();
         {
             let mut started = state.started_at.write().await;
             *started = Some(start_time);
@@ -509,10 +513,7 @@ fn calculate_eta(
         return (0.0, None);
     };
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = unix_now();
 
     let elapsed_secs = (now - start) as f64;
     if elapsed_secs <= 0.0 {

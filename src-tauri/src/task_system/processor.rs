@@ -9,6 +9,13 @@ use std::time::Duration;
 /// Timeout for processing a single asset (30 seconds)
 const PROCESSING_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
 /// Result of processing an asset
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -69,10 +76,7 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     match result {
         Ok(Ok(Ok((thumbnail_data, width, height)))) => {
             // Insert into image_metadata table
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
+            let now = unix_now();
 
             match sqlx::query(
                 "INSERT INTO image_metadata (asset_id, width, height, thumbnail_data, processed_at)
@@ -190,10 +194,7 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     match result {
         Ok(Ok(Ok((duration_ms, sample_rate, channels)))) => {
             // Insert into audio_metadata table
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
+            let now = unix_now();
 
             match sqlx::query(
                 "INSERT INTO audio_metadata (asset_id, duration_ms, sample_rate, channels, processed_at)
@@ -279,10 +280,7 @@ pub async fn process_clap_embedding(asset: &Asset, db: &SqlitePool) -> Processin
         Ok(embedding) => {
             // Store embedding in database
             let blob = embedding_to_blob(&embedding);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
+            let now = unix_now();
 
             match sqlx::query(
                 "INSERT INTO audio_embeddings (asset_id, embedding, created_at)
