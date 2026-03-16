@@ -17,6 +17,7 @@
   let error = $state<string | null>(null);
   let containerElement: HTMLDivElement;
   let hasLoaded = $state(false);
+  let destroyed = false;
 
   const sizeClasses = $derived.by(() => {
     switch (size) {
@@ -34,25 +35,39 @@
       const db = await getDatabase();
       const thumbnailData = await getThumbnail(db, assetId);
 
+      if (destroyed) return;
+
       if (thumbnailData) {
-        // Thumbnail exists in database - use it
         const blob = new Blob([thumbnailData], { type: 'image/webp' });
         thumbnailUrl = URL.createObjectURL(blob);
       } else {
-        // No thumbnail - load original file (works for both regular files and zip entries)
         const bytes = await invoke<number[]>('get_asset_bytes', { assetId });
+        if (destroyed) return;
         const blob = new Blob([new Uint8Array(bytes)]);
         thumbnailUrl = URL.createObjectURL(blob);
       }
     } catch (e) {
-      error = String(e);
+      if (!destroyed) {
+        error = String(e);
+      }
     } finally {
-      isLoading = false;
+      if (!destroyed) {
+        isLoading = false;
+      }
     }
   }
 
+  // Revoke blob URLs when they change or on component destroy
+  $effect(() => {
+    const url = thumbnailUrl;
+    return () => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  });
+
   onMount(() => {
-    // Create intersection observer with root margin for preloading
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -63,7 +78,7 @@
         });
       },
       {
-        rootMargin: '200px', // Load 200px before entering viewport
+        rootMargin: '200px',
         threshold: 0.01
       }
     );
@@ -73,10 +88,8 @@
     }
 
     return () => {
+      destroyed = true;
       observer.disconnect();
-      if (thumbnailUrl) {
-        URL.revokeObjectURL(thumbnailUrl);
-      }
     };
   });
 </script>
