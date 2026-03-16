@@ -28,9 +28,7 @@
   const startRow = $derived(Math.max(0, Math.floor(scrollTop / rowHeight) - bufferRows));
   const endRow = $derived(Math.min(totalRows, startRow + visibleRows + bufferRows * 2));
 
-  const startIndex = $derived(startRow);
-  const endIndex = $derived(endRow);
-  const visibleAssets = $derived(assets.slice(startIndex, endIndex));
+  const visibleAssets = $derived(assets.slice(startRow, endRow));
   const offsetY = $derived(startRow * rowHeight);
 
   function formatDimensions(asset: Asset): string {
@@ -94,54 +92,43 @@
       <p class="text-secondary">No assets found.</p>
     </div>
   {:else}
-    <table class="w-full" style="height: {totalHeight}px;">
-      <thead class="sticky top-0 bg-secondary border-b border-default z-10">
-        <tr>
-          <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Preview</th>
-          <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Name</th>
-          <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Type</th>
-          <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Dimensions</th>
-          <th class="px-4 py-2 text-left text-sm font-medium text-secondary">Size</th>
-        </tr>
-      </thead>
-      <tbody>
-        <!-- Spacer for items before visible range -->
-        {#if startIndex > 0}
-          <tr style="height: {offsetY}px;"><td colspan="5"></td></tr>
-        {/if}
+    <!-- Header row (sticky) -->
+    <div class="sticky top-0 bg-secondary border-b border-default z-10 grid grid-cols-[80px_1fr_100px_120px_100px] px-4 py-2 text-sm font-medium text-secondary">
+      <span>Preview</span>
+      <span>Name</span>
+      <span>Type</span>
+      <span>Dimensions</span>
+      <span>Size</span>
+    </div>
 
-        <!-- Visible items -->
-        {#each visibleAssets as asset, idx (asset.id)}
-          {@const index = startIndex + idx}
-          <tr class="border-b border-default hover:bg-secondary" style="height: {rowHeight}px;">
-            <td class="px-4 py-2">
+    <!-- Virtual scroll container -->
+    <div style="height: {totalHeight}px; position: relative;">
+      <div class="absolute w-full" style="transform: translateY({offsetY}px);">
+        {#each visibleAssets as asset (asset.id)}
+          <div class="grid grid-cols-[80px_1fr_100px_120px_100px] items-center px-4 border-b border-default hover:bg-secondary" style="height: {rowHeight}px;">
+            <div class="py-2">
               <AssetThumbnail assetId={asset.id} assetType={asset.asset_type} />
-            </td>
-            <td class="px-4 py-2 text-sm text-primary" title={formatLocation(asset)}>
+            </div>
+            <div class="py-2 text-sm text-primary" title={formatLocation(asset)}>
               <div class="flex items-center gap-2">
                 <span>{asset.filename}</span>
                 {#if asset.zip_entry}
                   <Badge variant="info">ZIP</Badge>
                 {/if}
               </div>
-            </td>
-            <td class="px-4 py-2 text-sm text-secondary">
+            </div>
+            <div class="py-2 text-sm text-secondary">
               {asset.asset_type}
-            </td>
-            <td class="px-4 py-2 text-sm text-secondary">
+            </div>
+            <div class="py-2 text-sm text-secondary">
               {formatDimensions(asset)}
-            </td>
-            <td class="px-4 py-2 text-sm text-secondary">
+            </div>
+            <div class="py-2 text-sm text-secondary">
               {formatFileSize(asset.file_size)}
-            </td>
-          </tr>
+            </div>
+          </div>
         {/each}
-
-        <!-- Spacer for items after visible range -->
-        {#if endIndex < assets.length}
-          <tr style="height: {totalHeight - offsetY - (visibleAssets.length * rowHeight)}px;"><td colspan="5"></td></tr>
-        {/if}
-      </tbody>
-    </table>
+      </div>
+    </div>
   {/if}
 </div>
