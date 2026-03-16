@@ -56,32 +56,72 @@ This document outlines current pain points with the CLAP server integration and 
 
 ---
 
-## Chosen Approach: User-Managed Python Setup
+## Chosen Approach: `uv`-Managed Python (Primary) + Manual Fallback
 
-**Decision**: Keep Python as an external dependency but make setup much easier with clear documentation, setup scripts, and better error handling in the app.
+**Decision**: Use `uv` (Astral's Rust-based Python package manager) to fully manage the Python environment. The app downloads `uv` on first use, then `uv` handles Python installation, dependency resolution, and environment isolation — all transparently. Manual Python setup remains as a documented fallback.
 
-**Target user**: Technical users comfortable with running a setup script. CLAP features are optional/advanced.
+**Target user**: Any user. No Python knowledge required — just click "Enable Semantic Search" in the app.
 
 **Rationale**:
-- Simplest to implement and maintain
-- No complex bundling or porting work
-- Python ML ecosystem updates easily (just `pip install --upgrade`)
-- Keeps main app installer small
-- CLAP is an optional power-user feature, not core functionality
+- **Zero prerequisites**: `uv` downloads its own Python — user doesn't need Python installed
+- **No ABI mismatch bugs**: `uv` pins the Python version (e.g., 3.13) regardless of system Python
+- **One-click setup**: App downloads `uv` (~30MB), then `uv run` handles everything
+- **Small app installer**: `uv` is downloaded on demand, not bundled
+- **Keeps Python ecosystem benefits**: Still uses torch, transformers, librosa — just managed automatically
+- **Graceful fallback**: Users who prefer their own Python/venv can still configure that in settings
+
+### How It Works
+
+```
+User clicks "Enable Semantic Search"
+  → App downloads uv binary (~30MB) to app data directory
+  → App runs: uv run --python 3.13 clap_server.py
+  → uv automatically:
+      1. Downloads Python 3.13 (~25MB, cached)
+      2. Creates isolated environment (cached, invisible to user)
+      3. Installs dependencies from inline script metadata
+      4. Runs the server
+  → First inference triggers HuggingFace model download (~1-2GB)
+  → All subsequent starts reuse cache — server starts in seconds
+```
+
+### Inline Script Dependencies (PEP 723)
+
+Instead of a separate `requirements.txt`, dependencies are declared directly in `clap_server.py`:
+
+```python
+# /// script
+# requires-python = ">=3.11,<3.14"
+# dependencies = [
+#     "torch>=2.0.0",
+#     "transformers>=4.30.0",
+#     "librosa>=0.10.0",
+#     "soundfile>=0.13.0",
+#     "numpy>=1.24.0",
+#     "fastapi>=0.109.0",
+#     "uvicorn[standard]>=0.27.0",
+#     "python-multipart>=0.0.6",
+# ]
+# ///
+```
+
+Note the `<3.14` upper bound — this pins away from Python versions with known compatibility issues. When 3.14 support is confirmed for all deps, bump the bound.
 
 ### What We Ship
 
 ```
 clap-server/
-├── clap_server.py       # FastAPI server (existing)
+├── clap_server.py       # FastAPI server (with inline PEP 723 deps)
 ├── clap_test.py         # CLAP model wrapper (existing)
-├── requirements.txt     # Python dependencies (existing)
-├── setup.bat            # NEW: Windows one-click setup
-├── setup.sh             # NEW: Unix one-click setup
-└── README.md            # NEW: Brief setup instructions
+├── requirements.txt     # Kept for manual fallback users
+├── setup.bat            # Manual setup (fallback)
+├── setup.sh             # Manual setup (fallback)
+└── README.md            # Documents both uv and manual approaches
 ```
 
 ### Setup Scripts
+
+**Important: Stale venv detection.** If the user upgrades their system Python (e.g., 3.13 → 3.14), all C extension packages (numpy, cffi/soundfile, torch) will have `.pyd`/`.so` files compiled for the old Python ABI and silently fail to import. The setup scripts must detect this and rebuild the venv. This was discovered when a Python 3.13→3.14 upgrade caused `soundfile` errors that looked like MP3 format issues but were actually ABI mismatches (`_cffi_backend.cp313-win_amd64.pyd` loaded by Python 3.14).
 
 **Windows (`setup.bat`)**:
 ```batch
@@ -93,6 +133,24 @@ if %errorlevel% neq 0 (
     echo Python not found. Please install Python 3.9+ from python.org
     pause
     exit /b 1
+)
+
+:: Check if venv exists but was built with a different Python version
+if exist venv (
+    venv\Scripts\python -c "import sys; exit(0)" >nul 2>nul
+    if %errorlevel% neq 0 (
+        echo Existing venv is broken or built with a different Python version.
+        echo Recreating...
+        rmdir /s /q venv
+    ) else (
+        :: Verify C extensions work (catches Python minor version upgrades)
+        venv\Scripts\python -c "import _cffi_backend" >nul 2>nul
+        if %errorlevel% neq 0 (
+            echo Existing venv has incompatible packages (Python version changed?).
+            echo Recreating...
+            rmdir /s /q venv
+        )
+    )
 )
 
 if not exist venv (
@@ -119,6 +177,19 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
+# Check if venv exists but was built with a different Python version
+if [ -d "venv" ]; then
+    if ! venv/bin/python -c "import sys; exit(0)" 2>/dev/null; then
+        echo "Existing venv is broken or built with a different Python version."
+        echo "Recreating..."
+        rm -rf venv
+    elif ! venv/bin/python -c "import _cffi_backend" 2>/dev/null; then
+        echo "Existing venv has incompatible packages (Python version changed?)."
+        echo "Recreating..."
+        rm -rf venv
+    fi
+fi
+
 if [ ! -d "venv" ]; then
     echo "Creating virtual environment..."
     python3 -m venv venv
@@ -134,84 +205,125 @@ echo "First run will download the AI model (~1-2GB)."
 
 ### Code Changes Required
 
-#### 1. Configurable Server Path (`server.rs`)
+#### 1. `uv` Binary Management (`server.rs` or new `uv.rs`)
 
-Replace hardcoded path detection with configurable setting:
+Download and cache the `uv` binary on first use:
 
 ```rust
-// Current: fragile path detection
-let clap_dir = find_clap_directory()?; // checks cwd, parent
+fn get_or_download_uv(app: &AppHandle) -> Result<PathBuf, String> {
+    let uv_dir = app.path().app_data_dir()?.join("uv");
+    let uv_bin = if cfg!(windows) { uv_dir.join("uv.exe") } else { uv_dir.join("uv") };
 
-// New: read from config, with fallback
-let clap_dir = get_clap_server_path(&app_handle)?;
+    if uv_bin.exists() {
+        return Ok(uv_bin);
+    }
 
+    // Download from https://github.com/astral-sh/uv/releases
+    // ~30MB, single static binary, no dependencies
+    // Use platform-appropriate URL:
+    //   Windows: uv-x86_64-pc-windows-msvc.zip
+    //   macOS:   uv-aarch64-apple-darwin.tar.gz
+    //   Linux:   uv-x86_64-unknown-linux-gnu.tar.gz
+    download_and_extract_uv(&uv_dir)?;
+
+    Ok(uv_bin)
+}
+```
+
+#### 2. Server Startup via `uv` (`server.rs`)
+
+Replace venv-based startup with `uv run`:
+
+```rust
+// Current: find venv python, spawn uvicorn
+let python_path = clap_dir.join("venv/Scripts/python.exe");
+Command::new(&python_path).args(["-m", "uvicorn", "clap_server:app", ...])
+
+// New: uv handles everything
+let uv = get_or_download_uv(app)?;
+Command::new(&uv)
+    .args(["run", "--python", "3.13", "clap_server.py"])
+    .current_dir(&clap_dir)
+    .env("UV_CACHE_DIR", app.path().app_data_dir()?.join("uv-cache"))
+    .spawn()
+```
+
+Key details:
+- `--python 3.13` ensures uv downloads and uses exactly Python 3.13
+- `UV_CACHE_DIR` keeps Python/packages in app data (clean uninstall)
+- First run: uv downloads Python + deps (1-3 min). Subsequent runs: instant
+- The inline PEP 723 metadata in `clap_server.py` tells uv what to install
+
+#### 3. First-Run UX
+
+When user enables semantic search for the first time:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Setting Up Semantic Search                          │
+│                                                      │
+│  ✓ Downloading runtime tools...           (30MB)    │
+│  ◌ Installing Python environment...       (~500MB)  │
+│  ○ Downloading AI model...                (~1-2GB)  │
+│                                                      │
+│  This is a one-time setup. Future starts will be    │
+│  instant.                                            │
+│                                                      │
+│  [Cancel]                                            │
+└─────────────────────────────────────────────────────┘
+```
+
+No "install Python" step. No "run setup script" step. Just a progress dialog.
+
+#### 4. Settings UI
+
+Add to settings page:
+- **Semantic Search**: Toggle to enable/disable
+- **Server Status**: Shows "Not set up" / "Setting up..." / "Ready" / "Running"
+- **Runtime Info**: Shows Python version, device (CPU/GPU), cache size
+- **Advanced: Manual Python path**: Override for users who want their own venv (fallback)
+- **Clear Cache**: Button to remove downloaded Python/packages and re-download
+
+#### 5. Configurable Server Path (for manual fallback)
+
+Users who prefer to manage their own Python can configure a custom path:
+
+```rust
 fn get_clap_server_path(app: &AppHandle) -> Result<PathBuf, String> {
-    // 1. Check user-configured path in settings
+    // 1. Check user-configured path in settings (manual override)
     if let Some(path) = get_setting("clap_server_path") {
         return Ok(PathBuf::from(path));
     }
 
-    // 2. Check default location relative to app
+    // 2. Default: relative to app
     let default = app.path().resource_dir()?.join("clap-server");
     if default.exists() {
         return Ok(default);
     }
 
-    // 3. Legacy: check development locations
-    // ... existing cwd/parent logic as fallback
+    // 3. Development fallback
+    // ... existing cwd/parent logic
 
-    Err("CLAP server not found. Please configure the path in settings.".into())
+    Err("CLAP server not found.".into())
 }
 ```
 
-#### 2. Better Error Messages
-
-Replace generic errors with actionable guidance:
+#### 6. Better Error Messages
 
 ```rust
-// Current
-Err("Failed to start CLAP server".into())
+// uv download failed
+"Failed to download runtime tools. Check your internet connection and try again."
 
-// New
-Err(format!(
-    "CLAP server not set up. To enable semantic audio search:\n\
-     1. Open the clap-server folder: {}\n\
-     2. Run setup.bat (Windows) or ./setup.sh (Mac/Linux)\n\
-     3. Restart the app",
-    clap_dir.display()
-))
+// uv run failed (first time - dependency install)
+"Failed to set up Python environment. Check the logs for details."
+
+// Server crashed
+"Semantic search server stopped unexpectedly. [Restart] [View Logs]"
 ```
 
-#### 3. Settings UI Addition
+#### 7. Model Download Progress (Nice-to-Have)
 
-Add to settings page:
-- **CLAP Server Path**: Text field with folder picker
-- **Open CLAP Folder**: Button to open in file explorer
-- **Server Status**: Shows "Not configured" / "Ready" / "Running"
-
-#### 4. First-Run Detection
-
-When user tries to use semantic search without setup:
-
-```
-┌─────────────────────────────────────────────────────┐
-│  Semantic Search Setup Required                      │
-│                                                      │
-│  To enable AI-powered audio search:                  │
-│                                                      │
-│  1. Install Python 3.9+ (python.org)                │
-│  2. Run the setup script in: [Open Folder]          │
-│  3. Restart Asseteer                                │
-│                                                      │
-│  First run will download the AI model (~1-2GB).     │
-│                                                      │
-│  [Open Setup Folder]  [Dismiss]                     │
-└─────────────────────────────────────────────────────┘
-```
-
-#### 5. Model Download Progress (Nice-to-Have)
-
-If possible, capture Python stdout during startup to show:
+Capture Python stdout during startup to show:
 - "Loading model..."
 - "Downloading model: 45%..." (if we can parse HF download output)
 
@@ -221,14 +333,16 @@ This may be tricky since HuggingFace downloads happen inside transformers librar
 
 | File | Change |
 |------|--------|
-| `src-tauri/src/clap/server.rs` | Configurable path, better errors |
-| `src-tauri/src/commands/settings.rs` | Add CLAP path setting |
-| `src/lib/state/settings.svelte.ts` | Add CLAP path to settings state |
-| `src/routes/(app)/settings/+page.svelte` | Add CLAP configuration UI |
-| `src/lib/components/ClapProcessingCard.svelte` | Show setup instructions when not configured |
-| `clap-server/setup.bat` | New file |
-| `clap-server/setup.sh` | New file |
-| `clap-server/README.md` | New file |
+| `src-tauri/src/clap/server.rs` | `uv`-based startup, fallback to manual venv |
+| `src-tauri/src/clap/uv.rs` | NEW: `uv` binary download/management |
+| `src-tauri/src/commands/settings.rs` | Add CLAP/semantic search settings |
+| `src/lib/state/settings.svelte.ts` | Add semantic search state |
+| `src/routes/(app)/settings/+page.svelte` | Add semantic search configuration UI |
+| `src/lib/components/ClapSetupDialog.svelte` | NEW: First-run setup progress dialog |
+| `clap-server/clap_server.py` | Add PEP 723 inline dependency metadata |
+| `clap-server/setup.bat` | Manual fallback setup script |
+| `clap-server/setup.sh` | Manual fallback setup script |
+| `clap-server/README.md` | Documents both uv (automatic) and manual approaches |
 
 ---
 
@@ -464,6 +578,31 @@ These approaches were considered but decided against due to complexity vs. benef
 
 **Revisit if**: HTTP latency becomes a measurable problem.
 
+### Docker Container
+
+**Concept**: Ship a Dockerfile (or pre-built image) that bundles Python, dependencies, and optionally the model. Users run `docker compose up` or the app manages the container lifecycle. Could be offered as an alternative to the manual Python setup — users choose whichever they're comfortable with.
+
+**Pros**:
+- Completely isolates Python/torch/numpy version issues (no more ABI mismatch bugs)
+- Reproducible environment — "works on my machine" becomes "works in the container"
+- No pollution of user's system Python or PATH
+- Docker Desktop is increasingly common among technical users
+- App could auto-manage container lifecycle (start/stop/health check) via Docker API or CLI
+- GPU passthrough possible with `--gpus` flag (nvidia-docker)
+- Model can be persisted via Docker volume (download once, survives container rebuilds)
+
+**Cons**:
+- Docker Desktop is a ~500MB install, heavyweight if user doesn't already have it
+- GPU passthrough is Linux-only natively; Windows requires WSL2+nvidia-docker (works but extra setup)
+- Adds networking complexity (container port mapping, though localhost:5555 is straightforward)
+- Image size ~3-5GB with torch+transformers (though this is a one-time pull)
+- Slight overhead vs native Python, though negligible for inference workloads
+- macOS Docker has no GPU passthrough at all (CPU only, which is fine for CLAP)
+
+**Hybrid approach**: Offer both options in settings — "Python (manual)" and "Docker (managed)". The app detects which is available and guides the user. Docker path would be fully managed (app runs `docker compose up -d`, monitors health, stops on app exit). Python path stays as-is for users who prefer it or can't install Docker.
+
+**Revisit if**: The manual Python setup keeps causing friction (version mismatches, broken venvs, platform differences). Docker would trade "Python environment hell" for "just have Docker installed."
+
 ### Cloud Service
 
 **Concept**: Host CLAP server remotely, offer as optional alternative.
@@ -489,32 +628,37 @@ There's no standardized way to bundle local AI models with desktop apps yet:
 
 No "clap.cpp" or packaged CLAP runtime exists. The Python + HuggingFace implementation is effectively the only maintained option.
 
-This validates our choice: work with the Python ecosystem rather than fight it.
+This validates our choice: work with the Python ecosystem rather than fight it. The emergence of `uv` (Astral, Rust-based, ~30MB static binary) makes this much more viable — it can download and manage Python itself, eliminating the "user must have Python installed" prerequisite that was the biggest UX hurdle.
 
 ---
 
 ## Implementation Priority
 
-### Phase 1: Foundation
-1. **Setup scripts** - `setup.bat`, `setup.sh`, `README.md`
-2. **Configurable path** - Settings storage and `server.rs` changes
-3. **Better error messages** - Replace generic errors with setup instructions
+### Phase 1: `uv` Integration (Foundation)
+1. **`uv` binary management** - Download, cache, and version-check `uv` binary in Rust
+2. **PEP 723 metadata** - Add inline dependencies to `clap_server.py`
+3. **`uv run` startup** - Replace venv-based spawning in `server.rs` with `uv run --python 3.13`
+4. **Better error messages** - Actionable errors for download failures, setup issues, crashes
 
-### Phase 2: User Experience
-4. **Settings UI** - Path configuration in settings page
-5. **First-run dialog** - Friendly prompt when CLAP not configured
-6. **StatusBar integration** - Show server status (offline/starting/ready)
+### Phase 2: One-Click Setup UX
+5. **Setup progress dialog** - Show download/install progress on first enable
+6. **Settings UI** - Toggle semantic search, show status, manual path override
+7. **StatusBar integration** - Show server status (offline/setting up/starting/ready)
 
 ### Phase 3: Polish
-7. **Detailed health check** - Return and display device info (CPU/GPU)
-8. **Periodic health monitoring** - Detect server crashes
-9. **Port fallback** - Handle port conflicts gracefully
-10. **Log capture** - Redirect Python output to log file
+8. **Detailed health check** - Return and display device info (CPU/GPU)
+9. **Periodic health monitoring** - Detect server crashes, auto-restart
+10. **Port fallback** - Handle port conflicts gracefully
+11. **Log capture** - Redirect Python output to log file
+12. **Manual fallback scripts** - `setup.bat`/`setup.sh` for users who prefer their own Python
 
 ---
 
 ## Open Questions
 
-1. Should CLAP features be hidden entirely until configured, or shown with "setup required" state?
+1. Should CLAP features be hidden entirely until set up, or shown with "Enable" state?
 2. Do we rename `clap-python-prototype` to just `clap-server` for release?
-3. Should the setup script also do a test run to pre-download the model?
+3. Should first-time setup also pre-download the HuggingFace model, or let it happen on first inference?
+4. Should we offer Docker as a third option alongside `uv` (automatic) and manual Python?
+5. What `uv` version to target? Pin a specific release, or always download latest?
+6. Where to store `uv` cache? App data dir keeps it contained, but torch packages are large (~2GB) — should we allow users to choose the location?

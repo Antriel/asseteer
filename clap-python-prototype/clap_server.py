@@ -180,7 +180,14 @@ def _process_audio_bytes(content: bytes, filename: str) -> list[float]:
     logger.info(f"Encoding uploaded audio: {filename} ({len(content)} bytes)")
 
     target_sr = clap_model.processor.feature_extractor.sampling_rate
-    audio_data, sr = librosa.load(io.BytesIO(content), sr=target_sr, mono=True)
+    try:
+        audio_data, sr = librosa.load(io.BytesIO(content), sr=target_sr, mono=True)
+    except Exception as e:
+        ext = Path(filename).suffix.lower()
+        raise RuntimeError(
+            f"Failed to decode audio file '{filename}' ({ext}): {e}. "
+            f"Try upgrading soundfile: pip install --upgrade soundfile"
+        ) from e
     logger.info(f"Loaded {len(audio_data) / sr:.2f} seconds of audio")
 
     embedding = clap_model.encode_audio(audio_data)
