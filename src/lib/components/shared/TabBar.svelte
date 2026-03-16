@@ -12,6 +12,9 @@
 
   function switchTab(tab: 'images' | 'audio') {
     viewState.setActiveTab(tab);
+    if (tab === 'images') {
+      assetsState.setDurationFilter(null, null);
+    }
     assetsState.loadAssets(tab === 'images' ? 'image' : 'audio');
   }
 </script>
