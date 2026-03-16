@@ -4,6 +4,7 @@
   import { formatFileSize } from '$lib/state/assets.svelte';
   import AssetThumbnail from './AssetThumbnail.svelte';
   import Badge from './shared/Badge.svelte';
+  import { viewState } from '$lib/state/view.svelte';
 
   interface Props {
     assets: Asset[];
@@ -106,9 +107,9 @@
       <div class="absolute w-full" style="transform: translateY({offsetY}px);">
         {#each visibleAssets as asset (asset.id)}
           <div class="grid grid-cols-[80px_1fr_100px_120px_100px] items-center px-4 border-b border-default hover:bg-secondary" style="height: {rowHeight}px;">
-            <div class="py-2">
+            <button class="py-2 cursor-pointer" onclick={() => viewState.openLightbox(asset)}>
               <AssetThumbnail assetId={asset.id} assetType={asset.asset_type} />
-            </div>
+            </button>
             <div class="py-2 text-sm text-primary" title={formatLocation(asset)}>
               <div class="flex items-center gap-2">
                 <span>{asset.filename}</span>
