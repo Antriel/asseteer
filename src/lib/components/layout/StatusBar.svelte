@@ -64,6 +64,20 @@
         <span class="text-warning font-medium">Paused</span>
         <span class="text-secondary">{overall.completed}/{overall.total}</span>
       </div>
+    {:else if processingState.lastRunResult}
+      {@const result = processingState.lastRunResult}
+      <div class="flex items-center gap-2">
+        {#if result.failed > 0}
+          <div class="w-2 h-2 rounded-full bg-error"></div>
+          <span class="text-primary font-medium">Complete</span>
+          <span class="text-secondary">{result.completed} processed</span>
+          <span class="text-error">{result.failed} failed</span>
+        {:else}
+          <div class="w-2 h-2 rounded-full bg-success"></div>
+          <span class="text-primary font-medium">Complete</span>
+          <span class="text-secondary">{result.completed} processed</span>
+        {/if}
+      </div>
     {:else}
       <div class="flex items-center gap-2">
         <div class="w-2 h-2 rounded-full bg-tertiary"></div>

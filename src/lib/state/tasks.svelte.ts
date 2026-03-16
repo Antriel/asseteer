@@ -16,6 +16,12 @@ import type {
  * Tracks processing progress independently for each category (image, audio, etc.)
  * and allows independent control of each category.
  */
+export interface ProcessingRunResult {
+  total: number;
+  completed: number;
+  failed: number;
+}
+
 class ProcessingState {
   // Per-category progress tracking (using SvelteMap for reactivity)
   categoryProgress = $state(new SvelteMap<ProcessingCategory, CategoryProgress>());
@@ -25,6 +31,9 @@ class ProcessingState {
 
   // Pending asset count (from database)
   pendingCount = $state<PendingCount>({ images: 0, audio: 0, clap: 0, total: 0 });
+
+  // Result from last completed processing run (shown in status bar until next run)
+  lastRunResult = $state<ProcessingRunResult | null>(null);
 
   // Event listeners
   private unlistenFns: UnlistenFn[] = [];
@@ -48,11 +57,37 @@ class ProcessingState {
         console.log(`[Processing] ${category} complete:`, event.payload);
         this.updateCategoryProgress(category, event.payload);
         await this.refreshPendingCount();
+        this.checkAllComplete();
       }),
     ]);
 
     this.unlistenFns = await Promise.all(listenerPromises);
     console.timeEnd('[Processing] initializeListeners');
+  }
+
+  /**
+   * Check if all categories have finished and update lastRunResult
+   */
+  private checkAllComplete() {
+    let anyRunning = false;
+    let total = 0;
+    let completed = 0;
+    let failed = 0;
+
+    for (const progress of this.categoryProgress.values()) {
+      if (progress.isRunning) {
+        anyRunning = true;
+        break;
+      }
+      total += progress.total;
+      completed += progress.completed;
+      failed += progress.failed;
+    }
+
+    if (!anyRunning && total > 0) {
+      this.lastRunResult = { total, completed, failed };
+      console.log('[Processing] All complete:', this.lastRunResult);
+    }
   }
 
   /**
@@ -76,6 +111,9 @@ class ProcessingState {
       console.log(`[Processing] Skipping ${category}: No pending assets`);
       return; // Gracefully skip instead of throwing error
     }
+
+    // Clear last run result when starting new processing
+    this.lastRunResult = null;
 
     try {
       await invoke('start_processing', { category });
