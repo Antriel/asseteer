@@ -11,7 +11,6 @@ class ViewState {
 
   // Lightbox state
   lightboxAsset = $state<Asset | null>(null);
-  lightboxIndex = $state(0);
 
   setActiveTab(tab: AssetViewMode) {
     this.activeTab = tab;
@@ -27,9 +26,8 @@ class ViewState {
     this.thumbnailSize = size;
   }
 
-  openLightbox(asset: Asset, index: number) {
+  openLightbox(asset: Asset) {
     this.lightboxAsset = asset;
-    this.lightboxIndex = index;
   }
 
   closeLightbox() {
@@ -37,16 +35,18 @@ class ViewState {
   }
 
   nextImage(assets: Asset[]) {
-    if (this.lightboxIndex < assets.length - 1) {
-      this.lightboxIndex++;
-      this.lightboxAsset = assets[this.lightboxIndex];
+    if (!this.lightboxAsset) return;
+    const currentIndex = assets.findIndex((a) => a.id === this.lightboxAsset!.id);
+    if (currentIndex !== -1 && currentIndex < assets.length - 1) {
+      this.lightboxAsset = assets[currentIndex + 1];
     }
   }
 
   prevImage(assets: Asset[]) {
-    if (this.lightboxIndex > 0) {
-      this.lightboxIndex--;
-      this.lightboxAsset = assets[this.lightboxIndex];
+    if (!this.lightboxAsset) return;
+    const currentIndex = assets.findIndex((a) => a.id === this.lightboxAsset!.id);
+    if (currentIndex > 0) {
+      this.lightboxAsset = assets[currentIndex - 1];
     }
   }
 }

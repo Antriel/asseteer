@@ -58,8 +58,8 @@
   const visibleAssets = $derived(assets.slice(startIndex, endIndex));
   const offsetY = $derived(startRow * rowHeight);
 
-  function handleImageClick(asset: Asset, index: number) {
-    viewState.openLightbox(asset, index);
+  function handleImageClick(asset: Asset) {
+    viewState.openLightbox(asset);
   }
 
   function handleScroll(event: Event) {
@@ -106,11 +106,10 @@
       class="grid {gridClasses} gap-2 p-4 absolute w-full"
       style="transform: translateY({offsetY}px);"
     >
-      {#each visibleAssets as asset, idx (asset.id)}
-        {@const index = startIndex + idx}
+      {#each visibleAssets as asset (asset.id)}
         <button
           class="relative bg-secondary border border-default rounded-lg overflow-hidden transition-all cursor-pointer hover:border-accent hover:shadow-md hover:-translate-y-0.5"
-          onclick={() => handleImageClick(asset, index)}
+          onclick={() => handleImageClick(asset)}
         >
           <ImageThumbnail assetId={asset.id} size={viewState.thumbnailSize} />
 
