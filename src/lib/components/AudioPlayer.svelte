@@ -199,6 +199,7 @@
   function handleLoadedMetadata() {
     if (!audioElement) return;
     duration = audioElement.duration;
+    audioElement.volume = volume;
   }
 
   function handleEnded() {
