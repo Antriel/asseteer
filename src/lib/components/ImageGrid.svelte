@@ -11,9 +11,11 @@
   let { assets }: Props = $props();
 
   let containerElement: HTMLDivElement;
+  let gridElement: HTMLDivElement;
   let scrollTop = $state(0);
   let containerHeight = $state(0);
   let windowWidth = $state(typeof window !== 'undefined' ? window.innerWidth : 1280);
+  let measuredRowHeight = $state(0);
 
   // Computed grid column classes and counts
   const gridClasses = $derived.by(() => {
@@ -35,14 +37,15 @@
     }
   });
 
-  // Row height based on thumbnail size + padding + metadata
-  const rowHeight = $derived.by(() => {
+  // Row height: use measured value if available, otherwise estimate
+  const estimatedRowHeight = $derived.by(() => {
     switch (viewState.thumbnailSize) {
-      case 'small': return 128 + 48 + 8; // h-32 + metadata height + gap
-      case 'medium': return 192 + 56 + 8; // h-48 + metadata height + gap
-      case 'large': return 256 + 64 + 8; // h-64 + metadata height + gap
+      case 'small': return 128 + 48 + 8;
+      case 'medium': return 192 + 56 + 8;
+      case 'large': return 256 + 64 + 8;
     }
   });
+  const rowHeight = $derived(measuredRowHeight || estimatedRowHeight);
 
   // Calculate virtual scrolling parameters
   const totalRows = $derived(Math.ceil(assets.length / columnCount));
@@ -57,6 +60,25 @@
   const endIndex = $derived(Math.min(assets.length, endRow * columnCount));
   const visibleAssets = $derived(assets.slice(startIndex, endIndex));
   const offsetY = $derived(startRow * rowHeight);
+
+  // Measure actual row height from the first rendered grid item
+  function measureRowHeight() {
+    if (!gridElement) return;
+    const firstChild = gridElement.firstElementChild as HTMLElement | null;
+    if (firstChild) {
+      // Item height + gap (gap-2 = 8px)
+      const height = firstChild.offsetHeight + 8;
+      if (height > 8) measuredRowHeight = height;
+    }
+  }
+
+  // Re-measure when thumbnail size changes
+  $effect(() => {
+    viewState.thumbnailSize; // track
+    measuredRowHeight = 0; // reset so estimate is used until measurement
+    // Defer measurement to after DOM update
+    requestAnimationFrame(measureRowHeight);
+  });
 
   function handleImageClick(asset: Asset) {
     viewState.openLightbox(asset);
@@ -86,11 +108,18 @@
       resizeObserver.observe(containerElement);
     }
 
+    // Observe grid children for size changes to re-measure row height
+    const gridObserver = new MutationObserver(() => requestAnimationFrame(measureRowHeight));
+    if (gridElement) {
+      gridObserver.observe(gridElement, { childList: true });
+    }
+
     const handleResize = () => { windowWidth = window.innerWidth; };
     window.addEventListener('resize', handleResize);
 
     return () => {
       resizeObserver.disconnect();
+      gridObserver.disconnect();
       window.removeEventListener('resize', handleResize);
     };
   });
@@ -103,6 +132,7 @@
 >
   <div style="height: {totalHeight}px; position: relative;">
     <div
+      bind:this={gridElement}
       class="grid {gridClasses} gap-2 p-4 absolute w-full"
       style="transform: translateY({offsetY}px);"
     >

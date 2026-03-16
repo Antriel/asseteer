@@ -1,11 +1,11 @@
 ---
 # asseteer-cfrp
 title: 'Code review: bugs, performance, and UI issues (March 2026)'
-status: in-progress
+status: completed
 type: epic
 priority: normal
 created_at: 2026-03-16T09:18:37Z
-updated_at: 2026-03-16T09:20:43Z
+updated_at: 2026-03-16T15:01:26Z
 ---
 
 Findings from a focused code review of the frontend SvelteKit codebase. Covers bugs, performance concerns, and UI problems.
@@ -43,3 +43,11 @@ These were found in the prior review and are NOT duplicated here:
 - Semantic search full-table scan (asseteer-six2)
 - Unchecked unwrap/expect crashes (asseteer-tmo7)
 - Duplicate processing card logic (asseteer-e8eq)
+
+## Summary of Changes
+
+All 12 findings from the March 2026 code review have been addressed:
+- 8 bugs fixed (resize, virtual scrolling, lightbox navigation, blob URL leaks, tab switching, keyboard seek, listener leaks, totalMatchingCount)
+- 3 lower-severity issues resolved (volume sync, duration filter visibility, console.log cleanup)
+- 1 hardcoded-heights issue fixed with dynamic measurement
+- 1 bug scrapped (tab switch reload — asseteer-ppee)

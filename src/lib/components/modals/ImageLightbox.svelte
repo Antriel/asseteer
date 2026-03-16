@@ -27,13 +27,10 @@
     const assetPath = asset.path;
     const assetFormat = asset.format;
 
-    console.log('[ImageLightbox] Effect triggered for asset:', assetId);
-
     // Use untrack to prevent state updates from re-triggering the effect
     untrack(() => {
       // Clean up previous blob URL if exists
       if (blobUrl) {
-        console.log('[ImageLightbox] Revoking previous blob URL');
         URL.revokeObjectURL(blobUrl);
         blobUrl = null;
       }
@@ -45,11 +42,9 @@
         try {
           if (zipEntry) {
             // Asset is inside a zip - need to extract it
-            console.log('[ImageLightbox] Extracting from zip:', zipEntry);
             const bytes = await invoke<number[]>('get_asset_bytes', { assetId });
             const blob = new Blob([new Uint8Array(bytes)], { type: `image/${assetFormat}` });
             const newBlobUrl = URL.createObjectURL(blob);
-            console.log('[ImageLightbox] Created blob URL:', newBlobUrl);
 
             untrack(() => {
               blobUrl = newBlobUrl;
@@ -59,8 +54,6 @@
           } else {
             // Regular file - use convertFileSrc
             const src = convertFileSrc(assetPath);
-            console.log('[ImageLightbox] Using convertFileSrc:', src);
-
             untrack(() => {
               imageSrc = src;
               loading = false;
@@ -80,7 +73,6 @@
   // Cleanup on unmount
   $effect(() => {
     return () => {
-      console.log('[ImageLightbox] Cleanup - revoking blob URL');
       untrack(() => {
         if (blobUrl) {
           URL.revokeObjectURL(blobUrl);
