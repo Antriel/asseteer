@@ -1,6 +1,6 @@
 import type { Asset } from '$lib/types';
 import { getDatabase } from '$lib/database/connection';
-import { searchAssets as dbSearchAssets, getAssetCount, getAssetCountByType } from '$lib/database/queries';
+import { searchAssets as dbSearchAssets, countSearchResults, getAssetCount, getAssetCountByType } from '$lib/database/queries';
 
 // Maximum number of assets to display in the UI
 // Even with virtual scrolling, tracking millions of items causes performance issues
@@ -77,7 +77,15 @@ class AssetsState {
 
       // Check if there are more results than we're displaying
       this.hasMoreResults = result.length > MAX_DISPLAY_LIMIT;
-      this.totalMatchingCount = result.length > MAX_DISPLAY_LIMIT ? result.length : result.length;
+
+      if (this.hasMoreResults) {
+        // Results were truncated - run a COUNT query to get the true total
+        this.totalMatchingCount = await countSearchResults(db, this.searchText, assetType, durationFilter);
+        // Re-check cancellation after the count query
+        if (currentVersion !== this.searchVersion) return;
+      } else {
+        this.totalMatchingCount = result.length;
+      }
 
       // Only keep up to MAX_DISPLAY_LIMIT
       this.assets = result.slice(0, MAX_DISPLAY_LIMIT);

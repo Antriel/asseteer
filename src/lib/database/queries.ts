@@ -71,6 +71,49 @@ export async function searchAssets(
 }
 
 /**
+ * Count assets matching a search query (same filters as searchAssets, but returns count)
+ */
+export async function countSearchResults(
+	db: Database,
+	searchText?: string,
+	assetType?: string,
+	durationFilter?: DurationFilter
+): Promise<number> {
+	const ftsQuery = searchText?.trim() ? `${searchText.trim()}*` : null;
+	const conditions: string[] = [];
+	const params: unknown[] = [];
+
+	if (ftsQuery) {
+		conditions.push('assets_fts MATCH ?');
+		params.push(ftsQuery);
+	}
+
+	if (assetType) {
+		conditions.push('assets.asset_type = ?');
+		params.push(assetType);
+	}
+
+	if (durationFilter) {
+		if (durationFilter.minMs !== null) {
+			conditions.push('audio_metadata.duration_ms >= ?');
+			params.push(durationFilter.minMs);
+		}
+		if (durationFilter.maxMs !== null) {
+			conditions.push('audio_metadata.duration_ms <= ?');
+			params.push(durationFilter.maxMs);
+		}
+	}
+
+	const ftsJoin = ftsQuery ? 'INNER JOIN assets_fts ON assets.id = assets_fts.rowid' : '';
+	const audioJoin = durationFilter ? 'LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id' : '';
+	const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+	const query = `SELECT COUNT(*) FROM assets ${ftsJoin} ${audioJoin} ${whereClause}`;
+	const result = await db.select<Array<{ 'COUNT(*)': number }>>(query, params);
+	return result[0]['COUNT(*)'];
+}
+
+/**
  * Get total count of all assets
  */
 export async function getAssetCount(db: Database): Promise<number> {
