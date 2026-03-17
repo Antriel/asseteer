@@ -53,6 +53,21 @@ impl ClapClient {
         Ok(())
     }
 
+    /// Trigger model preloading on the server
+    pub async fn preload(&self) -> Result<(), String> {
+        let url = format!("{}/preload", self.base_url);
+        let response = self
+            .client
+            .post(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Preload request failed: {}", e))?;
+        if !response.status().is_success() {
+            return Err(format!("Preload failed: {}", response.status()));
+        }
+        Ok(())
+    }
+
     /// Generate text embedding from a query string
     pub async fn embed_text(&self, text: &str) -> Result<Vec<f32>, String> {
         let url = format!("{}/embed/text", self.base_url);

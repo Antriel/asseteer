@@ -1,10 +1,14 @@
 //! CLAP server lifecycle management
+//!
+//! Starts the CLAP Python server using `uv run` (automatic Python management)
+//! with fallback to a manual venv if configured.
 
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio::sync::Mutex;
 
 use super::client::get_clap_client;
+use super::uv;
 
 use once_cell::sync::Lazy;
 
@@ -31,38 +35,105 @@ pub async fn ensure_server_running() -> Result<(), String> {
         return Ok(());
     }
 
-    // Get the path to clap-server relative to project root
-    // When running via Tauri, cwd is src-tauri, so go up one level
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("Failed to get current dir: {}", e))?;
+    let clap_dir = find_clap_server_dir()?;
 
-    // Try to find clap-server - it could be in cwd or parent
-    let clap_dir = if cwd.join("clap-server").exists() {
-        cwd.join("clap-server")
-    } else if cwd.parent().map(|p| p.join("clap-server").exists()).unwrap_or(false) {
-        cwd.parent().unwrap().join("clap-server")
+    let child = start_server_process(&clap_dir).await?;
+
+    println!("[CLAP] Process spawned with PID: {}", child.id());
+
+    *guard = Some(child);
+    drop(guard); // Release lock before waiting
+
+    wait_for_server_ready().await?;
+
+    // Trigger model preload so first inference is fast
+    call_preload().await;
+
+    Ok(())
+}
+
+/// Locate the clap-server directory relative to cwd.
+fn find_clap_server_dir() -> Result<std::path::PathBuf, String> {
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("Failed to get current dir: {}", e))?;
+
+    // Try cwd first, then parent (Tauri runs from src-tauri/)
+    if cwd.join("clap-server").exists() {
+        Ok(cwd.join("clap-server"))
+    } else if cwd
+        .parent()
+        .map(|p| p.join("clap-server").exists())
+        .unwrap_or(false)
+    {
+        Ok(cwd.parent().unwrap().join("clap-server"))
     } else {
-        return Err(format!("Could not find clap-server directory (cwd: {:?})", cwd));
-    };
+        Err(format!(
+            "Could not find clap-server directory (cwd: {:?})",
+            cwd
+        ))
+    }
+}
 
-    // Use the venv Python executable
+/// Start the CLAP server process.
+///
+/// Tries `uv run` first (automatic Python management). If uv download fails
+/// and a manual venv exists, falls back to using the venv directly.
+async fn start_server_process(clap_dir: &std::path::Path) -> Result<Child, String> {
+    // Try uv first
+    match uv::get_or_download_uv().await {
+        Ok(uv_path) => {
+            println!("[CLAP] Starting server via uv: {:?}", uv_path);
+            let child = Command::new(&uv_path)
+                .args([
+                    "run",
+                    "--python",
+                    "3.13",
+                    "clap_server.py",
+                ])
+                .current_dir(clap_dir)
+                .env("UV_CACHE_DIR", uv::uv_cache_dir())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .map_err(|e| {
+                    format!(
+                        "Failed to start CLAP server via uv: {}. \
+                         Try deleting {:?} and restarting the app.",
+                        e,
+                        uv::uv_bin_path()
+                    )
+                })?;
+            Ok(child)
+        }
+        Err(uv_err) => {
+            println!(
+                "[CLAP] uv not available ({}), trying manual venv fallback...",
+                uv_err
+            );
+            start_server_venv_fallback(clap_dir)
+        }
+    }
+}
+
+/// Fallback: start server using a manually-created venv.
+fn start_server_venv_fallback(clap_dir: &std::path::Path) -> Result<Child, String> {
     #[cfg(windows)]
     let python_path = clap_dir.join("venv").join("Scripts").join("python.exe");
     #[cfg(not(windows))]
     let python_path = clap_dir.join("venv").join("bin").join("python");
 
     if !python_path.exists() {
-        return Err(format!(
-            "Python venv not found at {:?}. Run: cd clap-server && python -m venv venv && venv\\Scripts\\pip install -r requirements.txt",
-            python_path
-        ));
+        return Err(
+            "Failed to set up Python environment automatically, and no manual venv found. \
+             Check your internet connection and restart the app, or see clap-server/README.md \
+             for manual setup instructions."
+                .to_string(),
+        );
     }
 
-    println!("[CLAP] Starting Python server from: {:?}", clap_dir);
-    println!("[CLAP] Using Python: {:?}", python_path);
+    println!("[CLAP] Using manual venv fallback: {:?}", python_path);
 
-    // Start Python server using venv
-    let child = Command::new(&python_path)
+    Command::new(&python_path)
         .args([
             "-m",
             "uvicorn",
@@ -72,20 +143,20 @@ pub async fn ensure_server_running() -> Result<(), String> {
             "--port",
             "5555",
         ])
-        .current_dir(&clap_dir)
-        .stdout(Stdio::inherit()) // Don't pipe - buffer fills and blocks process
+        .current_dir(clap_dir)
+        .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|e| format!("Failed to start CLAP server: {} (python: {:?})", e, python_path))?;
+        .map_err(|e| format!("Failed to start CLAP server: {} (python: {:?})", e, python_path))
+}
 
-    println!("[CLAP] Python process spawned with PID: {}", child.id());
-
-    *guard = Some(child);
-    drop(guard); // Release lock before waiting
-
-    // Wait for server to be ready (max 60 seconds for model loading on first run)
-    println!("[CLAP] Waiting for server to be ready (up to 60s for model download)...");
-    for i in 0..120 {
+/// Wait for the server to become healthy (up to 120 seconds).
+///
+/// First run can take a while: uv downloads Python (~25MB) + dependencies (~500MB)
+/// + the HuggingFace model (~1-2GB).
+async fn wait_for_server_ready() -> Result<(), String> {
+    println!("[CLAP] Waiting for server to be ready (up to 120s for first-run setup)...");
+    for i in 0..240 {
         tokio::time::sleep(Duration::from_millis(500)).await;
         if get_clap_client().await.health_check().await.is_ok() {
             println!("[CLAP] Server ready after {}ms", (i + 1) * 500);
@@ -93,8 +164,25 @@ pub async fn ensure_server_running() -> Result<(), String> {
         }
     }
 
-    println!("[CLAP] Server failed to start within 60 seconds");
-    Err("CLAP server failed to start within 60 seconds. Check if the model needs to download.".to_string())
+    Err(
+        "Semantic search server failed to start within 120 seconds. \
+         This may happen on first run if the AI model is still downloading. \
+         Try restarting the app to resume the download."
+            .to_string(),
+    )
+}
+
+/// Call the /preload endpoint to ensure the model is loaded.
+/// Non-fatal — just logs if it fails.
+async fn call_preload() {
+    match get_clap_client()
+        .await
+        .preload()
+        .await
+    {
+        Ok(()) => println!("[CLAP] Model preloaded successfully"),
+        Err(e) => println!("[CLAP] Preload call failed (non-fatal): {}", e),
+    }
 }
 
 /// Stops the CLAP server if we started it
