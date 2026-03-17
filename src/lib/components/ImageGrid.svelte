@@ -11,11 +11,9 @@
   let { assets }: Props = $props();
 
   let containerElement: HTMLDivElement;
-  let gridElement: HTMLDivElement;
   let scrollTop = $state(0);
   let containerHeight = $state(0);
   let windowWidth = $state(typeof window !== 'undefined' ? window.innerWidth : 1280);
-  let measuredRowHeight = $state(0);
 
   // Computed grid column classes and counts
   const gridClasses = $derived.by(() => {
@@ -37,21 +35,21 @@
     }
   });
 
-  // Row height: use measured value if available, otherwise estimate
-  const estimatedRowHeight = $derived.by(() => {
+  // Fixed row heights per size mode — never measure from DOM to prevent oscillation.
+  // Thumbnail height + fixed info area (40px) + gap (8px) + border (2px)
+  const rowHeight = $derived.by(() => {
     switch (viewState.thumbnailSize) {
-      case 'small': return 128 + 48 + 8;
-      case 'medium': return 192 + 56 + 8;
-      case 'large': return 256 + 64 + 8;
+      case 'small': return 128 + 40 + 8 + 2;   // 178
+      case 'medium': return 192 + 40 + 8 + 2;   // 242
+      case 'large': return 256 + 40 + 8 + 2;    // 306
     }
   });
-  const rowHeight = $derived(measuredRowHeight || estimatedRowHeight);
 
   // Calculate virtual scrolling parameters
   const totalRows = $derived(Math.ceil(assets.length / columnCount));
   const totalHeight = $derived(totalRows * rowHeight);
   const visibleRows = $derived(Math.ceil(containerHeight / rowHeight) + 1);
-  const bufferRows = 2; // Extra rows above and below for smooth scrolling
+  const bufferRows = 2;
 
   const startRow = $derived(Math.max(0, Math.floor(scrollTop / rowHeight) - bufferRows));
   const endRow = $derived(Math.min(totalRows, startRow + visibleRows + bufferRows * 2));
@@ -60,25 +58,6 @@
   const endIndex = $derived(Math.min(assets.length, endRow * columnCount));
   const visibleAssets = $derived(assets.slice(startIndex, endIndex));
   const offsetY = $derived(startRow * rowHeight);
-
-  // Measure actual row height from the first rendered grid item
-  function measureRowHeight() {
-    if (!gridElement) return;
-    const firstChild = gridElement.firstElementChild as HTMLElement | null;
-    if (firstChild) {
-      // Item height + gap (gap-2 = 8px)
-      const height = firstChild.offsetHeight + 8;
-      if (height > 8) measuredRowHeight = height;
-    }
-  }
-
-  // Re-measure when thumbnail size changes
-  $effect(() => {
-    viewState.thumbnailSize; // track
-    measuredRowHeight = 0; // reset so estimate is used until measurement
-    // Defer measurement to after DOM update
-    requestAnimationFrame(measureRowHeight);
-  });
 
   function handleImageClick(asset: Asset) {
     viewState.openLightbox(asset);
@@ -99,7 +78,6 @@
   onMount(() => {
     updateContainerHeight();
 
-    // Update on window resize
     const resizeObserver = new ResizeObserver(() => {
       updateContainerHeight();
     });
@@ -108,18 +86,11 @@
       resizeObserver.observe(containerElement);
     }
 
-    // Observe grid children for size changes to re-measure row height
-    const gridObserver = new MutationObserver(() => requestAnimationFrame(measureRowHeight));
-    if (gridElement) {
-      gridObserver.observe(gridElement, { childList: true });
-    }
-
     const handleResize = () => { windowWidth = window.innerWidth; };
     window.addEventListener('resize', handleResize);
 
     return () => {
       resizeObserver.disconnect();
-      gridObserver.disconnect();
       window.removeEventListener('resize', handleResize);
     };
   });
@@ -132,13 +103,12 @@
 >
   <div style="height: {totalHeight}px; position: relative;">
     <div
-      bind:this={gridElement}
       class="grid {gridClasses} gap-2 p-4 absolute w-full"
       style="transform: translateY({offsetY}px);"
     >
       {#each visibleAssets as asset (asset.id)}
         <button
-          class="relative bg-secondary border border-default rounded-lg overflow-hidden transition-all cursor-pointer hover:border-accent hover:shadow-md hover:-translate-y-0.5"
+          class="relative bg-secondary border border-default rounded-lg overflow-hidden cursor-pointer hover:border-accent hover:shadow-md hover:-translate-y-0.5"
           onclick={() => handleImageClick(asset)}
         >
           <ImageThumbnail {asset} size={viewState.thumbnailSize} />
@@ -146,12 +116,12 @@
             <span class="absolute top-1.5 left-1.5 text-[0.625rem] font-bold leading-none px-1 py-0.5 rounded bg-black/60 text-white tracking-wide">GIF</span>
           {/if}
 
-          <div class="p-2 bg-primary">
+          <div class="h-10 p-2 bg-primary">
             <p class="text-xs font-medium text-primary whitespace-nowrap overflow-hidden text-ellipsis" title={asset.filename}>
               {asset.filename}
             </p>
             {#if asset.width && asset.height}
-              <p class="text-[0.625rem] text-secondary mt-1">
+              <p class="text-[0.625rem] text-secondary mt-0.5">
                 {asset.width} × {asset.height}
               </p>
             {/if}

@@ -3,6 +3,7 @@ mod commands;
 mod database;
 mod models;
 mod task_system;
+pub mod thumbnail_worker;
 mod utils;
 
 #[cfg(test)]
@@ -12,6 +13,7 @@ mod concurrent_tests;
 
 use database::{initialize_db, close_db, DbPool};
 use task_system::WorkQueue;
+use thumbnail_worker::ThumbnailWorkerHandle;
 use tauri::Manager;
 use std::sync::Arc;
 
@@ -19,6 +21,7 @@ use std::sync::Arc;
 pub struct AppState {
     pub pool: DbPool,
     pub work_queue: Arc<WorkQueue>,
+    pub thumbnail_worker: ThumbnailWorkerHandle,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -46,17 +49,25 @@ pub fn run() {
             // Initialize WorkQueue
             let work_queue = Arc::new(WorkQueue::new());
 
+            // Start thumbnail background worker
+            let thumbnail_worker = thumbnail_worker::start_worker(
+                app.handle(),
+                pool.clone(),
+            );
+
             // Store pool and work queue in app state
             app.manage(AppState {
                 pool: pool.clone(),
                 work_queue: work_queue.clone(),
+                thumbnail_worker,
             });
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::assets::get_asset_bytes,
-            commands::assets::ensure_thumbnails,
+            commands::assets::request_thumbnails,
+            commands::assets::cancel_thumbnails,
             commands::scan::start_scan,
             commands::process::start_processing,
             commands::process::pause_processing,

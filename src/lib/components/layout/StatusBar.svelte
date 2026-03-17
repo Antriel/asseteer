@@ -20,7 +20,7 @@
 
   // Debounce thumbnail indicator to avoid rapid show/hide flickering.
   // Show immediately when active, but stay visible for at least 1s after going idle.
-  let thumbnailActive = $derived(thumbnailMetrics.inflight > 0 || thumbnailMetrics.queued > 0);
+  let thumbnailActive = $derived(thumbnailMetrics.processing > 0 || thumbnailMetrics.queued > 0);
   let showThumbnails = $state(false);
   let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -112,7 +112,7 @@
     <div class="w-px h-5 bg-tertiary mx-4"></div>
     <div class="flex items-center gap-2 text-xs text-tertiary">
       <div class="w-2 h-2 rounded-full bg-accent animate-pulse"></div>
-      <span>Thumbnails: {thumbnailMetrics.queued + thumbnailMetrics.inflight} queued</span>
+      <span>Thumbnails: {thumbnailMetrics.queued + thumbnailMetrics.processing} queued</span>
       {#if thumbnailMetrics.rate > 0}
         <span>&middot; {thumbnailMetrics.rate}/s</span>
       {/if}

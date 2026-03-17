@@ -1,170 +1,177 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getDatabase } from '$lib/database/connection';
 import { getThumbnail } from '$lib/database/queries';
+
+// ---------------------------------------------------------------------------
+// Cache & state
+// ---------------------------------------------------------------------------
 
 /** Cached blob URLs for thumbnails, keyed by asset ID */
 const cache = new SvelteMap<number, string>();
 
-/** Asset IDs that have been requested but not yet fetched */
-const pending = new Set<number>();
-
 /** Asset IDs that failed or have no thumbnail available */
 const failed = new Set<number>();
 
-let batchTimer: ReturnType<typeof setTimeout> | null = null;
+/** IDs we've already sent to the backend (dedup) */
+const requested = new Set<number>();
 
-/** Batch debounce delay in ms */
-const BATCH_DELAY = 50;
+// ---------------------------------------------------------------------------
+// Stats (updated by backend events)
+// ---------------------------------------------------------------------------
 
-/** Observable thumbnail loading metrics */
 class ThumbnailMetrics {
-	/** Number of thumbnails waiting to be processed */
 	queued = $state(0);
-	/** Number currently being generated/loaded in a batch */
-	inflight = $state(0);
-	/** Total loaded since last cache clear */
+	processing = $state(0);
 	loaded = $state(0);
-	/** Total failed since last cache clear */
 	failedCount = $state(0);
-	/** Thumbnails loaded per second (rolling average) */
 	rate = $state(0);
-
-	private recentTimestamps: number[] = [];
-
-	recordLoaded(count: number) {
-		this.loaded += count;
-		const now = Date.now();
-		for (let i = 0; i < count; i++) this.recentTimestamps.push(now);
-		this.updateRate(now);
-	}
-
-	recordFailed(count: number) {
-		this.failedCount += count;
-	}
-
-	private updateRate(now: number) {
-		// Keep last 5 seconds of timestamps
-		const cutoff = now - 5000;
-		this.recentTimestamps = this.recentTimestamps.filter(t => t > cutoff);
-		this.rate = Math.round(this.recentTimestamps.length / 5);
-	}
 
 	reset() {
 		this.queued = 0;
-		this.inflight = 0;
+		this.processing = 0;
 		this.loaded = 0;
 		this.failedCount = 0;
 		this.rate = 0;
-		this.recentTimestamps = [];
 	}
 }
 
 export const thumbnailMetrics = new ThumbnailMetrics();
 
+// ---------------------------------------------------------------------------
+// Event listeners (initialized once)
+// ---------------------------------------------------------------------------
+
+let listenersReady = false;
+
+async function ensureListeners() {
+	if (listenersReady) return;
+	listenersReady = true;
+
+	// Listen for individual thumbnail completions
+	await listen<{ asset_id: number; success: boolean }>('thumbnail-ready', async (event) => {
+		const { asset_id, success } = event.payload;
+		requested.delete(asset_id);
+
+		if (!success) {
+			failed.add(asset_id);
+			return;
+		}
+
+		// Already cached (e.g. from a previous generation)?
+		if (cache.has(asset_id)) return;
+
+		// Read the thumbnail blob from DB
+		try {
+			const db = await getDatabase();
+			const data = await getThumbnail(db, asset_id);
+			if (data) {
+				const blob = new Blob([data], { type: 'image/webp' });
+				cache.set(asset_id, URL.createObjectURL(blob));
+			} else {
+				failed.add(asset_id);
+			}
+		} catch {
+			failed.add(asset_id);
+		}
+	});
+
+	// Listen for periodic stats from the backend worker
+	await listen<{
+		queued: number;
+		processing: number;
+		loaded: number;
+		failed: number;
+		rate: number;
+	}>('thumbnail-stats', (event) => {
+		const s = event.payload;
+		thumbnailMetrics.queued = s.queued;
+		thumbnailMetrics.processing = s.processing;
+		thumbnailMetrics.loaded = s.loaded;
+		thumbnailMetrics.failedCount = s.failed;
+		thumbnailMetrics.rate = Math.round(s.rate * 10) / 10;
+	});
+}
+
+// Start listeners immediately on import
+ensureListeners();
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
  * Get the cached thumbnail URL for an asset, or null if not yet available.
- * Pure read from cache — use requestThumbnail() to trigger loading.
  */
 export function getThumbnailUrl(assetId: number): string | null {
 	return cache.get(assetId) ?? null;
 }
 
 /**
- * Check if a thumbnail request has failed (no thumbnail available).
+ * Check if a thumbnail request has failed.
  */
 export function hasThumbnailFailed(assetId: number): boolean {
 	return failed.has(assetId);
 }
 
+/** Batch buffer + debounce for requests */
+let requestBuffer: number[] = [];
+let requestTimer: ReturnType<typeof setTimeout> | null = null;
+const REQUEST_DELAY = 30; // ms
+
+/** Batch buffer + debounce for cancels */
+let cancelBuffer: number[] = [];
+let cancelTimer: ReturnType<typeof setTimeout> | null = null;
+const CANCEL_DELAY = 30; // ms
+
 /**
  * Request that a thumbnail be loaded for the given asset ID.
- * The request is batched and debounced. When ready, the URL
- * will appear in the cache (readable via getThumbnailUrl).
+ * Batched and sent to the backend worker via IPC.
  */
 export function requestThumbnail(assetId: number): void {
-	if (cache.has(assetId) || pending.has(assetId) || failed.has(assetId)) return;
-	pending.add(assetId);
-	thumbnailMetrics.queued = pending.size;
-	scheduleBatch();
-}
-
-/**
- * Cancel a pending thumbnail request. Call when a component unmounts
- * (e.g., virtual scroll removes an item that scrolled out of view).
- * If the item scrolls back into view and remounts, it will re-request.
- */
-export function cancelThumbnail(assetId: number): void {
-	pending.delete(assetId);
-	thumbnailMetrics.queued = pending.size;
-}
-
-/** Max IDs to send per IPC call — keeps memory bounded on the backend */
-const MAX_BATCH_SIZE = 10;
-
-let processing = false;
-
-function scheduleBatch() {
-	if (batchTimer !== null) return;
-	batchTimer = setTimeout(processBatch, BATCH_DELAY);
-}
-
-async function processBatch() {
-	batchTimer = null;
-	if (processing) return; // prevent overlapping batches
-	processing = true;
-
-	try {
-		while (pending.size > 0) {
-			// Take a small batch from pending (most recently added = currently visible)
-			const allPending = [...pending];
-			const batch = allPending.slice(-MAX_BATCH_SIZE);
-			for (const id of batch) pending.delete(id);
-			thumbnailMetrics.queued = pending.size;
-			thumbnailMetrics.inflight = batch.length;
-
-			try {
-				// Ask backend to generate any missing thumbnails
-				await invoke('ensure_thumbnails', { assetIds: batch });
-
-				// Read thumbnails from DB
-				const db = await getDatabase();
-				let batchLoaded = 0;
-				let batchFailed = 0;
-				for (const id of batch) {
-					const data = await getThumbnail(db, id);
-					if (data) {
-						const blob = new Blob([data], { type: 'image/webp' });
-						cache.set(id, URL.createObjectURL(blob));
-						batchLoaded++;
-					} else {
-						failed.add(id);
-						batchFailed++;
-					}
-				}
-				thumbnailMetrics.recordLoaded(batchLoaded);
-				thumbnailMetrics.recordFailed(batchFailed);
-			} catch (e) {
-				console.error('Failed to load thumbnails:', e);
-				for (const id of batch) {
-					if (!cache.has(id)) {
-						failed.add(id);
-					}
-				}
-			}
-
-			thumbnailMetrics.inflight = 0;
-		}
-	} finally {
-		processing = false;
-		thumbnailMetrics.queued = 0;
-		thumbnailMetrics.inflight = 0;
+	if (cache.has(assetId) || failed.has(assetId) || requested.has(assetId)) return;
+	requested.add(assetId);
+	requestBuffer.push(assetId);
+	if (!requestTimer) {
+		requestTimer = setTimeout(flushRequests, REQUEST_DELAY);
 	}
 }
 
+function flushRequests() {
+	requestTimer = null;
+	if (requestBuffer.length === 0) return;
+	const ids = requestBuffer;
+	requestBuffer = [];
+	invoke('request_thumbnails', { assetIds: ids }).catch((e: unknown) => {
+		console.error('Failed to request thumbnails:', e);
+	});
+}
+
 /**
- * Clear all cached thumbnails. Call when the asset list changes
- * (e.g., new search, folder change) to free memory.
+ * Cancel a pending thumbnail request (component unmounted / scrolled away).
+ */
+export function cancelThumbnail(assetId: number): void {
+	if (!requested.has(assetId)) return;
+	requested.delete(assetId);
+	cancelBuffer.push(assetId);
+	if (!cancelTimer) {
+		cancelTimer = setTimeout(flushCancels, CANCEL_DELAY);
+	}
+}
+
+function flushCancels() {
+	cancelTimer = null;
+	if (cancelBuffer.length === 0) return;
+	const ids = cancelBuffer;
+	cancelBuffer = [];
+	invoke('cancel_thumbnails', { assetIds: ids }).catch((e: unknown) => {
+		console.error('Failed to cancel thumbnails:', e);
+	});
+}
+
+/**
+ * Clear all cached thumbnails. Call when the asset list changes.
  */
 export function clearThumbnailCache(): void {
 	for (const url of cache.values()) {
@@ -172,10 +179,16 @@ export function clearThumbnailCache(): void {
 	}
 	cache.clear();
 	failed.clear();
-	pending.clear();
-	if (batchTimer !== null) {
-		clearTimeout(batchTimer);
-		batchTimer = null;
+	requested.clear();
+	requestBuffer = [];
+	cancelBuffer = [];
+	if (requestTimer) {
+		clearTimeout(requestTimer);
+		requestTimer = null;
+	}
+	if (cancelTimer) {
+		clearTimeout(cancelTimer);
+		cancelTimer = null;
 	}
 	thumbnailMetrics.reset();
 }
