@@ -10,6 +10,7 @@
 #     "fastapi>=0.109.0",
 #     "uvicorn[standard]>=0.27.0",
 #     "python-multipart>=0.0.6",
+#     "miniaudio>=1.2",
 # ]
 # ///
 """
@@ -216,19 +217,32 @@ async def embed_audio_upload(audio: UploadFile = File(...)):
     return EmbeddingResponse(embedding=embedding)
 
 
+def _decode_audio_bytes(content: bytes, filename: str, target_sr: int) -> tuple:
+    """Decode audio bytes to (samples, sample_rate), trying soundfile then miniaudio."""
+    try:
+        return librosa.load(io.BytesIO(content), sr=target_sr, mono=True)
+    except Exception as soundfile_err:
+        logger.info(f"soundfile failed for '{filename}', trying miniaudio: {soundfile_err}")
+        try:
+            import miniaudio
+            import numpy as np
+            decoded = miniaudio.decode(content, output_format=miniaudio.SampleFormat.FLOAT32, nchannels=1, sample_rate=target_sr)
+            audio_data = np.frombuffer(decoded.samples, dtype=np.float32)
+            return audio_data, target_sr
+        except Exception as miniaudio_err:
+            ext = Path(filename).suffix.lower()
+            raise RuntimeError(
+                f"Failed to decode audio file '{filename}' ({ext}): "
+                f"soundfile: {soundfile_err}; miniaudio: {miniaudio_err}"
+            ) from miniaudio_err
+
+
 def _process_audio_bytes(content: bytes, filename: str) -> list[float]:
     """Process audio bytes into embedding (blocking, runs in thread pool)."""
     logger.info(f"Encoding uploaded audio: {filename} ({len(content)} bytes)")
 
     target_sr = clap_model.processor.feature_extractor.sampling_rate
-    try:
-        audio_data, sr = librosa.load(io.BytesIO(content), sr=target_sr, mono=True)
-    except Exception as e:
-        ext = Path(filename).suffix.lower()
-        raise RuntimeError(
-            f"Failed to decode audio file '{filename}' ({ext}): {e}. "
-            f"Try upgrading soundfile: pip install --upgrade soundfile"
-        ) from e
+    audio_data, sr = _decode_audio_bytes(content, filename, target_sr)
     logger.info(f"Loaded {len(audio_data) / sr:.2f} seconds of audio")
 
     embedding = clap_model.encode_audio(audio_data)
@@ -276,7 +290,7 @@ def embed_audio_batch(request: BatchAudioPathRequest):
     # Batch inference - pass all audio arrays to the processor at once
     audio_arrays = [audio for _, audio in loaded]
     inputs = clap_model.processor(
-        audios=audio_arrays,
+        audio=audio_arrays,
         sampling_rate=target_sr,
         return_tensors="pt",
         padding=True,
@@ -343,7 +357,7 @@ def _process_batch_bytes(file_data: list[tuple[str, bytes]]) -> BatchEmbeddingRe
 
     for i, (filename, content) in enumerate(file_data):
         try:
-            audio_data, sr = librosa.load(io.BytesIO(content), sr=target_sr, mono=True)
+            audio_data, sr = _decode_audio_bytes(content, filename, target_sr)
             loaded.append((i, audio_data))
         except Exception as e:
             results[i] = BatchEmbeddingItem(path=filename, error=str(e))
@@ -354,7 +368,7 @@ def _process_batch_bytes(file_data: list[tuple[str, bytes]]) -> BatchEmbeddingRe
     # Batch inference
     audio_arrays = [audio for _, audio in loaded]
     inputs = clap_model.processor(
-        audios=audio_arrays,
+        audio=audio_arrays,
         sampling_rate=target_sr,
         return_tensors="pt",
         padding=True,

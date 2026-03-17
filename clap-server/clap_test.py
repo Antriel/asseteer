@@ -66,7 +66,7 @@ class ClapTester:
         """
         # Preprocess audio (mel spectrogram, normalization)
         inputs = self.processor(
-            audios=audio,
+            audio=audio,
             sampling_rate=self.processor.feature_extractor.sampling_rate,
             return_tensors="pt"
         )
