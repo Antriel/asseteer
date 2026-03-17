@@ -654,11 +654,11 @@ This validates our choice: work with the Python ecosystem rather than fight it. 
 
 ---
 
-## Open Questions
+## Resolved Questions (2026-03-17)
 
-1. Should CLAP features be hidden entirely until set up, or shown with "Enable" state?
-2. Do we rename `clap-python-prototype` to just `clap-server` for release?
-3. Should first-time setup also pre-download the HuggingFace model, or let it happen on first inference?
-4. Should we offer Docker as a third option alongside `uv` (automatic) and manual Python?
-5. What `uv` version to target? Pin a specific release, or always download latest?
-6. Where to store `uv` cache? App data dir keeps it contained, but torch packages are large (~2GB) — should we allow users to choose the location?
+1. **Show with "Enable" state.** Users should see semantic search exists with a grayed-out toggle and "Set up semantic search" prompt. Better discoverability than hiding.
+2. **Yes, rename to `clap-server`.** It's no longer a prototype. First commit in the epic.
+3. **Pre-download during setup.** Front-load all waiting into the setup dialog. Add a `/preload` endpoint to trigger model loading.
+4. **No Docker for now.** `uv` + manual fallback covers the spectrum. Revisit only if `uv` approach proves problematic.
+5. **Pin to 0.6.x range.** Download latest within that minor version. Store version constraint as a Rust constant.
+6. **App data dir, no override.** Show cache size in settings with a "Clear cache" button. No user-configurable path.
