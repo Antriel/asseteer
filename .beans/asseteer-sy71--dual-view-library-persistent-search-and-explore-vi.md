@@ -1,11 +1,11 @@
 ---
 # asseteer-sy71
 title: 'Dual-view library: persistent Search and Explore views'
-status: in-progress
+status: completed
 type: feature
 priority: normal
 created_at: 2026-03-16T10:26:50Z
-updated_at: 2026-03-16T16:08:24Z
+updated_at: 2026-03-16T16:13:36Z
 ---
 
 Add two persistent, switchable views to the asset library:

@@ -88,3 +88,135 @@ fn find_nested_zip_boundary(path: &str) -> Option<usize> {
 
     path_lower.find(".zip/").map(|pos| pos + 4) // Position after ".zip"
 }
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::*;
+
+    // -- find_nested_zip_boundary -------------------------------------------
+
+    #[test]
+    fn test_zip_boundary_simple() {
+        assert_eq!(
+            find_nested_zip_boundary("inner.zip/folder/image.png"),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn test_zip_boundary_no_zip() {
+        assert_eq!(find_nested_zip_boundary("folder/image.png"), None);
+    }
+
+    #[test]
+    fn test_zip_boundary_zip_at_end_no_slash() {
+        assert_eq!(find_nested_zip_boundary("archive.zip"), None);
+    }
+
+    #[test]
+    fn test_zip_boundary_case_insensitive() {
+        assert_eq!(
+            find_nested_zip_boundary("ARCHIVE.ZIP/image.png"),
+            Some(11)
+        );
+    }
+
+    #[test]
+    fn test_zip_boundary_deeply_nested() {
+        // First .zip/ boundary wins
+        assert_eq!(
+            find_nested_zip_boundary("outer.zip/inner.zip/file.png"),
+            Some(9)
+        );
+    }
+
+    // -- load_asset_bytes: filesystem ---------------------------------------
+
+    #[test]
+    fn test_load_asset_bytes_filesystem() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = create_test_png(dir.path(), "test.png");
+
+        let asset = Asset {
+            id: 1,
+            filename: "test.png".into(),
+            path: img_path.to_str().unwrap().into(),
+            zip_entry: None,
+            asset_type: "image".into(),
+            format: "png".into(),
+            file_size: 0,
+            created_at: 0,
+            modified_at: 0,
+        };
+
+        let bytes = load_asset_bytes(&asset).unwrap();
+        assert!(!bytes.is_empty());
+        // PNG magic bytes
+        assert_eq!(&bytes[0..4], &[0x89, 0x50, 0x4E, 0x47]);
+    }
+
+    #[test]
+    fn test_load_asset_bytes_nonexistent_file() {
+        let asset = Asset {
+            id: 1,
+            filename: "nope.png".into(),
+            path: "/nonexistent/path/nope.png".into(),
+            zip_entry: None,
+            asset_type: "image".into(),
+            format: "png".into(),
+            file_size: 0,
+            created_at: 0,
+            modified_at: 0,
+        };
+
+        assert!(load_asset_bytes(&asset).is_err());
+    }
+
+    // -- load_asset_bytes: zip entries --------------------------------------
+
+    #[test]
+    fn test_load_asset_bytes_from_zip() {
+        let dir = tempfile::tempdir().unwrap();
+        let (zip_path, entry_name) = create_test_zip_with_image(dir.path());
+
+        let asset = Asset {
+            id: 1,
+            filename: "test.png".into(),
+            path: zip_path.to_str().unwrap().into(),
+            zip_entry: Some(entry_name),
+            asset_type: "image".into(),
+            format: "png".into(),
+            file_size: 0,
+            created_at: 0,
+            modified_at: 0,
+        };
+
+        let bytes = load_asset_bytes(&asset).unwrap();
+        assert!(!bytes.is_empty());
+        assert_eq!(&bytes[0..4], &[0x89, 0x50, 0x4E, 0x47]);
+    }
+
+    #[test]
+    fn test_load_asset_bytes_zip_bad_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (zip_path, _) = create_test_zip_with_image(dir.path());
+
+        let asset = Asset {
+            id: 1,
+            filename: "nope.png".into(),
+            path: zip_path.to_str().unwrap().into(),
+            zip_entry: Some("nonexistent/entry.png".into()),
+            asset_type: "image".into(),
+            format: "png".into(),
+            file_size: 0,
+            created_at: 0,
+            modified_at: 0,
+        };
+
+        assert!(load_asset_bytes(&asset).is_err());
+    }
+}

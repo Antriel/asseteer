@@ -5,6 +5,11 @@ mod models;
 mod task_system;
 mod utils;
 
+#[cfg(test)]
+mod test_helpers;
+#[cfg(test)]
+mod concurrent_tests;
+
 use database::{initialize_db, close_db, DbPool};
 use task_system::WorkQueue;
 use tauri::Manager;

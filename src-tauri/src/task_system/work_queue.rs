@@ -142,10 +142,10 @@ impl WorkQueue {
                 .map_err(|e| format!("Failed to queue asset: {}", e))?;
         }
 
-        // Check if we need to spawn workers (first category being started)
-        let handles = self.worker_handles.read().await;
+        // Check if we need to spawn workers (clean up completed workers first)
+        let mut handles = self.worker_handles.write().await;
+        handles.retain(|h| !h.is_finished());
         let needs_workers = handles.is_empty();
-        drop(handles);
 
         if needs_workers {
             // Calculate number of workers based on CPU cores (leave 1 core free for system/UI)
@@ -153,15 +153,12 @@ impl WorkQueue {
             println!("[WorkQueue] Starting {} workers (detected {} CPUs)", num_workers, num_cpus::get());
 
             // Spawn workers
-            let mut handles = Vec::new();
             for worker_id in 0..num_workers {
-                let handle = self.spawn_worker(worker_id, db.clone(), app_handle.clone()).await;
+                let handle = self.spawn_worker(worker_id, db.clone()).await;
                 handles.push(handle);
             }
-
-            // Store worker handles
-            *self.worker_handles.write().await = handles;
         }
+        drop(handles);
 
         // Spawn progress emitter task for this category
         self.spawn_progress_emitter(category, app_handle.clone()).await;
@@ -170,7 +167,7 @@ impl WorkQueue {
     }
 
     /// Spawn a worker task that processes assets from the queue
-    async fn spawn_worker(&self, worker_id: usize, db: SqlitePool, _app_handle: AppHandle) -> tokio::task::JoinHandle<()> {
+    async fn spawn_worker(&self, worker_id: usize, db: SqlitePool) -> tokio::task::JoinHandle<()> {
         let work_rx = self.work_rx.clone();
         let category_states = self.category_states.clone();
 
@@ -498,6 +495,105 @@ impl WorkQueue {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Test-only helpers (no AppHandle required)
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+impl WorkQueue {
+    /// Start processing without an AppHandle (skips event emission).
+    pub async fn start_for_test(
+        &self,
+        category: ProcessingCategory,
+        assets: Vec<Asset>,
+        db: SqlitePool,
+    ) -> Result<(), String> {
+        let state = self.ensure_category_state(category).await;
+
+        if state
+            .is_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(format!(
+                "Category '{}' already running",
+                category.as_str()
+            ));
+        }
+
+        // Reset signals / counters
+        state.pause_signal.store(false, Ordering::SeqCst);
+        state.stop_signal.store(false, Ordering::SeqCst);
+        let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        state.total_assets.store(assets.len(), Ordering::SeqCst);
+        state.completed_assets.store(0, Ordering::SeqCst);
+        state.failed_assets.store(0, Ordering::SeqCst);
+
+        for asset in assets {
+            self.work_tx
+                .send((category, generation, asset))
+                .map_err(|e| format!("Failed to queue: {}", e))?;
+        }
+
+        // Spawn workers (clean up stale handles first)
+        let mut handles = self.worker_handles.write().await;
+        handles.retain(|h| !h.is_finished());
+        if handles.is_empty() {
+            let num_workers = 2; // fewer workers in tests
+            for worker_id in 0..num_workers {
+                let handle = self.spawn_worker(worker_id, db.clone()).await;
+                handles.push(handle);
+            }
+        }
+        drop(handles);
+
+        // Completion monitor instead of progress emitter
+        self.spawn_completion_monitor(category).await;
+        Ok(())
+    }
+
+    /// Sets `is_running = false` when all items in a category are processed.
+    async fn spawn_completion_monitor(&self, category: ProcessingCategory) {
+        let state = self.ensure_category_state(category).await;
+        tokio::spawn(async move {
+            loop {
+                if state.stop_signal.load(Ordering::SeqCst) {
+                    break;
+                }
+                let total = state.total_assets.load(Ordering::SeqCst);
+                let completed = state.completed_assets.load(Ordering::SeqCst);
+                let failed = state.failed_assets.load(Ordering::SeqCst);
+                if total > 0 && completed + failed >= total {
+                    state.is_running.store(false, Ordering::SeqCst);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        });
+    }
+
+    /// Block until a category finishes or `timeout` elapses. Returns `true` on
+    /// completion, `false` on timeout (possible deadlock).
+    pub async fn wait_for_category_completion(
+        &self,
+        category: ProcessingCategory,
+        timeout: Duration,
+    ) -> bool {
+        let start = std::time::Instant::now();
+        loop {
+            let progress = self.get_progress(Some(category)).await;
+            if let Some(p) = progress.first() {
+                if p.total > 0 && p.completed + p.failed >= p.total {
+                    return true;
+                }
+            }
+            if start.elapsed() > timeout {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+}
+
 /// Calculate processing rate and ETA
 fn calculate_eta(
     started_at: Option<i64>,
@@ -528,5 +624,349 @@ fn calculate_eta(
         (rate, Some(eta))
     } else {
         (0.0, None)
+    }
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::*;
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    async fn setup_image_assets(
+        dir: &std::path::Path,
+        db: &SqlitePool,
+        count: usize,
+    ) -> Vec<Asset> {
+        let mut assets = Vec::new();
+        for i in 0..count {
+            let name = format!("img_{}.png", i);
+            let img_path = create_test_png(dir, &name);
+            let mut asset = make_asset(&name, img_path.to_str().unwrap(), "image", "png");
+            asset.id = insert_asset(db, &asset).await;
+            assets.push(asset);
+        }
+        assets
+    }
+
+    async fn setup_audio_assets(
+        dir: &std::path::Path,
+        db: &SqlitePool,
+        count: usize,
+    ) -> Vec<Asset> {
+        let mut assets = Vec::new();
+        for i in 0..count {
+            let name = format!("audio_{}.wav", i);
+            let wav_path = create_test_wav(dir, &name);
+            let mut asset = make_asset(&name, wav_path.to_str().unwrap(), "audio", "wav");
+            asset.id = insert_asset(db, &asset).await;
+            assets.push(asset);
+        }
+        assets
+    }
+
+    // -----------------------------------------------------------------------
+    // calculate_eta (pure function)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_calculate_eta_paused_returns_zero() {
+        let (rate, eta) = calculate_eta(Some(100), 50, 100, true);
+        assert_eq!(rate, 0.0);
+        assert!(eta.is_none());
+    }
+
+    #[test]
+    fn test_calculate_eta_no_progress_returns_zero() {
+        let (rate, eta) = calculate_eta(Some(100), 0, 100, false);
+        assert_eq!(rate, 0.0);
+        assert!(eta.is_none());
+    }
+
+    #[test]
+    fn test_calculate_eta_no_start_time_returns_zero() {
+        let (rate, eta) = calculate_eta(None, 50, 100, false);
+        assert_eq!(rate, 0.0);
+        assert!(eta.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // WorkQueue – basic processing
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_queue_processes_all_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+        let assets = setup_image_assets(dir.path(), &db, 5).await;
+
+        let queue = WorkQueue::new();
+        queue
+            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .await
+            .unwrap();
+
+        let ok = queue
+            .wait_for_category_completion(ProcessingCategory::Image, Duration::from_secs(30))
+            .await;
+        assert!(ok, "Image processing should complete within timeout");
+
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM image_metadata")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(count, 5);
+    }
+
+    #[tokio::test]
+    async fn test_queue_processes_all_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+        let assets = setup_audio_assets(dir.path(), &db, 3).await;
+
+        let queue = WorkQueue::new();
+        queue
+            .start_for_test(ProcessingCategory::Audio, assets, db.clone())
+            .await
+            .unwrap();
+
+        let ok = queue
+            .wait_for_category_completion(ProcessingCategory::Audio, Duration::from_secs(30))
+            .await;
+        assert!(ok, "Audio processing should complete within timeout");
+
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audio_metadata")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(count, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Progress tracking
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_queue_progress_tracking() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+        let assets = setup_image_assets(dir.path(), &db, 3).await;
+
+        let queue = WorkQueue::new();
+        queue
+            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .await
+            .unwrap();
+
+        // While running, total should be set
+        let progress = queue.get_progress(Some(ProcessingCategory::Image)).await;
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0].total, 3);
+
+        queue
+            .wait_for_category_completion(ProcessingCategory::Image, Duration::from_secs(30))
+            .await;
+
+        let progress = queue.get_progress(Some(ProcessingCategory::Image)).await;
+        assert_eq!(progress[0].completed + progress[0].failed, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Pause / resume
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_queue_pause_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+        let assets = setup_image_assets(dir.path(), &db, 10).await;
+
+        let queue = WorkQueue::new();
+        queue
+            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .await
+            .unwrap();
+
+        queue.pause(ProcessingCategory::Image).await;
+        assert!(queue.is_paused(ProcessingCategory::Image).await);
+
+        queue.resume(ProcessingCategory::Image).await;
+        assert!(!queue.is_paused(ProcessingCategory::Image).await);
+
+        let ok = queue
+            .wait_for_category_completion(ProcessingCategory::Image, Duration::from_secs(30))
+            .await;
+        assert!(ok, "Should complete after resume");
+    }
+
+    // -----------------------------------------------------------------------
+    // Stop
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_queue_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+        let assets = setup_image_assets(dir.path(), &db, 50).await;
+
+        let queue = WorkQueue::new();
+        queue
+            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        queue.stop(ProcessingCategory::Image).await;
+
+        assert!(!queue.is_running(ProcessingCategory::Image).await);
+    }
+
+    // -----------------------------------------------------------------------
+    // Sequential categories (regression: stale worker handles)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_queue_sequential_categories_respawns_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+
+        let image_assets = setup_image_assets(dir.path(), &db, 3).await;
+        let audio_assets = setup_audio_assets(dir.path(), &db, 3).await;
+
+        let queue = WorkQueue::new();
+
+        // --- first category ---
+        queue
+            .start_for_test(ProcessingCategory::Image, image_assets, db.clone())
+            .await
+            .unwrap();
+        let ok = queue
+            .wait_for_category_completion(ProcessingCategory::Image, Duration::from_secs(30))
+            .await;
+        assert!(ok, "Image processing should complete");
+
+        // Give workers time to exit
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // --- second category (workers must respawn) ---
+        queue
+            .start_for_test(ProcessingCategory::Audio, audio_assets, db.clone())
+            .await
+            .unwrap();
+        let ok = queue
+            .wait_for_category_completion(ProcessingCategory::Audio, Duration::from_secs(30))
+            .await;
+        assert!(ok, "Audio processing should complete after images (workers must respawn)");
+
+        let (img_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM image_metadata")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        let (audio_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM audio_metadata")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(img_count, 3);
+        assert_eq!(audio_count, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Double-start rejected
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_queue_double_start_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+        let assets = setup_image_assets(dir.path(), &db, 5).await;
+
+        let queue = WorkQueue::new();
+        queue
+            .start_for_test(ProcessingCategory::Image, assets.clone(), db.clone())
+            .await
+            .unwrap();
+
+        let err = queue
+            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .await;
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("already running"));
+
+        queue.stop(ProcessingCategory::Image).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // Failed assets are tracked
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_queue_failed_assets_tracked() {
+        let db = create_test_db().await;
+
+        // Assets pointing to non-existent files
+        let mut assets = Vec::new();
+        for i in 0..3 {
+            let name = format!("missing_{}.png", i);
+            let path = format!("/nonexistent/path/missing_{}.png", i);
+            let mut asset = make_asset(&name, &path, "image", "png");
+            asset.id = insert_asset(&db, &asset).await;
+            assets.push(asset);
+        }
+
+        let queue = WorkQueue::new();
+        queue
+            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .await
+            .unwrap();
+
+        let ok = queue
+            .wait_for_category_completion(ProcessingCategory::Image, Duration::from_secs(30))
+            .await;
+        assert!(ok, "Even failed processing should finish");
+
+        let progress = queue.get_progress(Some(ProcessingCategory::Image)).await;
+        assert_eq!(progress[0].failed, 3);
+        assert_eq!(progress[0].completed, 0);
+
+        let (err_count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM processing_errors")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(err_count, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Deadlock detection (large batch with timeout)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_queue_no_deadlock_under_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+        let assets = setup_image_assets(dir.path(), &db, 20).await;
+
+        let queue = WorkQueue::new();
+        queue
+            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .await
+            .unwrap();
+
+        let ok = queue
+            .wait_for_category_completion(ProcessingCategory::Image, Duration::from_secs(60))
+            .await;
+        assert!(ok, "Processing 20 images must not deadlock");
+
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM image_metadata")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(count, 20);
     }
 }

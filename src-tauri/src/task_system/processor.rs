@@ -396,3 +396,204 @@ fn encode_webp_from_rgba(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>
     // Return as Vec<u8>
     Ok(encoded.to_vec())
 }
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_helpers::*;
+
+    // -----------------------------------------------------------------------
+    // process_asset – images
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_process_image_extracts_dimensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+        let img_path = create_test_png(dir.path(), "test.png");
+
+        let mut asset = make_asset("test.png", img_path.to_str().unwrap(), "image", "png");
+        asset.id = insert_asset(&db, &asset).await;
+
+        let result = process_asset(&asset, &db).await;
+        assert!(result.success, "Should succeed: {:?}", result.error);
+
+        let (width, height): (i32, i32) =
+            sqlx::query_as("SELECT width, height FROM image_metadata WHERE asset_id = ?")
+                .bind(asset.id)
+                .fetch_one(&db)
+                .await
+                .expect("Should have image_metadata row");
+
+        assert_eq!(width, 64);
+        assert_eq!(height, 48);
+    }
+
+    #[tokio::test]
+    async fn test_process_image_stores_null_thumbnail() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+        let img_path = create_test_png(dir.path(), "test.png");
+
+        let mut asset = make_asset("test.png", img_path.to_str().unwrap(), "image", "png");
+        asset.id = insert_asset(&db, &asset).await;
+
+        process_asset(&asset, &db).await;
+
+        let (thumb,): (Option<Vec<u8>>,) =
+            sqlx::query_as("SELECT thumbnail_data FROM image_metadata WHERE asset_id = ?")
+                .bind(asset.id)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+
+        assert!(
+            thumb.is_none(),
+            "Thumbnail should be NULL after processing (lazy loading)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_image_does_not_overwrite_existing_thumbnail() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+        let img_path = create_test_png(dir.path(), "test.png");
+
+        let mut asset = make_asset("test.png", img_path.to_str().unwrap(), "image", "png");
+        asset.id = insert_asset(&db, &asset).await;
+
+        // Pre-populate with a fake thumbnail
+        let fake_thumb = vec![1, 2, 3, 4];
+        sqlx::query(
+            "INSERT INTO image_metadata (asset_id, width, height, thumbnail_data, processed_at)
+             VALUES (?, 10, 10, ?, 0)",
+        )
+        .bind(asset.id)
+        .bind(&fake_thumb)
+        .execute(&db)
+        .await
+        .unwrap();
+
+        // Process again – ON CONFLICT should update dimensions but keep thumbnail
+        // because the INSERT sets thumbnail_data = NULL which should not overwrite
+        process_asset(&asset, &db).await;
+
+        let row: (i32, i32, Option<Vec<u8>>) = sqlx::query_as(
+            "SELECT width, height, thumbnail_data FROM image_metadata WHERE asset_id = ?",
+        )
+        .bind(asset.id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+
+        // Dimensions updated to real values
+        assert_eq!(row.0, 64);
+        assert_eq!(row.1, 48);
+        // process_image's ON CONFLICT doesn't touch thumbnail_data, so it stays
+        assert!(row.2.is_some(), "Existing thumbnail should be preserved");
+    }
+
+    // -----------------------------------------------------------------------
+    // generate_thumbnail_for_asset
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_generate_thumbnail_produces_webp() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = create_test_png(dir.path(), "test.png");
+        let asset = make_asset("test.png", img_path.to_str().unwrap(), "image", "png");
+
+        let (w, h, data) = generate_thumbnail_for_asset(&asset).await.unwrap();
+        assert_eq!(w, 64);
+        assert_eq!(h, 48);
+        assert!(!data.is_empty());
+        assert_eq!(&data[0..4], b"RIFF", "Should be WebP (RIFF container)");
+    }
+
+    #[test]
+    fn test_generate_thumbnail_resizes_large_image() {
+        let img = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(256, 128, |_, _| {
+            image::Rgba([100, 100, 100, 255])
+        }));
+        let data = generate_thumbnail(&img, 128).unwrap();
+        assert!(!data.is_empty());
+        assert_eq!(&data[0..4], b"RIFF");
+    }
+
+    #[test]
+    fn test_generate_thumbnail_skips_resize_for_small_image() {
+        let img = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(32, 32, |_, _| {
+            image::Rgba([200, 200, 200, 255])
+        }));
+        let data = generate_thumbnail(&img, 128).unwrap();
+        assert!(!data.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // process_asset – audio
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_process_audio_extracts_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = create_test_db().await;
+        let wav_path = create_test_wav(dir.path(), "test.wav");
+
+        let mut asset = make_asset("test.wav", wav_path.to_str().unwrap(), "audio", "wav");
+        asset.id = insert_asset(&db, &asset).await;
+
+        let result = process_asset(&asset, &db).await;
+        assert!(result.success, "Should succeed: {:?}", result.error);
+
+        let (duration_ms, sample_rate, channels): (i64, Option<i32>, Option<i32>) =
+            sqlx::query_as(
+                "SELECT duration_ms, sample_rate, channels FROM audio_metadata WHERE asset_id = ?",
+            )
+            .bind(asset.id)
+            .fetch_one(&db)
+            .await
+            .expect("Should have audio_metadata row");
+
+        assert_eq!(sample_rate, Some(44100));
+        assert_eq!(channels, Some(1));
+        // 4410 samples @ 44100 Hz ≈ 100 ms
+        assert!(
+            duration_ms > 0,
+            "Duration should be positive, got {}",
+            duration_ms
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // process_asset – unsupported type
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_process_unsupported_asset_type() {
+        let db = create_test_db().await;
+        let mut asset = make_asset("test.mp4", "/fake/path.mp4", "video", "mp4");
+        asset.id = 999; // not in DB, but we won't reach the DB write
+
+        let result = process_asset(&asset, &db).await;
+        assert!(!result.success);
+        assert!(result.error.unwrap().contains("Unsupported"));
+    }
+
+    // -----------------------------------------------------------------------
+    // process_asset – missing file
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_process_image_missing_file_returns_error() {
+        let db = create_test_db().await;
+        let mut asset = make_asset("gone.png", "/no/such/file.png", "image", "png");
+        asset.id = insert_asset(&db, &asset).await;
+
+        let result = process_asset(&asset, &db).await;
+        assert!(!result.success);
+        assert!(result.error.is_some());
+    }
+}

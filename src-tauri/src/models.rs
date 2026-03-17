@@ -134,3 +134,74 @@ pub struct ProcessingErrorDetail {
     pub occurred_at: i64,
     pub retry_count: i32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_processing_category_from_str_valid() {
+        assert_eq!(
+            ProcessingCategory::from_str("image").unwrap(),
+            ProcessingCategory::Image
+        );
+        assert_eq!(
+            ProcessingCategory::from_str("audio").unwrap(),
+            ProcessingCategory::Audio
+        );
+        assert_eq!(
+            ProcessingCategory::from_str("clap").unwrap(),
+            ProcessingCategory::Clap
+        );
+    }
+
+    #[test]
+    fn test_processing_category_from_str_case_insensitive() {
+        assert_eq!(
+            ProcessingCategory::from_str("IMAGE").unwrap(),
+            ProcessingCategory::Image
+        );
+        assert_eq!(
+            ProcessingCategory::from_str("Audio").unwrap(),
+            ProcessingCategory::Audio
+        );
+    }
+
+    #[test]
+    fn test_processing_category_from_str_invalid() {
+        assert!(ProcessingCategory::from_str("invalid").is_err());
+        assert!(ProcessingCategory::from_str("").is_err());
+    }
+
+    #[test]
+    fn test_processing_category_roundtrip() {
+        for cat in [
+            ProcessingCategory::Image,
+            ProcessingCategory::Audio,
+            ProcessingCategory::Clap,
+        ] {
+            let s = cat.as_str();
+            let restored = ProcessingCategory::from_str(s).unwrap();
+            assert_eq!(cat, restored);
+        }
+    }
+
+    #[test]
+    fn test_processing_category_to_asset_type() {
+        assert!(matches!(
+            ProcessingCategory::Image.to_asset_type(),
+            Some(AssetType::Image)
+        ));
+        assert!(matches!(
+            ProcessingCategory::Audio.to_asset_type(),
+            Some(AssetType::Audio)
+        ));
+        assert!(ProcessingCategory::Clap.to_asset_type().is_none());
+    }
+
+    #[test]
+    fn test_asset_type_as_str() {
+        assert_eq!(AssetType::Image.as_str(), "image");
+        assert_eq!(AssetType::Audio.as_str(), "audio");
+    }
+}
