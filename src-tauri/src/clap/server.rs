@@ -3,11 +3,13 @@
 //! Starts the CLAP Python server using `uv run` (automatic Python management)
 //! with fallback to a manual venv if configured.
 
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio::sync::Mutex;
 
 use super::client::get_clap_client;
+use super::logs;
 use super::uv;
 
 use once_cell::sync::Lazy;
@@ -86,7 +88,10 @@ fn find_clap_server_dir() -> Result<std::path::PathBuf, String> {
 ///
 /// Tries `uv run` first (automatic Python management). If uv download fails
 /// and a manual venv exists, falls back to using the venv directly.
+/// Server output is captured to a log file in the app data directory.
 async fn start_server_process(clap_dir: &std::path::Path) -> Result<Child, String> {
+    let (stdout, stderr, log_path) = logs::create_log_file()?;
+
     // Try uv first
     match uv::get_or_download_uv().await {
         Ok(uv_path) => {
@@ -100,15 +105,17 @@ async fn start_server_process(clap_dir: &std::path::Path) -> Result<Child, Strin
                 ])
                 .current_dir(clap_dir)
                 .env("UV_CACHE_DIR", uv::uv_cache_dir())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
+                .stdout(stdout)
+                .stderr(stderr)
                 .spawn()
                 .map_err(|e| {
                     format!(
                         "Failed to start CLAP server via uv: {}. \
-                         Try deleting {:?} and restarting the app.",
+                         Try deleting {:?} and restarting the app. \
+                         Log file: {:?}",
                         e,
-                        uv::uv_bin_path()
+                        uv::uv_bin_path(),
+                        log_path
                     )
                 })?;
             Ok(child)
@@ -118,25 +125,30 @@ async fn start_server_process(clap_dir: &std::path::Path) -> Result<Child, Strin
                 "[CLAP] uv not available ({}), trying manual venv fallback...",
                 uv_err
             );
-            start_server_venv_fallback(clap_dir)
+            start_server_venv_fallback(clap_dir, stdout, stderr, log_path)
         }
     }
 }
 
 /// Fallback: start server using a manually-created venv.
-fn start_server_venv_fallback(clap_dir: &std::path::Path) -> Result<Child, String> {
+fn start_server_venv_fallback(
+    clap_dir: &std::path::Path,
+    stdout: Stdio,
+    stderr: Stdio,
+    log_path: PathBuf,
+) -> Result<Child, String> {
     #[cfg(windows)]
     let python_path = clap_dir.join("venv").join("Scripts").join("python.exe");
     #[cfg(not(windows))]
     let python_path = clap_dir.join("venv").join("bin").join("python");
 
     if !python_path.exists() {
-        return Err(
+        return Err(format!(
             "Failed to set up Python environment automatically, and no manual venv found. \
              Check your internet connection and restart the app, or see clap-server/README.md \
-             for manual setup instructions."
-                .to_string(),
-        );
+             for manual setup instructions. Log file: {:?}",
+            log_path
+        ));
     }
 
     println!("[CLAP] Using manual venv fallback: {:?}", python_path);
@@ -152,10 +164,15 @@ fn start_server_venv_fallback(clap_dir: &std::path::Path) -> Result<Child, Strin
             "5555",
         ])
         .current_dir(clap_dir)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(stdout)
+        .stderr(stderr)
         .spawn()
-        .map_err(|e| format!("Failed to start CLAP server: {} (python: {:?})", e, python_path))
+        .map_err(|e| {
+            format!(
+                "Failed to start CLAP server: {} (python: {:?}). Log file: {:?}",
+                e, python_path, log_path
+            )
+        })
 }
 
 /// Wait for the server to become healthy (up to 120 seconds).
@@ -172,12 +189,13 @@ async fn wait_for_server_ready() -> Result<(), String> {
         }
     }
 
-    Err(
+    Err(format!(
         "Semantic search server failed to start within 120 seconds. \
          This may happen on first run if the AI model is still downloading. \
-         Try restarting the app to resume the download."
-            .to_string(),
-    )
+         Try restarting the app to resume the download. \
+         Check logs in {:?} for details.",
+        logs::log_dir()
+    ))
 }
 
 /// Call the /preload endpoint to ensure the model is loaded.

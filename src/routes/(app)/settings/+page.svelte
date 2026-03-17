@@ -2,6 +2,8 @@
   import { clapState, type ClapSetupStatus } from '$lib/state/clap.svelte';
   import { showToast } from '$lib/state/ui.svelte';
   import { confirm } from '@tauri-apps/plugin-dialog';
+  import { invoke } from '@tauri-apps/api/core';
+  import { openPath } from '@tauri-apps/plugin-opener';
   import ClapSetupDialog from '$lib/components/ClapSetupDialog.svelte';
 
   let showSetupDialog = $state(false);
@@ -56,6 +58,15 @@
 
   function handleSetupCancel() {
     showSetupDialog = false;
+  }
+
+  async function handleViewLogs() {
+    try {
+      const logDir = await invoke<string>('get_clap_log_dir');
+      await openPath(logDir);
+    } catch (error) {
+      showToast('Failed to open log directory: ' + error, 'error');
+    }
   }
 </script>
 
@@ -121,19 +132,27 @@
           </div>
         {/if}
 
-        <!-- Cache -->
+        <!-- Cache & Logs -->
         {#if clapState.cacheSize > 0}
           <div class="flex items-center justify-between pt-3 border-t border-default">
             <div class="text-sm">
               <span class="text-tertiary">Cache size</span>
               <span class="text-secondary ml-2">{formatBytes(clapState.cacheSize)}</span>
             </div>
-            <button
-              onclick={handleClearCache}
-              class="px-3 py-1.5 text-xs font-medium rounded-lg border border-default text-secondary hover:text-primary hover:bg-tertiary transition-colors"
-            >
-              Clear Cache
-            </button>
+            <div class="flex items-center gap-2">
+              <button
+                onclick={handleViewLogs}
+                class="px-3 py-1.5 text-xs font-medium rounded-lg border border-default text-secondary hover:text-primary hover:bg-tertiary transition-colors"
+              >
+                View Logs
+              </button>
+              <button
+                onclick={handleClearCache}
+                class="px-3 py-1.5 text-xs font-medium rounded-lg border border-default text-secondary hover:text-primary hover:bg-tertiary transition-colors"
+              >
+                Clear Cache
+              </button>
+            </div>
           </div>
         {/if}
       </div>

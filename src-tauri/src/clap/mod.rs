@@ -5,9 +5,11 @@
 mod client;
 mod embedding;
 mod job_object;
+mod logs;
 mod server;
 pub mod uv;
 
 pub use client::{get_clap_client, HealthInfo};
 pub use embedding::{blob_to_embedding, cosine_similarity, embedding_to_blob};
+pub use logs::log_dir;
 pub use server::{ensure_server_running, stop_server};

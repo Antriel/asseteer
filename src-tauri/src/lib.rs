@@ -88,6 +88,7 @@ pub fn run() {
             commands::search::get_clap_server_info,
             commands::search::get_clap_cache_size,
             commands::search::clear_clap_cache,
+            commands::search::get_clap_log_dir,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

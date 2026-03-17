@@ -21,7 +21,7 @@ pub fn init_app_data_dir(dir: PathBuf) {
 }
 
 /// Get the app data directory, or fall back to a temp directory.
-fn app_data_dir() -> PathBuf {
+pub(super) fn app_data_dir() -> PathBuf {
     APP_DATA_DIR
         .get()
         .cloned()

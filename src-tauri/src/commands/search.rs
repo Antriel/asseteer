@@ -199,6 +199,11 @@ pub fn clear_clap_cache() -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn get_clap_log_dir() -> String {
+    crate::clap::log_dir().to_string_lossy().into_owned()
+}
+
 fn dir_size(path: &std::path::Path) -> std::io::Result<u64> {
     let mut total = 0;
     if path.is_dir() {
