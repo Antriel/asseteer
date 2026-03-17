@@ -4,6 +4,7 @@
 
 mod client;
 mod embedding;
+mod job_object;
 mod server;
 pub mod uv;
 

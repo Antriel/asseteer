@@ -78,6 +78,10 @@ class ClapTester:
         with torch.no_grad():
             audio_embeds = self.model.get_audio_features(**inputs)
 
+        # Handle both raw tensor and model output object
+        if not isinstance(audio_embeds, torch.Tensor):
+            audio_embeds = audio_embeds.pooler_output
+
         # Convert to numpy and normalize
         embedding = audio_embeds.cpu().numpy()[0]
         embedding = embedding / np.linalg.norm(embedding)  # L2 normalize
@@ -107,6 +111,10 @@ class ClapTester:
         # Generate embedding
         with torch.no_grad():
             text_embeds = self.model.get_text_features(**inputs)
+
+        # Handle both raw tensor and model output object
+        if not isinstance(text_embeds, torch.Tensor):
+            text_embeds = text_embeds.pooler_output
 
         # Convert to numpy and normalize
         embedding = text_embeds.cpu().numpy()[0]

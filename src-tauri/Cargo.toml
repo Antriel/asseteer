@@ -59,6 +59,10 @@ reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 flate2 = "1"
 tar = "0.4"
 
+# Windows Job Object for child process cleanup
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_JobObjects", "Win32_System_Threading", "Win32_Foundation", "Win32_Security"] }
+
 [dev-dependencies]
 tempfile = "3"
 

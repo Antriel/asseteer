@@ -41,10 +41,18 @@ pub async fn ensure_server_running() -> Result<(), String> {
 
     println!("[CLAP] Process spawned with PID: {}", child.id());
 
-    *guard = Some(child);
-    drop(guard); // Release lock before waiting
+    // Assign to Windows Job Object so the OS kills it if we crash
+    if let Err(e) = super::job_object::assign_child_to_job(&child) {
+        println!("[CLAP] Warning: could not assign to job object: {}", e);
+    }
 
+    *guard = Some(child);
+
+    // Hold lock until server is ready — prevents concurrent callers from
+    // spawning duplicate server processes during the startup window
     wait_for_server_ready().await?;
+
+    drop(guard);
 
     // Trigger model preload so first inference is fast
     call_preload().await;
