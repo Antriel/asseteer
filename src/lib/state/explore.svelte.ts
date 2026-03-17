@@ -73,13 +73,14 @@ class ExploreState {
 
   async navigateToAssetPath(assetPath: string) {
     // Expand all ancestor directories and select the directory containing this asset
-    // assetPath is the directory path (assets.path column)
-    const parts = assetPath.replace(/\\/g, '/').split('/');
+    // assetPath is the directory path (assets.path column) with native separators
+    const sep = assetPath.includes('\\') ? '\\' : '/';
+    const parts = assetPath.split(sep);
 
     // Expand each ancestor
     let current = '';
     for (let i = 0; i < parts.length; i++) {
-      current = i === 0 ? parts[i] : current + '/' + parts[i];
+      current = i === 0 ? parts[i] : current + sep + parts[i];
       // On Windows, first part might be like "C:" - need to handle drive letters
       if (i === 0 && current.endsWith(':')) {
         continue; // Skip bare drive letter, wait for next part

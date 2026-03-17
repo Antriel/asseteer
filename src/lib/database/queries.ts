@@ -224,151 +224,103 @@ export interface DirectoryNode {
 	assetCount: number;
 }
 
+/** Split a path on both \ and / separators */
+function splitPath(p: string): string[] {
+	return p.split(/[\\/]/);
+}
+
+/** Detect the separator used in a DB path */
+function pathSep(p: string): string {
+	return p.includes('\\') ? '\\' : '/';
+}
+
 /**
  * Get child directories of a given parent path.
  * If parentPath is null, returns root-level directories (scan roots).
  *
- * Uses the assets.path column to derive the directory hierarchy.
- * Paths are stored as the directory containing the asset file.
+ * Paths are stored in the DB with native OS separators and queried directly
+ * against idx_assets_path for fast index lookups.
  */
 export async function getDirectoryChildren(
 	db: Database,
 	parentPath: string | null
 ): Promise<DirectoryNode[]> {
 	if (parentPath === null) {
-		// Get root directories: distinct top-level paths
-		// We find the shortest unique prefix directories
-		const result = await db.select<Array<{ dir_path: string; asset_count: number }>>(
-			`SELECT
-				path as dir_path,
-				COUNT(*) as asset_count
-			FROM assets
-			GROUP BY path
-			ORDER BY path COLLATE NOCASE`
+		// Get scan roots from scan_sessions (fast: very few rows)
+		const roots = await db.select<Array<{ root_path: string }>>(
+			`SELECT DISTINCT root_path FROM scan_sessions ORDER BY root_path COLLATE NOCASE`
 		);
 
-		// Build a tree: find root prefixes
-		return buildRootNodes(result);
+		const results: DirectoryNode[] = [];
+		for (const { root_path } of roots) {
+			const sep = pathSep(root_path);
+			// Count assets and distinct subdirectories under this root
+			// Uses idx_assets_path for both conditions
+			const countResult = await db.select<Array<{ asset_count: number; dir_count: number }>>(
+				`SELECT
+					COUNT(*) as asset_count,
+					COUNT(DISTINCT path) as dir_count
+				FROM assets
+				WHERE path = ? OR path LIKE ?`,
+				[root_path, root_path + sep + '%']
+			);
+
+			if (countResult[0].asset_count > 0) {
+				const segments = splitPath(root_path);
+				results.push({
+					path: root_path,
+					name: segments[segments.length - 1] || root_path,
+					// dir_count includes the root itself if it has direct assets
+					childCount: Math.max(0, countResult[0].dir_count - 1),
+					assetCount: countResult[0].asset_count,
+				});
+			}
+		}
+		return results;
 	}
 
-	// Get direct child directories of parentPath
-	// Normalize: ensure consistent separator
-	const normalizedParent = parentPath.replace(/\\/g, '/');
-	const prefix = normalizedParent + '/';
-
+	// Get child directories of parentPath
+	// Query with LIKE prefix on the raw path — uses idx_assets_path
+	const sep = pathSep(parentPath);
 	const result = await db.select<Array<{ dir_path: string; asset_count: number }>>(
-		`SELECT
-			path as dir_path,
-			COUNT(*) as asset_count
+		`SELECT path as dir_path, COUNT(*) as asset_count
 		FROM assets
-		WHERE REPLACE(path, '\\', '/') LIKE ? || '%'
+		WHERE path LIKE ?
 		GROUP BY path
 		ORDER BY path COLLATE NOCASE`,
-		[prefix]
+		[parentPath + sep + '%']
 	);
 
-	// Find immediate children: paths that have exactly one more segment after parent
-	return buildChildNodes(normalizedParent, result);
-}
-
-function buildRootNodes(
-	rows: Array<{ dir_path: string; asset_count: number }>
-): DirectoryNode[] {
-	// Group paths by their root prefix (e.g., "C:/Users/foo/assets")
-	// Find the common shortest prefixes that contain assets
-	const pathMap = new Map<string, { assetCount: number; childPaths: Set<string> }>();
-
-	for (const row of rows) {
-		const normalized = row.dir_path.replace(/\\/g, '/');
-		// Find the scan root: we look for the shortest path that's a prefix of multiple asset paths
-		// For simplicity, take the first 3 segments as root (e.g. C:/Users/folder or /home/user/folder)
-		const segments = normalized.split('/');
-
-		// Find a reasonable root: walk up from the full path until we find common prefixes
-		// Simple heuristic: use the path itself if no children, otherwise find common prefix
-		if (!pathMap.has(normalized)) {
-			pathMap.set(normalized, { assetCount: 0, childPaths: new Set() });
-		}
-		pathMap.get(normalized)!.assetCount += row.asset_count;
-	}
-
-	// Now find the minimal set of root directories
-	// A root is a path that is not a child of any other path in our set
-	const allPaths = [...pathMap.keys()].sort();
-	const roots = new Map<string, { assetCount: number; descendants: number }>();
-
-	for (const path of allPaths) {
-		// Find the shortest ancestor already in roots
-		let foundRoot = false;
-		for (const [rootPath] of roots) {
-			if (path.startsWith(rootPath + '/')) {
-				// This path is under an existing root
-				roots.get(rootPath)!.descendants++;
-				roots.get(rootPath)!.assetCount += pathMap.get(path)!.assetCount;
-				foundRoot = true;
-				break;
-			}
-		}
-		if (!foundRoot) {
-			// Check if this path should absorb any existing roots
-			const absorbed: string[] = [];
-			let totalAssets = pathMap.get(path)!.assetCount;
-			let totalDescendants = 0;
-			for (const [rootPath, rootData] of roots) {
-				if (rootPath.startsWith(path + '/')) {
-					absorbed.push(rootPath);
-					totalAssets += rootData.assetCount;
-					totalDescendants += rootData.descendants + 1;
-				}
-			}
-			for (const a of absorbed) roots.delete(a);
-			roots.set(path, { assetCount: totalAssets, descendants: totalDescendants });
-		}
-	}
-
-	return [...roots.entries()].map(([path, data]) => {
-		const segments = path.split('/');
-		return {
-			path,
-			name: segments[segments.length - 1] || segments[segments.length - 2] || path,
-			childCount: data.descendants,
-			assetCount: data.assetCount,
-		};
-	});
+	return buildChildNodes(parentPath, result);
 }
 
 function buildChildNodes(
 	parentPath: string,
 	rows: Array<{ dir_path: string; asset_count: number }>
 ): DirectoryNode[] {
-	// Group by immediate child segment
-	const childMap = new Map<string, { fullPath: string; assetCount: number; childPaths: number }>();
-	const parentDepth = parentPath.split('/').length;
+	const parentDepth = splitPath(parentPath).length;
+	const sep = pathSep(parentPath);
+	const childMap = new Map<string, { assetCount: number; childPaths: number }>();
 
 	for (const row of rows) {
-		const normalized = row.dir_path.replace(/\\/g, '/');
-		if (!normalized.startsWith(parentPath + '/')) continue;
-
-		const segments = normalized.split('/');
-		// Immediate child is at parentDepth index
+		const segments = splitPath(row.dir_path);
 		if (segments.length <= parentDepth) continue;
 
-		const childSegment = segments[parentDepth];
-		const childPath = segments.slice(0, parentDepth + 1).join('/');
+		// Reconstruct the immediate child path using the original separator
+		const childPath = segments.slice(0, parentDepth + 1).join(sep);
 
 		if (!childMap.has(childPath)) {
-			childMap.set(childPath, { fullPath: childPath, assetCount: 0, childPaths: 0 });
+			childMap.set(childPath, { assetCount: 0, childPaths: 0 });
 		}
 		const entry = childMap.get(childPath)!;
 		entry.assetCount += row.asset_count;
-		// If the normalized path is longer than immediate child, it's a deeper descendant
 		if (segments.length > parentDepth + 1) {
 			entry.childPaths++;
 		}
 	}
 
 	return [...childMap.entries()].map(([path, data]) => {
-		const segments = path.split('/');
+		const segments = splitPath(path);
 		return {
 			path,
 			name: segments[segments.length - 1],
@@ -385,7 +337,6 @@ export async function getAssetsInDirectory(
 	db: Database,
 	directoryPath: string
 ): Promise<Asset[]> {
-	const normalized = directoryPath.replace(/\\/g, '/');
 	return db.select<Asset[]>(
 		`SELECT
 			assets.id, assets.filename, assets.path, assets.zip_entry, assets.asset_type,
@@ -395,9 +346,9 @@ export async function getAssetsInDirectory(
 		FROM assets
 		LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
 		LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
-		WHERE REPLACE(assets.path, '\\', '/') = ?
+		WHERE assets.path = ?
 		ORDER BY assets.filename COLLATE NOCASE ASC`,
-		[normalized]
+		[directoryPath]
 	);
 }
 
