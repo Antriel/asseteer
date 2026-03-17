@@ -562,3 +562,34 @@ export async function checkClapServer(): Promise<boolean> {
 export async function startClapServer(): Promise<void> {
 	return invoke('start_clap_server');
 }
+
+/**
+ * CLAP server health info including device (CPU/GPU)
+ */
+export interface ClapServerInfo {
+	status: string;
+	model: string;
+	device: string;
+	embedding_dim: number;
+}
+
+/**
+ * Get detailed CLAP server info (device, model, etc.)
+ */
+export async function getClapServerInfo(): Promise<ClapServerInfo> {
+	return invoke('get_clap_server_info');
+}
+
+/**
+ * Get the size of the uv/CLAP cache in bytes
+ */
+export async function getClapCacheSize(): Promise<number> {
+	return invoke('get_clap_cache_size');
+}
+
+/**
+ * Clear the uv/CLAP cache (Python, packages, uv binary)
+ */
+export async function clearClapCache(): Promise<void> {
+	return invoke('clear_clap_cache');
+}

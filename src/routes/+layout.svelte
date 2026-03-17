@@ -5,6 +5,7 @@
   import StatusBar from '$lib/components/layout/StatusBar.svelte';
   import ToastContainer from '$lib/components/shared/ToastContainer.svelte';
   import { processingState } from '$lib/state/tasks.svelte';
+  import { clapState } from '$lib/state/clap.svelte';
 
   let { children } = $props();
 
@@ -12,9 +13,11 @@
   onMount(() => {
     processingState.initializeListeners();
     processingState.refreshPendingCount();
+    clapState.initialize();
 
     return () => {
       processingState.cleanup();
+      clapState.stopHealthMonitor();
     };
   });
 </script>

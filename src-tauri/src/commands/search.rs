@@ -1,6 +1,6 @@
 //! CLAP-based semantic search commands
 
-use crate::clap::{blob_to_embedding, cosine_similarity, ensure_server_running, get_clap_client};
+use crate::clap::{blob_to_embedding, cosine_similarity, ensure_server_running, get_clap_client, HealthInfo};
 use crate::AppState;
 use serde::Serialize;
 use tauri::State;
@@ -164,4 +164,53 @@ pub async fn check_clap_server() -> Result<bool, String> {
 #[tauri::command]
 pub async fn start_clap_server() -> Result<(), String> {
     ensure_server_running().await
+}
+
+/// Get detailed CLAP server health info (device, model, etc.)
+#[tauri::command]
+pub async fn get_clap_server_info() -> Result<HealthInfo, String> {
+    get_clap_client().await.health_check_detailed().await
+}
+
+/// Get the size of the uv cache directory in bytes
+#[tauri::command]
+pub fn get_clap_cache_size() -> Result<u64, String> {
+    let cache_dir = crate::clap::uv::uv_cache_dir();
+    if !cache_dir.exists() {
+        return Ok(0);
+    }
+    dir_size(&cache_dir).map_err(|e| format!("Failed to calculate cache size: {}", e))
+}
+
+/// Clear the uv cache (downloaded Python, packages, etc.)
+#[tauri::command]
+pub fn clear_clap_cache() -> Result<(), String> {
+    let cache_dir = crate::clap::uv::uv_cache_dir();
+    if cache_dir.exists() {
+        std::fs::remove_dir_all(&cache_dir)
+            .map_err(|e| format!("Failed to clear cache: {}", e))?;
+    }
+    // Also remove the uv binary so it re-downloads fresh
+    let uv_path = crate::clap::uv::uv_bin_path();
+    if uv_path.exists() {
+        std::fs::remove_file(&uv_path)
+            .map_err(|e| format!("Failed to remove uv binary: {}", e))?;
+    }
+    Ok(())
+}
+
+fn dir_size(path: &std::path::Path) -> std::io::Result<u64> {
+    let mut total = 0;
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let meta = entry.metadata()?;
+            if meta.is_dir() {
+                total += dir_size(&entry.path())?;
+            } else {
+                total += meta.len();
+            }
+        }
+    }
+    Ok(total)
 }

@@ -9,6 +9,7 @@
   } from '$lib/state/tasks.svelte';
   import { uiState } from '$lib/state/ui.svelte';
   import { thumbnailMetrics } from '$lib/state/thumbnails.svelte';
+  import { clapState } from '$lib/state/clap.svelte';
   import type { ProcessingCategory } from '$lib/types';
 
   const isProcessing = $derived(isAnyRunning(processingState));
@@ -117,6 +118,29 @@
         <span>&middot; {thumbnailMetrics.rate}/s</span>
       {/if}
     </div>
+  {/if}
+
+  <!-- CLAP server status -->
+  {#if clapState.setupStatus !== 'not-configured'}
+    <div class="w-px h-5 bg-tertiary mx-4"></div>
+    <a href="/settings" class="flex items-center gap-2 text-xs hover:text-accent transition-colors">
+      {#if clapState.serverStarting || clapState.setupStatus === 'setting-up'}
+        <div class="w-2 h-2 rounded-full bg-warning animate-pulse"></div>
+        <span class="text-warning">CLAP: Starting...</span>
+      {:else if clapState.isSearching}
+        <div class="w-2 h-2 rounded-full bg-accent animate-pulse"></div>
+        <span class="text-accent">CLAP: Searching...</span>
+      {:else if clapState.setupStatus === 'ready' && clapState.serverAvailable}
+        <div class="w-2 h-2 rounded-full bg-success"></div>
+        <span class="text-secondary">CLAP: Ready ({clapState.device === 'cuda' ? 'GPU' : 'CPU'})</span>
+      {:else if clapState.setupStatus === 'offline'}
+        <div class="w-2 h-2 rounded-full bg-tertiary"></div>
+        <span class="text-tertiary">CLAP: Offline</span>
+      {:else if clapState.setupStatus === 'error'}
+        <div class="w-2 h-2 rounded-full bg-error"></div>
+        <span class="text-error">CLAP: Error</span>
+      {/if}
+    </a>
   {/if}
 
   <!-- Spacer -->

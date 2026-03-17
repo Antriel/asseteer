@@ -7,6 +7,14 @@ use tokio::sync::OnceCell;
 
 const CLAP_SERVER_URL: &str = "http://127.0.0.1:5555";
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthInfo {
+    pub status: String,
+    pub model: String,
+    pub device: String,
+    pub embedding_dim: i32,
+}
+
 #[derive(Serialize)]
 struct TextRequest {
     text: String,
@@ -51,6 +59,25 @@ impl ClapClient {
             .await
             .map_err(|e| format!("Health check failed: {}", e))?;
         Ok(())
+    }
+
+    /// Get detailed health info including device (CPU/GPU)
+    pub async fn health_check_detailed(&self) -> Result<HealthInfo, String> {
+        let url = format!("{}/health", self.base_url);
+        let response = self
+            .client
+            .get(&url)
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .map_err(|e| format!("Health check failed: {}", e))?;
+        if !response.status().is_success() {
+            return Err(format!("Health check returned: {}", response.status()));
+        }
+        response
+            .json::<HealthInfo>()
+            .await
+            .map_err(|e| format!("Failed to parse health response: {}", e))
     }
 
     /// Trigger model preloading on the server

@@ -9,7 +9,11 @@ import {
 	checkClapServer,
 	startClapServer,
 	searchAudioSemantic,
-	type SemanticSearchResult
+	getClapServerInfo,
+	getClapCacheSize,
+	clearClapCache,
+	type SemanticSearchResult,
+	type ClapServerInfo
 } from '$lib/database/queries';
 import type { DurationFilter } from '$lib/state/assets.svelte';
 
@@ -19,11 +23,22 @@ const MAX_SEMANTIC_RESULTS = 500;
 /**
  * CLAP state for server management and semantic search
  */
+export type ClapSetupStatus = 'not-configured' | 'setting-up' | 'ready' | 'offline' | 'error';
+
 class ClapState {
 	// Server status
 	serverAvailable = $state(false);
 	serverChecking = $state(false);
 	serverStarting = $state(false);
+
+	// Server info (from detailed health check)
+	device = $state<string | null>(null);
+	model = $state<string | null>(null);
+
+	// Setup
+	setupStatus = $state<ClapSetupStatus>('not-configured');
+	setupError = $state<string | null>(null);
+	cacheSize = $state(0);
 
 	// Semantic search
 	semanticSearchEnabled = $state(false);
@@ -31,6 +46,9 @@ class ClapState {
 	isSearching = $state(false);
 	lastSearchQuery = $state('');
 	hasMoreResults = $state(false);
+
+	// Health monitoring
+	private healthInterval: ReturnType<typeof setInterval> | null = null;
 
 	// Search cancellation tracking
 	private searchVersion = 0;
@@ -155,6 +173,105 @@ class ClapState {
 		if (!this.semanticSearchEnabled) {
 			this.clearSearch();
 		}
+	}
+
+	/**
+	 * Run first-time setup: start server (triggers uv download + Python install + model download)
+	 */
+	async setup(): Promise<boolean> {
+		this.setupStatus = 'setting-up';
+		this.setupError = null;
+		try {
+			await startClapServer();
+			this.serverAvailable = true;
+			await this.refreshServerInfo();
+			this.setupStatus = 'ready';
+			this.startHealthMonitor();
+			return true;
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			this.setupError = msg;
+			this.setupStatus = 'error';
+			return false;
+		}
+	}
+
+	/**
+	 * Fetch detailed server info (device, model) and update state
+	 */
+	async refreshServerInfo(): Promise<void> {
+		try {
+			const info: ClapServerInfo = await getClapServerInfo();
+			this.device = info.device;
+			this.model = info.model;
+			this.setupStatus = 'ready';
+		} catch {
+			this.device = null;
+			this.model = null;
+		}
+	}
+
+	/**
+	 * Refresh the cache size display
+	 */
+	async refreshCacheSize(): Promise<void> {
+		try {
+			this.cacheSize = await getClapCacheSize();
+		} catch {
+			this.cacheSize = 0;
+		}
+	}
+
+	/**
+	 * Clear the CLAP/uv cache and reset state
+	 */
+	async clearCache(): Promise<void> {
+		await clearClapCache();
+		this.cacheSize = 0;
+		this.setupStatus = 'not-configured';
+		this.serverAvailable = false;
+		this.device = null;
+		this.model = null;
+	}
+
+	/**
+	 * Start periodic health monitoring (every 30s)
+	 */
+	startHealthMonitor() {
+		this.stopHealthMonitor();
+		this.healthInterval = setInterval(async () => {
+			if (this.setupStatus === 'ready' || this.serverAvailable) {
+				const ok = await checkClapServer();
+				if (!ok) {
+					this.serverAvailable = false;
+					this.device = null;
+					this.setupStatus = 'offline';
+				}
+			}
+		}, 30_000);
+	}
+
+	/**
+	 * Stop health monitoring
+	 */
+	stopHealthMonitor() {
+		if (this.healthInterval) {
+			clearInterval(this.healthInterval);
+			this.healthInterval = null;
+		}
+	}
+
+	/**
+	 * Initialize: check if server is already running, update state accordingly
+	 */
+	async initialize(): Promise<void> {
+		const available = await this.checkServer();
+		if (available) {
+			await this.refreshServerInfo();
+			this.setupStatus = 'ready';
+			this.startHealthMonitor();
+		}
+		await this.refreshCacheSize();
 	}
 }
 
