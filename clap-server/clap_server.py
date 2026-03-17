@@ -1,4 +1,17 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11,<3.14"
+# dependencies = [
+#     "torch>=2.0.0",
+#     "transformers>=4.30.0",
+#     "librosa>=0.10.0",
+#     "soundfile>=0.13.0",
+#     "numpy>=1.24.0",
+#     "fastapi>=0.109.0",
+#     "uvicorn[standard]>=0.27.0",
+#     "python-multipart>=0.0.6",
+# ]
+# ///
 """
 CLAP HTTP Server (FastAPI)
 
@@ -9,10 +22,11 @@ Endpoints:
     POST /embed/text         - Generate text embedding
     POST /embed/audio        - Generate audio embedding from file path
     POST /embed/audio/upload - Generate audio embedding from raw bytes
+    POST /preload            - Trigger model download/loading
     GET  /health             - Health check
 
 Run with:
-    python clap_server.py
+    uv run clap_server.py
     # or
     uvicorn clap_server:app --host 127.0.0.1 --port 5555
 """
@@ -102,6 +116,33 @@ async def health():
         device=clap_model.device if clap_model else "unknown",
         embedding_dim=512
     )
+
+
+class PreloadResponse(BaseModel):
+    status: str
+    model: str
+    device: str
+    message: str
+
+
+@app.post("/preload", response_model=PreloadResponse)
+def preload():
+    """
+    Trigger model loading if not already loaded.
+
+    Call this after the server starts to ensure the HuggingFace model
+    is downloaded and loaded into memory before the first inference request.
+    On first run this triggers a ~1-2GB model download from HuggingFace.
+    """
+    if clap_model is not None:
+        return PreloadResponse(
+            status="ready",
+            model="laion/clap-htsat-fused",
+            device=str(clap_model.device),
+            message="Model already loaded",
+        )
+    # Model should be loaded by lifespan handler; if not, something went wrong
+    raise HTTPException(status_code=503, detail="Model not loaded — server may still be starting")
 
 
 @app.post("/embed/text", response_model=EmbeddingResponse)

@@ -39,6 +39,9 @@ pub fn run() {
             std::fs::create_dir_all(&app_dir)
                 .expect("Failed to create app data directory");
 
+            // Initialize uv module with app data directory
+            clap::uv::init_app_data_dir(app_dir.clone());
+
             // Initialize database pool
             let db_path = app_dir.join("asseteer.db");
             let pool = tauri::async_runtime::block_on(async {

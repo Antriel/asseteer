@@ -562,7 +562,7 @@ def main():
     print("Checking CLAP server...")
     if not check_server():
         print("ERROR: CLAP server not running. Start it first:")
-        print("  cd clap-python-prototype && venv/Scripts/python -m uvicorn clap_server:app --host 127.0.0.1 --port 5555")
+        print("  cd clap-server && venv/Scripts/python -m uvicorn clap_server:app --host 127.0.0.1 --port 5555")
         sys.exit(1)
 
     # Find files

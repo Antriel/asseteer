@@ -31,18 +31,18 @@ pub async fn ensure_server_running() -> Result<(), String> {
         return Ok(());
     }
 
-    // Get the path to clap-python-prototype relative to project root
+    // Get the path to clap-server relative to project root
     // When running via Tauri, cwd is src-tauri, so go up one level
     let cwd = std::env::current_dir()
         .map_err(|e| format!("Failed to get current dir: {}", e))?;
 
-    // Try to find clap-python-prototype - it could be in cwd or parent
-    let clap_dir = if cwd.join("clap-python-prototype").exists() {
-        cwd.join("clap-python-prototype")
-    } else if cwd.parent().map(|p| p.join("clap-python-prototype").exists()).unwrap_or(false) {
-        cwd.parent().unwrap().join("clap-python-prototype")
+    // Try to find clap-server - it could be in cwd or parent
+    let clap_dir = if cwd.join("clap-server").exists() {
+        cwd.join("clap-server")
+    } else if cwd.parent().map(|p| p.join("clap-server").exists()).unwrap_or(false) {
+        cwd.parent().unwrap().join("clap-server")
     } else {
-        return Err(format!("Could not find clap-python-prototype directory (cwd: {:?})", cwd));
+        return Err(format!("Could not find clap-server directory (cwd: {:?})", cwd));
     };
 
     // Use the venv Python executable
@@ -53,7 +53,7 @@ pub async fn ensure_server_running() -> Result<(), String> {
 
     if !python_path.exists() {
         return Err(format!(
-            "Python venv not found at {:?}. Run: cd clap-python-prototype && python -m venv venv && venv\\Scripts\\pip install -r requirements.txt",
+            "Python venv not found at {:?}. Run: cd clap-server && python -m venv venv && venv\\Scripts\\pip install -r requirements.txt",
             python_path
         ));
     }

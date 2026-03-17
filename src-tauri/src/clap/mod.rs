@@ -5,6 +5,7 @@
 mod client;
 mod embedding;
 mod server;
+pub mod uv;
 
 pub use client::get_clap_client;
 pub use embedding::{blob_to_embedding, cosine_similarity, embedding_to_blob};
