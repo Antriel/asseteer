@@ -3,6 +3,10 @@
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { invoke } from '@tauri-apps/api/core';
   import type { Asset } from '$lib/types';
+  import { viewState } from '$lib/state/view.svelte';
+  import { assetsState } from '$lib/state/assets.svelte';
+  import { exploreState } from '$lib/state/explore.svelte';
+  import { ZIP_SEP } from '$lib/database/queries';
 
   interface Props {
     asset: Asset;
@@ -12,6 +16,21 @@
   }
 
   let { asset, onClose, onNext, onPrev }: Props = $props();
+
+  async function showInFolder() {
+    viewState.openFolderSidebar();
+    await exploreState.loadRoots();
+    // Navigate filesystem tree to the asset's directory (or the directory containing the ZIP)
+    await exploreState.navigateToAssetPath(asset.path);
+    const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
+    if (asset.zip_entry) {
+      // ZIP entry: filter to the ZIP file
+      assetsState.setFolderFilter(asset.path + ZIP_SEP, assetType);
+    } else {
+      assetsState.setFolderFilter(asset.path, assetType);
+    }
+    onClose();
+  }
 
   let zoom = $state(1);
   let showMetadata = $state(false);
@@ -186,6 +205,10 @@
       </div>
 
       <div class="flex gap-2 items-center">
+        <button class="btn-lightbox-control" onclick={showInFolder} title="Show in folder">
+          <svg class="w-4 h-4 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+        </button>
+        <span class="w-px h-5 bg-gray-600"></span>
         <button class="btn-lightbox-control" onclick={() => zoom = Math.max(zoom - 0.5, 0.5)}>−</button>
         <span class="min-w-[4rem] text-center">{Math.round(zoom * 100)}%</span>
         <button class="btn-lightbox-control" onclick={() => zoom = Math.min(zoom + 0.5, 5)}>+</button>

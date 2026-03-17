@@ -3,19 +3,22 @@ import type { Asset } from '$lib/types';
 type AssetViewMode = 'images' | 'audio';
 type LayoutMode = 'grid' | 'table';
 type ThumbnailSize = 'small' | 'medium' | 'large';
-export type LibraryView = 'search' | 'explore';
 
 class ViewState {
   activeTab = $state<AssetViewMode>('images');
   layoutMode = $state<LayoutMode>('grid');
   thumbnailSize = $state<ThumbnailSize>('medium');
-  libraryView = $state<LibraryView>('search');
+  folderSidebarOpen = $state(false);
 
   // Lightbox state
   lightboxAsset = $state<Asset | null>(null);
 
-  setLibraryView(view: LibraryView) {
-    this.libraryView = view;
+  toggleFolderSidebar() {
+    this.folderSidebarOpen = !this.folderSidebarOpen;
+  }
+
+  openFolderSidebar() {
+    this.folderSidebarOpen = true;
   }
 
   setActiveTab(tab: AssetViewMode) {

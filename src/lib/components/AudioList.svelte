@@ -6,7 +6,9 @@
   import Badge from './shared/Badge.svelte';
   import { openPath } from '@tauri-apps/plugin-opener';
   import { viewState } from '$lib/state/view.svelte';
+  import { assetsState } from '$lib/state/assets.svelte';
   import { exploreState } from '$lib/state/explore.svelte';
+  import { ZIP_SEP } from '$lib/database/queries';
 
   // Extended asset type with optional similarity score
   type AudioAsset = Asset & { similarity?: number };
@@ -85,11 +87,16 @@
     containerRef?.focus();
   }
 
-  async function showInExplore(asset: Asset) {
-    const dirPath = asset.path.replace(/\\/g, '/');
-    viewState.setLibraryView('explore');
+  async function showInFolder(asset: Asset) {
+    viewState.openFolderSidebar();
     await exploreState.loadRoots();
-    await exploreState.navigateToAssetPath(dirPath);
+    await exploreState.navigateToAssetPath(asset.path);
+    const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
+    if (asset.zip_entry) {
+      assetsState.setFolderFilter(asset.path + ZIP_SEP, assetType);
+    } else {
+      assetsState.setFolderFilter(asset.path, assetType);
+    }
   }
 
   async function openDirectory(asset: Asset) {
@@ -231,8 +238,8 @@
         </div>
         <button
           class="w-8 h-8 flex items-center justify-center text-secondary hover:text-accent border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
-          onclick={() => showInExplore(selectedAsset!)}
-          title="Show in Explore view"
+          onclick={() => showInFolder(selectedAsset!)}
+          title="Show in folder"
         >
           <FolderIcon size="sm" />
         </button>

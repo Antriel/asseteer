@@ -24,6 +24,8 @@ class AssetsState {
   totalMatchingCount = $state(0);
   // Duration filter for audio assets
   durationFilter = $state<DurationFilter>({ minMs: null, maxMs: null });
+  // Folder path filter (null = all folders)
+  folderPath = $state<string | null>(null);
 
   // Search cancellation tracking
   private searchVersion = 0;
@@ -45,9 +47,9 @@ class AssetsState {
     try {
       const db = await getDatabase();
 
-      // If no search text, show empty state instead of loading all assets
+      // If no search text AND no folder filter, show empty state instead of loading all assets
       // This prevents loading 1M+ items which causes performance issues
-      if (!this.searchText?.trim()) {
+      if (!this.searchText?.trim() && !this.folderPath) {
         if (currentVersion !== this.searchVersion) return;
 
         this.assets = [];
@@ -69,7 +71,8 @@ class AssetsState {
         assetType,
         MAX_DISPLAY_LIMIT + 1,
         0,
-        durationFilter
+        durationFilter,
+        this.folderPath
       );
 
       // Only update if this search is still current
@@ -80,7 +83,7 @@ class AssetsState {
 
       if (this.hasMoreResults) {
         // Results were truncated - run a COUNT query to get the true total
-        this.totalMatchingCount = await countSearchResults(db, this.searchText, assetType, durationFilter);
+        this.totalMatchingCount = await countSearchResults(db, this.searchText, assetType, durationFilter, this.folderPath);
         // Re-check cancellation after the count query
         if (currentVersion !== this.searchVersion) return;
       } else {
@@ -123,6 +126,14 @@ class AssetsState {
    */
   setDurationFilter(minMs: number | null, maxMs: number | null) {
     this.durationFilter = { minMs, maxMs };
+  }
+
+  /**
+   * Set folder path filter and reload assets
+   */
+  setFolderFilter(path: string | null, assetType?: "image" | "audio") {
+    this.folderPath = path;
+    this.loadAssets(assetType);
   }
 
   /**

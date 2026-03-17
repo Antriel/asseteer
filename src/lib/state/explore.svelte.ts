@@ -1,27 +1,18 @@
 import { SvelteMap } from 'svelte/reactivity';
-import type { Asset } from '$lib/types';
 import { getDatabase } from '$lib/database/connection';
-import { getDirectoryChildren, getAssetsInDirectory } from '$lib/database/queries';
+import { getDirectoryChildren, getZipDirectoryChildren, ZIP_SEP } from '$lib/database/queries';
 
-export interface DirectoryNode {
-  path: string;
-  name: string;
-  childCount: number;
-  assetCount: number;
-}
+export type { DirectoryNode } from '$lib/database/queries';
 
 class ExploreState {
   // Currently selected directory path
   selectedPath = $state<string | null>(null);
-  // Assets in the selected directory
-  assets = $state<Asset[]>([]);
-  isLoading = $state(false);
   // Expanded directory paths
   expandedPaths = $state(new SvelteMap<string, boolean>());
   // Cached children per directory path (null key = root level)
-  childrenCache = $state(new SvelteMap<string, DirectoryNode[]>());
+  childrenCache = $state(new SvelteMap<string, import('$lib/database/queries').DirectoryNode[]>());
   // Root directories (top-level scan roots)
-  roots = $state<DirectoryNode[]>([]);
+  roots = $state<import('$lib/database/queries').DirectoryNode[]>([]);
   isLoadingRoots = $state(false);
 
   async loadRoots() {
@@ -37,14 +28,27 @@ class ExploreState {
     }
   }
 
-  async loadChildren(parentPath: string) {
-    if (this.childrenCache.has(parentPath)) return;
+  async loadChildren(path: string) {
+    if (this.childrenCache.has(path)) return;
     try {
       const db = await getDatabase();
-      const children = await getDirectoryChildren(db, parentPath);
-      this.childrenCache.set(parentPath, children);
+      const sepIdx = path.indexOf(ZIP_SEP);
+      let children: import('$lib/database/queries').DirectoryNode[];
+      if (sepIdx !== -1) {
+        // ZIP-internal path: browse inside the zip
+        const zipPath = path.substring(0, sepIdx);
+        const prefix = path.substring(sepIdx + ZIP_SEP.length);
+        children = await getZipDirectoryChildren(db, zipPath, prefix);
+      } else if (path.toLowerCase().endsWith('.zip')) {
+        // ZIP file node: browse its root
+        children = await getZipDirectoryChildren(db, path, '');
+      } else {
+        // Regular filesystem directory
+        children = await getDirectoryChildren(db, path);
+      }
+      this.childrenCache.set(path, children);
     } catch (error) {
-      console.error('[Explore] Failed to load children for', parentPath, error);
+      console.error('[Explore] Failed to load children for', path, error);
     }
   }
 
@@ -58,22 +62,8 @@ class ExploreState {
     }
   }
 
-  async selectDirectory(path: string) {
-    this.selectedPath = path;
-    this.isLoading = true;
-    try {
-      const db = await getDatabase();
-      this.assets = await getAssetsInDirectory(db, path);
-    } catch (error) {
-      console.error('[Explore] Failed to load assets for', path, error);
-    } finally {
-      this.isLoading = false;
-    }
-  }
-
   async navigateToAssetPath(assetPath: string) {
     // Expand all ancestor directories and select the directory containing this asset
-    // assetPath is the directory path (assets.path column) with native separators
     const sep = assetPath.includes('\\') ? '\\' : '/';
     const parts = assetPath.split(sep);
 
@@ -81,9 +71,8 @@ class ExploreState {
     let current = '';
     for (let i = 0; i < parts.length; i++) {
       current = i === 0 ? parts[i] : current + sep + parts[i];
-      // On Windows, first part might be like "C:" - need to handle drive letters
       if (i === 0 && current.endsWith(':')) {
-        continue; // Skip bare drive letter, wait for next part
+        continue;
       }
       if (!this.expandedPaths.get(current)) {
         this.expandedPaths.set(current, true);
@@ -92,10 +81,10 @@ class ExploreState {
     }
 
     // Select the full path
-    await this.selectDirectory(assetPath);
+    this.selectedPath = assetPath;
   }
 
-  getChildren(path: string): DirectoryNode[] {
+  getChildren(path: string): import('$lib/database/queries').DirectoryNode[] {
     return this.childrenCache.get(path) ?? [];
   }
 

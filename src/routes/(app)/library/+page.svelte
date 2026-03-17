@@ -11,10 +11,10 @@
 
   import TabBar from '$lib/components/shared/TabBar.svelte';
   import Toolbar from '$lib/components/shared/Toolbar.svelte';
+  import FolderSidebar from '$lib/components/FolderSidebar.svelte';
   import ImageGrid from '$lib/components/ImageGrid.svelte';
   import AudioList from '$lib/components/AudioList.svelte';
   import AssetList from '$lib/components/AssetList.svelte';
-  import ExploreView from '$lib/components/ExploreView.svelte';
   import ImageLightbox from '$lib/components/modals/ImageLightbox.svelte';
   import Spinner from '$lib/components/shared/Spinner.svelte';
 
@@ -32,16 +32,17 @@
     await refreshAssetCounts();
     console.timeEnd('[Library] refreshAssetCounts');
 
-    // Load initial assets (images by default)
+    // Load assets for the current tab (persists across navigation)
+    const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
     console.time('[Library] loadAssets');
-    assetsState.loadAssets('image').then(() => console.timeEnd('[Library] loadAssets'));
+    assetsState.loadAssets(currentType).then(() => console.timeEnd('[Library] loadAssets'));
 
     // Listen for scan completion to refresh counts
     const unlistenScan = await listen('scan-complete', async () => {
       console.log('[Library] Scan complete, refreshing asset counts');
       await refreshAssetCounts();
-      // Also refresh explore view if active
-      if (viewState.libraryView === 'explore') {
+      // Refresh folder tree if sidebar is open
+      if (viewState.folderSidebarOpen) {
         exploreState.clearCache();
         exploreState.loadRoots();
       }
@@ -93,6 +94,9 @@
       : !!assetsState.searchText?.trim()
   );
 
+  // Whether any filter is active (search or folder)
+  let hasAnyFilter = $derived(hasActiveSearch || !!assetsState.folderPath);
+
   // Unified "is loading" - whether a search is in progress
   let isLoading = $derived(
     isSemanticModeEnabled ? clapState.isSearching : assetsState.isLoading
@@ -102,29 +106,31 @@
   let hasMoreResults = $derived(
     isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults
   );
-
-  let isSearchView = $derived(viewState.libraryView === 'search');
 </script>
 
 <div class="flex flex-col h-full overflow-hidden">
-  <!-- Tab Navigation (asset type + view mode) -->
+  <!-- Tab Navigation (asset type + folder toggle) -->
   <TabBar imageCount={assetCounts.images} audioCount={assetCounts.audio} />
 
-  <!-- Toolbar (search, filters, view controls) - only in search view -->
-  {#if isSearchView}
-    <Toolbar />
-  {/if}
+  <!-- Toolbar (search, filters, view controls) -->
+  <Toolbar />
 
   <!-- Main Content Area -->
-  <main class="flex-1 overflow-hidden relative">
-    {#if isSearchView}
+  <main class="flex-1 overflow-hidden relative flex">
+    <!-- Folder Sidebar (collapsible) -->
+    {#if viewState.folderSidebarOpen}
+      <FolderSidebar />
+    {/if}
+
+    <!-- Content Panel -->
+    <div class="flex-1 overflow-hidden">
       {#if isLoading}
         <div class="flex flex-col items-center justify-center h-full gap-4">
           <Spinner size="lg" />
           <p class="text-secondary">{isSemanticModeEnabled ? 'Searching...' : 'Loading assets...'}</p>
         </div>
-      {:else if !hasActiveSearch && activeAssets.length === 0}
-        <!-- Empty state: No search query - prompt user to search -->
+      {:else if !hasAnyFilter && activeAssets.length === 0}
+        <!-- Empty state: No search query and no folder selected -->
         <div class="flex flex-col items-center justify-center h-full gap-4">
           <svg class="w-16 h-16 text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -132,20 +138,28 @@
           <p class="text-primary font-medium">Search your {viewState.activeTab}</p>
           <p class="text-sm text-secondary">
             {#if assetsState.totalMatchingCount > 0}
-              You have {assetsState.totalMatchingCount.toLocaleString()} {viewState.activeTab} - type to search
+              You have {assetsState.totalMatchingCount.toLocaleString()} {viewState.activeTab} - type to search or open the folder panel
             {:else}
               No {viewState.activeTab} found - try scanning for assets first
             {/if}
           </p>
         </div>
       {:else if activeAssets.length === 0}
-        <!-- Empty state: Search returned no results -->
+        <!-- Empty state: Filter active but no results -->
         <div class="flex flex-col items-center justify-center h-full gap-4">
           <svg class="w-16 h-16 text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
           </svg>
           <p class="text-primary font-medium">No matching {viewState.activeTab}</p>
-          <p class="text-sm text-secondary">Try adjusting your search query</p>
+          <p class="text-sm text-secondary">
+            {#if assetsState.folderPath && hasActiveSearch}
+              Try adjusting your search or selecting a different folder
+            {:else if assetsState.folderPath}
+              No {viewState.activeTab} in this folder
+            {:else}
+              Try adjusting your search query
+            {/if}
+          </p>
         </div>
       {:else}
         {#if viewState.activeTab === 'images'}
@@ -159,9 +173,7 @@
           <AudioList assets={activeAssets} showSimilarity={isSemanticModeEnabled} />
         {/if}
       {/if}
-    {:else}
-      <ExploreView />
-    {/if}
+    </div>
   </main>
 
   <!-- Lightbox Modal -->

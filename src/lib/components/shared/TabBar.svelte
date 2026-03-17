@@ -1,7 +1,7 @@
 <script lang="ts">
   import { viewState } from '$lib/state/view.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
-  import { SearchIcon, FolderIcon } from '$lib/components/icons';
+  import { FolderIcon } from '$lib/components/icons';
   import Badge from './Badge.svelte';
 
   interface Props {
@@ -16,7 +16,8 @@
     if (tab === 'images') {
       assetsState.setDurationFilter(null, null);
     }
-    assetsState.loadAssets(tab === 'images' ? 'image' : 'audio');
+    const assetType = tab === 'images' ? 'image' : 'audio';
+    assetsState.loadAssets(assetType);
   }
 </script>
 
@@ -38,23 +39,15 @@
     <Badge variant="count">{audioCount}</Badge>
   </button>
 
-  <!-- View mode switcher (Search / Explore) -->
-  <div class="ml-auto flex items-center gap-1 bg-tertiary rounded-md p-0.5">
+  <!-- Folder sidebar toggle -->
+  <div class="ml-auto">
     <button
-      class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors {viewState.libraryView === 'search' ? 'bg-primary text-primary shadow-sm' : 'text-secondary hover:text-primary'}"
-      onclick={() => viewState.setLibraryView('search')}
-      title="Search view"
-    >
-      <SearchIcon size="sm" />
-      <span>Search</span>
-    </button>
-    <button
-      class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors {viewState.libraryView === 'explore' ? 'bg-primary text-primary shadow-sm' : 'text-secondary hover:text-primary'}"
-      onclick={() => viewState.setLibraryView('explore')}
-      title="Explore folders"
+      class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors {viewState.folderSidebarOpen ? 'bg-accent-muted text-accent' : 'text-secondary hover:text-primary hover:bg-tertiary'}"
+      onclick={() => viewState.toggleFolderSidebar()}
+      title={viewState.folderSidebarOpen ? 'Hide folder panel' : 'Show folder panel'}
     >
       <FolderIcon size="sm" />
-      <span>Explore</span>
+      <span>Folders</span>
     </button>
   </div>
 </div>
