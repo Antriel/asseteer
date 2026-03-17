@@ -33,13 +33,15 @@ pub async fn ensure_thumbnails(
         return Ok(vec![]);
     }
 
-    // Find which assets are missing thumbnails
+    // Find which assets are missing thumbnails.
+    // Skip small images (both dimensions <= 128px) — the frontend shows originals directly.
     let placeholders: Vec<String> = asset_ids.iter().map(|_| "?".to_string()).collect();
     let query = format!(
         "SELECT a.id, a.file_size FROM assets a
          LEFT JOIN image_metadata im ON a.id = im.asset_id
          WHERE a.id IN ({}) AND a.asset_type = 'image'
-         AND (im.asset_id IS NULL OR im.thumbnail_data IS NULL)",
+         AND (im.asset_id IS NULL OR im.thumbnail_data IS NULL)
+         AND NOT (im.width IS NOT NULL AND im.width <= 128 AND im.height IS NOT NULL AND im.height <= 128)",
         placeholders.join(",")
     );
 
@@ -75,25 +77,20 @@ pub async fn ensure_thumbnails(
         .await
         .map_err(|e| format!("Failed to load assets: {}", e))?;
 
-    // Generate thumbnails in parallel using a JoinSet
-    // Limit concurrency to avoid spawning too many blocking tasks at once
-    let max_concurrent = num_cpus::get().max(2);
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
-    let mut join_set = tokio::task::JoinSet::new();
+    // Generate thumbnails sequentially to limit memory usage.
+    // Each image decode can use ~150MB (decoded RGBA + resize buffers),
+    // so parallel decoding quickly exhausts memory on large images.
+    let mut results: Vec<(i64, i32, i32, Vec<u8>)> = Vec::new();
 
     for asset in assets {
-        let sem = semaphore.clone();
-        join_set.spawn(async move {
-            let _permit = sem.acquire().await.map_err(|e| e.to_string())?;
-            let id = asset.id;
-            match generate_thumbnail_for_asset(&asset).await {
-                Ok((width, height, data)) => Ok((id, width, height, data)),
-                Err(e) => Err(format!("Asset {}: {}", id, e)),
-            }
-        });
+        let id = asset.id;
+        match generate_thumbnail_for_asset(&asset).await {
+            Ok((width, height, data)) => results.push((id, width, height, data)),
+            Err(e) => eprintln!("Failed to generate thumbnail: Asset {}: {}", id, e),
+        }
     }
 
-    // Collect results and write to DB sequentially
+    // Write results to DB
     let pool = state.pool.clone();
     let mut generated = Vec::new();
     let now = std::time::SystemTime::now()
@@ -101,14 +98,7 @@ pub async fn ensure_thumbnails(
         .unwrap_or_default()
         .as_secs() as i64;
 
-    while let Some(result) = join_set.join_next().await {
-        let Ok(Ok((asset_id, width, height, thumbnail_data))) = result else {
-            if let Ok(Err(e)) = result {
-                eprintln!("Failed to generate thumbnail: {}", e);
-            }
-            continue;
-        };
-
+    for (asset_id, width, height, thumbnail_data) in results {
         let db_result = sqlx::query(
             "INSERT INTO image_metadata (asset_id, width, height, thumbnail_data, processed_at)
              VALUES (?, ?, ?, ?, ?)

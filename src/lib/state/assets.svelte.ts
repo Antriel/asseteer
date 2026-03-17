@@ -73,9 +73,7 @@ class AssetsState {
       );
 
       // Only update if this search is still current
-      if (currentVersion !== this.searchVersion) {
-        return;
-      }
+      if (currentVersion !== this.searchVersion) return;
 
       // Check if there are more results than we're displaying
       this.hasMoreResults = result.length > MAX_DISPLAY_LIMIT;
@@ -96,9 +94,7 @@ class AssetsState {
       const count = await getAssetCount(db);
 
       // Check again after count query
-      if (currentVersion !== this.searchVersion) {
-        return;
-      }
+      if (currentVersion !== this.searchVersion) return;
 
       this.totalCount = count;
     } catch (error) {

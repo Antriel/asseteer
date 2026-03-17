@@ -32,8 +32,10 @@ export async function searchAssets(
 	const conditions: string[] = [];
 	const params: unknown[] = [];
 
+	// Use a subquery for FTS matching to force SQLite's query planner to
+	// evaluate the FTS index first (see countSearchResults for details).
 	if (ftsQuery) {
-		conditions.push('assets_fts MATCH ?');
+		conditions.push('assets.id IN (SELECT rowid FROM assets_fts WHERE assets_fts MATCH ?)');
 		params.push(ftsQuery);
 	}
 
@@ -54,12 +56,10 @@ export async function searchAssets(
 		}
 	}
 
-	const ftsJoin = ftsQuery ? 'INNER JOIN assets_fts ON assets.id = assets_fts.rowid' : '';
 	const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
 	const query = `
 		${baseSelect}
-		${ftsJoin}
 		${joins}
 		${whereClause}
 		ORDER BY assets.filename COLLATE NOCASE ASC
@@ -83,8 +83,12 @@ export async function countSearchResults(
 	const conditions: string[] = [];
 	const params: unknown[] = [];
 
+	// Use a subquery for FTS matching to force SQLite's query planner to
+	// evaluate the FTS index first. A direct JOIN with additional WHERE
+	// conditions (e.g. asset_type) can cause the planner to scan the assets
+	// table first and probe FTS per-row, which effectively hangs on large datasets.
 	if (ftsQuery) {
-		conditions.push('assets_fts MATCH ?');
+		conditions.push('assets.id IN (SELECT rowid FROM assets_fts WHERE assets_fts MATCH ?)');
 		params.push(ftsQuery);
 	}
 
@@ -92,6 +96,8 @@ export async function countSearchResults(
 		conditions.push('assets.asset_type = ?');
 		params.push(assetType);
 	}
+
+	const audioJoin = durationFilter ? 'LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id' : '';
 
 	if (durationFilter) {
 		if (durationFilter.minMs !== null) {
@@ -104,11 +110,9 @@ export async function countSearchResults(
 		}
 	}
 
-	const ftsJoin = ftsQuery ? 'INNER JOIN assets_fts ON assets.id = assets_fts.rowid' : '';
-	const audioJoin = durationFilter ? 'LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id' : '';
 	const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
-	const query = `SELECT COUNT(*) FROM assets ${ftsJoin} ${audioJoin} ${whereClause}`;
+	const query = `SELECT COUNT(*) FROM assets ${audioJoin} ${whereClause}`;
 	const result = await db.select<Array<{ 'COUNT(*)': number }>>(query, params);
 	return result[0]['COUNT(*)'];
 }

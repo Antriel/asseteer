@@ -1,17 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getThumbnailUrl, hasThumbnailFailed, requestThumbnail } from '$lib/state/thumbnails.svelte';
+  import { convertFileSrc } from '@tauri-apps/api/core';
+  import { invoke } from '@tauri-apps/api/core';
+  import type { Asset } from '$lib/types';
+  import { getThumbnailUrl, hasThumbnailFailed, requestThumbnail, cancelThumbnail } from '$lib/state/thumbnails.svelte';
   import Spinner from '$lib/components/shared/Spinner.svelte';
 
   interface Props {
-    assetId: number;
+    asset: Asset;
     size?: 'small' | 'medium' | 'large';
   }
 
-  let { assetId, size = 'medium' }: Props = $props();
+  let { asset, size = 'medium' }: Props = $props();
 
-  let containerElement: HTMLDivElement;
-  let isVisible = $state(false);
+  const THUMBNAIL_MAX = 128;
 
   const sizeClasses = $derived.by(() => {
     switch (size) {
@@ -21,57 +23,71 @@
     }
   });
 
-  // Request thumbnail when visible
-  $effect(() => {
-    if (isVisible) {
-      requestThumbnail(assetId);
-    }
-  });
+  // Small images don't need thumbnails — show original directly
+  let isSmallImage = $derived(
+    asset.width != null && asset.height != null &&
+    asset.width <= THUMBNAIL_MAX && asset.height <= THUMBNAIL_MAX
+  );
 
-  let thumbnailUrl = $derived(getThumbnailUrl(assetId));
-  let thumbnailFailed = $derived(hasThumbnailFailed(assetId));
-  let isLoading = $derived(isVisible && !thumbnailUrl && !thumbnailFailed);
+  let thumbnailUrl = $derived(getThumbnailUrl(asset.id));
+  let thumbnailFailed = $derived(hasThumbnailFailed(asset.id));
+
+  // For small images: direct URL (regular file) or loaded blob URL (zip entry)
+  let smallImageUrl = $state<string | null>(null);
+  let smallImageFailed = $state(false);
+
+  let isLoading = $derived(
+    isSmallImage
+      ? !smallImageUrl && !smallImageFailed
+      : !thumbnailUrl && !thumbnailFailed
+  );
+
+  let displayUrl = $derived(isSmallImage ? smallImageUrl : thumbnailUrl);
 
   onMount(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            isVisible = true;
-            observer.unobserve(entry.target);
-          }
-        });
-      },
-      {
-        rootMargin: '200px',
-        threshold: 0.01
+    if (isSmallImage) {
+      if (!asset.zip_entry) {
+        // Regular file — use convertFileSrc for zero-IPC direct access
+        smallImageUrl = convertFileSrc(asset.path);
+      } else {
+        // Zip entry — need IPC to extract bytes
+        invoke<number[]>('get_asset_bytes', { assetId: asset.id })
+          .then((bytes) => {
+            const arr = new Uint8Array(bytes);
+            const blob = new Blob([arr], { type: `image/${asset.format}` });
+            smallImageUrl = URL.createObjectURL(blob);
+          })
+          .catch(() => {
+            smallImageFailed = true;
+          });
       }
-    );
-
-    if (containerElement) {
-      observer.observe(containerElement);
+      return () => {
+        // Revoke blob URL for zip entries
+        if (smallImageUrl && asset.zip_entry) {
+          URL.revokeObjectURL(smallImageUrl);
+        }
+      };
+    } else {
+      requestThumbnail(asset.id);
+      return () => cancelThumbnail(asset.id);
     }
-
-    return () => {
-      observer.disconnect();
-    };
   });
 </script>
 
-<div bind:this={containerElement} class="w-full flex items-center justify-center bg-tertiary overflow-hidden {sizeClasses}">
+<div class="w-full flex items-center justify-center bg-tertiary overflow-hidden {sizeClasses}">
   {#if isLoading}
     <div class="flex items-center justify-center w-full h-full">
       <Spinner size="md" />
     </div>
-  {:else if thumbnailFailed || !thumbnailUrl}
-    <div class="flex items-center justify-center w-full h-full">
-      <span class="text-xs text-secondary">No preview</span>
-    </div>
-  {:else}
+  {:else if displayUrl}
     <img
-      src={thumbnailUrl}
+      src={displayUrl}
       alt="Thumbnail"
       class="w-full h-full object-cover"
     />
+  {:else}
+    <div class="flex items-center justify-center w-full h-full">
+      <span class="text-xs text-secondary">No preview</span>
+    </div>
   {/if}
 </div>

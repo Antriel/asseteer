@@ -349,8 +349,8 @@ fn generate_thumbnail(img: &DynamicImage, max_size: u32) -> Result<Vec<u8>, Stri
 
     // Calculate new dimensions maintaining aspect ratio
     let scale = (max_size as f32 / width.max(height) as f32).min(1.0);
-    let new_width = (width as f32 * scale) as u32;
-    let new_height = (height as f32 * scale) as u32;
+    let new_width = ((width as f32 * scale) as u32).max(1);
+    let new_height = ((height as f32 * scale) as u32).max(1);
 
     // Skip resize if image is already small enough
     if scale >= 1.0 {
@@ -386,6 +386,15 @@ fn encode_webp(img: &DynamicImage, width: u32, height: u32) -> Result<Vec<u8>, S
 /// Encode RGBA buffer as lossy WebP with quality 85
 fn encode_webp_from_rgba(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     use webp::{Encoder, WebPMemory};
+
+    // WebP encoder panics on invalid dimensions (VP8_ENC_ERROR_BAD_DIMENSION)
+    if width == 0 || height == 0 {
+        return Err(format!("Invalid dimensions for WebP encoding: {}x{}", width, height));
+    }
+    // libwebp max dimension is 16383
+    if width > 16383 || height > 16383 {
+        return Err(format!("Dimensions too large for WebP encoding: {}x{} (max 16383)", width, height));
+    }
 
     // Create encoder from RGBA pixels
     let encoder: Encoder = Encoder::from_rgba(rgba, width, height);

@@ -17,6 +17,51 @@ let batchTimer: ReturnType<typeof setTimeout> | null = null;
 /** Batch debounce delay in ms */
 const BATCH_DELAY = 50;
 
+/** Observable thumbnail loading metrics */
+class ThumbnailMetrics {
+	/** Number of thumbnails waiting to be processed */
+	queued = $state(0);
+	/** Number currently being generated/loaded in a batch */
+	inflight = $state(0);
+	/** Total loaded since last cache clear */
+	loaded = $state(0);
+	/** Total failed since last cache clear */
+	failedCount = $state(0);
+	/** Thumbnails loaded per second (rolling average) */
+	rate = $state(0);
+
+	private recentTimestamps: number[] = [];
+
+	recordLoaded(count: number) {
+		this.loaded += count;
+		const now = Date.now();
+		for (let i = 0; i < count; i++) this.recentTimestamps.push(now);
+		this.updateRate(now);
+	}
+
+	recordFailed(count: number) {
+		this.failedCount += count;
+	}
+
+	private updateRate(now: number) {
+		// Keep last 5 seconds of timestamps
+		const cutoff = now - 5000;
+		this.recentTimestamps = this.recentTimestamps.filter(t => t > cutoff);
+		this.rate = Math.round(this.recentTimestamps.length / 5);
+	}
+
+	reset() {
+		this.queued = 0;
+		this.inflight = 0;
+		this.loaded = 0;
+		this.failedCount = 0;
+		this.rate = 0;
+		this.recentTimestamps = [];
+	}
+}
+
+export const thumbnailMetrics = new ThumbnailMetrics();
+
 /**
  * Get the cached thumbnail URL for an asset, or null if not yet available.
  * Pure read from cache — use requestThumbnail() to trigger loading.
@@ -40,8 +85,24 @@ export function hasThumbnailFailed(assetId: number): boolean {
 export function requestThumbnail(assetId: number): void {
 	if (cache.has(assetId) || pending.has(assetId) || failed.has(assetId)) return;
 	pending.add(assetId);
+	thumbnailMetrics.queued = pending.size;
 	scheduleBatch();
 }
+
+/**
+ * Cancel a pending thumbnail request. Call when a component unmounts
+ * (e.g., virtual scroll removes an item that scrolled out of view).
+ * If the item scrolls back into view and remounts, it will re-request.
+ */
+export function cancelThumbnail(assetId: number): void {
+	pending.delete(assetId);
+	thumbnailMetrics.queued = pending.size;
+}
+
+/** Max IDs to send per IPC call — keeps memory bounded on the backend */
+const MAX_BATCH_SIZE = 10;
+
+let processing = false;
 
 function scheduleBatch() {
 	if (batchTimer !== null) return;
@@ -50,33 +111,54 @@ function scheduleBatch() {
 
 async function processBatch() {
 	batchTimer = null;
-	const ids = [...pending];
-	pending.clear();
-	if (ids.length === 0) return;
+	if (processing) return; // prevent overlapping batches
+	processing = true;
 
 	try {
-		// Ask backend to generate any missing thumbnails
-		await invoke('ensure_thumbnails', { assetIds: ids });
+		while (pending.size > 0) {
+			// Take a small batch from pending (most recently added = currently visible)
+			const allPending = [...pending];
+			const batch = allPending.slice(-MAX_BATCH_SIZE);
+			for (const id of batch) pending.delete(id);
+			thumbnailMetrics.queued = pending.size;
+			thumbnailMetrics.inflight = batch.length;
 
-		// Read thumbnails from DB
-		const db = await getDatabase();
-		for (const id of ids) {
-			const data = await getThumbnail(db, id);
-			if (data) {
-				const blob = new Blob([data], { type: 'image/webp' });
-				cache.set(id, URL.createObjectURL(blob));
-			} else {
-				failed.add(id);
+			try {
+				// Ask backend to generate any missing thumbnails
+				await invoke('ensure_thumbnails', { assetIds: batch });
+
+				// Read thumbnails from DB
+				const db = await getDatabase();
+				let batchLoaded = 0;
+				let batchFailed = 0;
+				for (const id of batch) {
+					const data = await getThumbnail(db, id);
+					if (data) {
+						const blob = new Blob([data], { type: 'image/webp' });
+						cache.set(id, URL.createObjectURL(blob));
+						batchLoaded++;
+					} else {
+						failed.add(id);
+						batchFailed++;
+					}
+				}
+				thumbnailMetrics.recordLoaded(batchLoaded);
+				thumbnailMetrics.recordFailed(batchFailed);
+			} catch (e) {
+				console.error('Failed to load thumbnails:', e);
+				for (const id of batch) {
+					if (!cache.has(id)) {
+						failed.add(id);
+					}
+				}
 			}
+
+			thumbnailMetrics.inflight = 0;
 		}
-	} catch (e) {
-		console.error('Failed to load thumbnails:', e);
-		// Mark all as failed so we don't retry endlessly
-		for (const id of ids) {
-			if (!cache.has(id)) {
-				failed.add(id);
-			}
-		}
+	} finally {
+		processing = false;
+		thumbnailMetrics.queued = 0;
+		thumbnailMetrics.inflight = 0;
 	}
 }
 
@@ -95,4 +177,5 @@ export function clearThumbnailCache(): void {
 		clearTimeout(batchTimer);
 		batchTimer = null;
 	}
+	thumbnailMetrics.reset();
 }

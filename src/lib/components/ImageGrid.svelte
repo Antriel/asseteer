@@ -141,7 +141,7 @@
           class="relative bg-secondary border border-default rounded-lg overflow-hidden transition-all cursor-pointer hover:border-accent hover:shadow-md hover:-translate-y-0.5"
           onclick={() => handleImageClick(asset)}
         >
-          <ImageThumbnail assetId={asset.id} size={viewState.thumbnailSize} />
+          <ImageThumbnail {asset} size={viewState.thumbnailSize} />
           {#if asset.format === 'gif'}
             <span class="absolute top-1.5 left-1.5 text-[0.625rem] font-bold leading-none px-1 py-0.5 rounded bg-black/60 text-white tracking-wide">GIF</span>
           {/if}
