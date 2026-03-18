@@ -97,6 +97,37 @@ pub async fn ensure_server_running() -> Result<(), String> {
     Ok(())
 }
 
+/// Detect GPU compute capability via nvidia-smi and return the appropriate
+/// PyTorch CUDA index URL. Returns None for CPU-only (no GPU or detection fails).
+fn detect_pytorch_index() -> Option<String> {
+    let output = Command::new("nvidia-smi")
+        .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        println!("[CLAP] nvidia-smi failed, using CPU-only PyTorch");
+        return None;
+    }
+
+    let cap_str = String::from_utf8_lossy(&output.stdout);
+    // Parse first GPU's compute capability (e.g. "6.1" or "8.9")
+    let major: u32 = cap_str.trim().split('.').next()?.parse().ok()?;
+
+    let index = if major < 7 {
+        // Pascal (sm_61) and older: cu126 is the last version with support
+        "https://download.pytorch.org/whl/cu126"
+    } else {
+        // Volta (sm_70) and newer: use latest CUDA
+        "https://download.pytorch.org/whl/cu128"
+    };
+
+    println!("[CLAP] GPU detected (compute capability {}), using {}", cap_str.trim(), index);
+    Some(index.to_string())
+}
+
 /// Locate the clap-server directory relative to cwd.
 fn find_clap_server_dir() -> Result<std::path::PathBuf, String> {
     let cwd =
@@ -137,13 +168,18 @@ async fn start_server_process(clap_dir: &std::path::Path) -> Result<Child, Strin
         Ok(uv_path) => {
             println!("[CLAP] Starting server via uv: {:?}", uv_path);
             emit_startup_progress("starting-process", Some("Starting Python server"));
+
+            let gpu_index = detect_pytorch_index();
+            let mut args = vec!["run", "--python", "3.13"];
+            // Leak the string so we get a &str with the right lifetime for the args vec
+            let index_str: Option<&str> = gpu_index.as_ref().map(|s| &**s);
+            if let Some(index) = index_str {
+                args.extend(["--index", index]);
+            }
+            args.push("clap_server.py");
+
             let child = Command::new(&uv_path)
-                .args([
-                    "run",
-                    "--python",
-                    "3.13",
-                    "clap_server.py",
-                ])
+                .args(&args)
                 .current_dir(clap_dir)
                 .env("UV_CACHE_DIR", uv::uv_cache_dir())
                 .stdout(stdout)
