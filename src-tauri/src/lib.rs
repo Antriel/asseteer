@@ -94,6 +94,7 @@ pub fn run() {
             commands::search::clear_clap_cache,
             commands::search::get_clap_log_dir,
             commands::search::check_clap_setup_state,
+            commands::search::invalidate_embedding_cache,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

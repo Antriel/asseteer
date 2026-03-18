@@ -362,6 +362,11 @@ impl WorkQueue {
                         category_str, completed, total
                     );
 
+                    // Invalidate embedding cache when CLAP processing finishes
+                    if category == ProcessingCategory::Clap {
+                        crate::clap::cache::invalidate();
+                    }
+
                     // Mark as not running
                     state.is_running.store(false, Ordering::SeqCst);
 
@@ -406,6 +411,11 @@ impl WorkQueue {
             state.stop_signal.store(true, Ordering::SeqCst);
             state.pause_signal.store(false, Ordering::SeqCst); // Clear pause state when stopping
             state.is_running.store(false, Ordering::SeqCst);
+
+            // Invalidate embedding cache when CLAP processing is stopped
+            if category == ProcessingCategory::Clap {
+                crate::clap::cache::invalidate();
+            }
         }
 
         // Check if all categories are stopped

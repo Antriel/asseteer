@@ -1,8 +1,10 @@
 //! CLAP-based semantic search commands
 
-use crate::clap::{blob_to_embedding, cosine_similarity, ensure_server_running, get_clap_client, HealthInfo};
+use crate::clap::{cache as embedding_cache, ensure_server_running, get_clap_client, HealthInfo};
+use crate::clap::blob_to_embedding;
 use crate::AppState;
 use serde::Serialize;
+use std::collections::HashMap;
 use tauri::State;
 
 /// Result of a semantic search query - includes full asset data for direct use
@@ -26,9 +28,9 @@ pub struct SemanticSearchResult {
     pub similarity: f32,
 }
 
-/// Row returned from semantic search query
+/// Row for fetching asset metadata (no embedding).
 #[derive(sqlx::FromRow)]
-struct SemanticSearchRow {
+struct AssetMetadataRow {
     id: i64,
     filename: String,
     path: String,
@@ -41,7 +43,46 @@ struct SemanticSearchRow {
     duration_ms: Option<i64>,
     sample_rate: Option<i32>,
     channels: Option<i32>,
-    embedding: Vec<u8>,
+}
+
+/// Fetch full asset metadata for a set of asset IDs.
+/// Returns a map from asset_id to row data.
+async fn fetch_asset_metadata(
+    ids: &[i64],
+    pool: &sqlx::SqlitePool,
+) -> Result<HashMap<i64, AssetMetadataRow>, String> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    // SQLite has a variable limit, batch in chunks of 999
+    let mut map = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(999) {
+        let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            r#"
+            SELECT a.id, a.filename, a.path, a.zip_entry, a.asset_type, a.format,
+                   a.file_size, a.created_at, a.modified_at,
+                   am.duration_ms, am.sample_rate, am.channels
+            FROM assets a
+            LEFT JOIN audio_metadata am ON a.id = am.asset_id
+            WHERE a.id IN ({})
+            "#,
+            placeholders
+        );
+        let mut query = sqlx::query_as::<_, AssetMetadataRow>(&sql);
+        for &id in chunk {
+            query = query.bind(id);
+        }
+        let rows: Vec<AssetMetadataRow> = query
+            .fetch_all(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            map.insert(row.id, row);
+        }
+    }
+    Ok(map)
 }
 
 /// Semantic search for audio assets using CLAP embeddings
@@ -56,80 +97,45 @@ pub async fn search_audio_semantic(
     // Ensure server is running
     ensure_server_running().await?;
 
-    // Get query embedding
+    // Get query embedding from CLAP server
     let query_embedding = get_clap_client().await.embed_text(&query).await?;
 
-    // Build WHERE clause for duration filtering
-    let mut where_clauses: Vec<String> = vec![];
-    if min_duration_ms.is_some() {
-        where_clauses.push("am.duration_ms >= ?".to_string());
-    }
-    if max_duration_ms.is_some() {
-        where_clauses.push("am.duration_ms <= ?".to_string());
-    }
+    // Use cached embeddings for similarity search
+    let ranked = embedding_cache::search(
+        &query_embedding,
+        limit,
+        None,
+        min_duration_ms,
+        max_duration_ms,
+        &state.pool,
+    )
+    .await?;
 
-    let where_clause = if where_clauses.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", where_clauses.join(" AND "))
-    };
+    // Fetch full metadata only for top results
+    let ids: Vec<i64> = ranked.iter().map(|r| r.asset_id).collect();
+    let metadata = fetch_asset_metadata(&ids, &state.pool).await?;
 
-    let sql = format!(
-        r#"
-        SELECT
-            a.id, a.filename, a.path, a.zip_entry, a.asset_type, a.format,
-            a.file_size, a.created_at, a.modified_at,
-            am.duration_ms, am.sample_rate, am.channels,
-            ae.embedding
-        FROM assets a
-        JOIN audio_embeddings ae ON a.id = ae.asset_id
-        LEFT JOIN audio_metadata am ON a.id = am.asset_id
-        {}
-        "#,
-        where_clause
-    );
-
-    // Build query with optional bindings
-    let mut query = sqlx::query_as::<_, SemanticSearchRow>(&sql);
-    if let Some(min) = min_duration_ms {
-        query = query.bind(min);
-    }
-    if let Some(max) = max_duration_ms {
-        query = query.bind(max);
-    }
-
-    let rows: Vec<SemanticSearchRow> = query
-        .fetch_all(&state.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Compute similarities
-    let mut results: Vec<SemanticSearchResult> = rows
+    // Build results preserving similarity order, skipping any deleted assets
+    let results = ranked
         .into_iter()
-        .map(|row| {
-            let embedding = blob_to_embedding(&row.embedding);
-            let similarity = cosine_similarity(&query_embedding, &embedding);
-            SemanticSearchResult {
-                id: row.id,
-                filename: row.filename,
-                path: row.path,
-                zip_entry: row.zip_entry,
-                asset_type: row.asset_type,
-                format: row.format,
-                file_size: row.file_size,
-                created_at: row.created_at,
-                modified_at: row.modified_at,
-                duration_ms: row.duration_ms,
-                sample_rate: row.sample_rate,
-                channels: row.channels,
-                similarity,
-            }
+        .filter_map(|r| {
+            metadata.get(&r.asset_id).map(|m| SemanticSearchResult {
+                id: m.id,
+                filename: m.filename.clone(),
+                path: m.path.clone(),
+                zip_entry: m.zip_entry.clone(),
+                asset_type: m.asset_type.clone(),
+                format: m.format.clone(),
+                file_size: m.file_size,
+                created_at: m.created_at,
+                modified_at: m.modified_at,
+                duration_ms: m.duration_ms,
+                sample_rate: m.sample_rate,
+                channels: m.channels,
+                similarity: r.similarity,
+            })
         })
         .collect();
-
-    // Sort by similarity descending
-    results.sort_by(|a, b| b.similarity.total_cmp(&a.similarity));
-    results.truncate(limit);
 
     Ok(results)
 }
@@ -157,74 +163,42 @@ pub async fn search_audio_by_similarity(
         None => return Err("This asset hasn't been processed yet".to_string()),
     };
 
-    // Build WHERE clause: exclude source asset + optional duration filtering
-    let mut where_clauses: Vec<String> = vec!["a.id != ?".to_string()];
-    if min_duration_ms.is_some() {
-        where_clauses.push("am.duration_ms >= ?".to_string());
-    }
-    if max_duration_ms.is_some() {
-        where_clauses.push("am.duration_ms <= ?".to_string());
-    }
+    // Use cached embeddings for similarity search
+    let ranked = embedding_cache::search(
+        &source_embedding,
+        limit,
+        Some(asset_id),
+        min_duration_ms,
+        max_duration_ms,
+        &state.pool,
+    )
+    .await?;
 
-    let where_clause = format!("WHERE {}", where_clauses.join(" AND "));
+    // Fetch full metadata only for top results
+    let ids: Vec<i64> = ranked.iter().map(|r| r.asset_id).collect();
+    let metadata = fetch_asset_metadata(&ids, &state.pool).await?;
 
-    let sql = format!(
-        r#"
-        SELECT
-            a.id, a.filename, a.path, a.zip_entry, a.asset_type, a.format,
-            a.file_size, a.created_at, a.modified_at,
-            am.duration_ms, am.sample_rate, am.channels,
-            ae.embedding
-        FROM assets a
-        JOIN audio_embeddings ae ON a.id = ae.asset_id
-        LEFT JOIN audio_metadata am ON a.id = am.asset_id
-        {}
-        "#,
-        where_clause
-    );
-
-    // Build query with bindings
-    let mut query = sqlx::query_as::<_, SemanticSearchRow>(&sql);
-    query = query.bind(asset_id);
-    if let Some(min) = min_duration_ms {
-        query = query.bind(min);
-    }
-    if let Some(max) = max_duration_ms {
-        query = query.bind(max);
-    }
-
-    let rows: Vec<SemanticSearchRow> = query
-        .fetch_all(&state.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // Compute similarities
-    let mut results: Vec<SemanticSearchResult> = rows
+    // Build results preserving similarity order, skipping any deleted assets
+    let results = ranked
         .into_iter()
-        .map(|row| {
-            let embedding = blob_to_embedding(&row.embedding);
-            let similarity = cosine_similarity(&source_embedding, &embedding);
-            SemanticSearchResult {
-                id: row.id,
-                filename: row.filename,
-                path: row.path,
-                zip_entry: row.zip_entry,
-                asset_type: row.asset_type,
-                format: row.format,
-                file_size: row.file_size,
-                created_at: row.created_at,
-                modified_at: row.modified_at,
-                duration_ms: row.duration_ms,
-                sample_rate: row.sample_rate,
-                channels: row.channels,
-                similarity,
-            }
+        .filter_map(|r| {
+            metadata.get(&r.asset_id).map(|m| SemanticSearchResult {
+                id: m.id,
+                filename: m.filename.clone(),
+                path: m.path.clone(),
+                zip_entry: m.zip_entry.clone(),
+                asset_type: m.asset_type.clone(),
+                format: m.format.clone(),
+                file_size: m.file_size,
+                created_at: m.created_at,
+                modified_at: m.modified_at,
+                duration_ms: m.duration_ms,
+                sample_rate: m.sample_rate,
+                channels: m.channels,
+                similarity: r.similarity,
+            })
         })
         .collect();
-
-    // Sort by similarity descending
-    results.sort_by(|a, b| b.similarity.total_cmp(&a.similarity));
-    results.truncate(limit);
 
     Ok(results)
 }
@@ -322,6 +296,12 @@ pub fn check_clap_setup_state() -> ClapSetupState {
         uv_installed,
         cache_exists,
     }
+}
+
+/// Invalidate the in-memory embedding cache, forcing a reload on next search.
+#[tauri::command]
+pub fn invalidate_embedding_cache() {
+    embedding_cache::invalidate();
 }
 
 fn dir_size(path: &std::path::Path) -> std::io::Result<u64> {
