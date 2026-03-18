@@ -167,7 +167,7 @@ pub async fn search_audio_by_similarity(
     let ranked = embedding_cache::search(
         &source_embedding,
         limit,
-        Some(asset_id),
+        None,
         min_duration_ms,
         max_duration_ms,
         &state.pool,
