@@ -65,7 +65,7 @@
 
     <!-- Folder Panel (between sidebar and content, only on library page) -->
     {#if showFolderPanel}
-      <div class="relative flex-shrink-0 flex" style="width: {viewState.folderPanelWidth}px">
+      <div class="relative flex-shrink-0 flex h-full" style="width: {viewState.folderPanelWidth}px">
         <FolderSidebar />
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <!-- Resize handle -->

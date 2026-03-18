@@ -190,3 +190,7 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-tertiary);
 }
+
+::-webkit-scrollbar-corner {
+  background: var(--color-bg-secondary);
+}

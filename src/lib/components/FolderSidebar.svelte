@@ -41,8 +41,8 @@
   }
 </script>
 
-<div class="w-full h-full border-r border-default overflow-y-auto bg-secondary">
-  <div class="flex items-center justify-between px-3 py-2 border-b border-default">
+<div class="w-full h-full border-r border-default bg-secondary flex flex-col">
+  <div class="flex items-center justify-between px-3 py-2 border-b border-default flex-shrink-0">
     <div class="flex items-center gap-2">
       <span class="text-xs font-semibold text-tertiary uppercase tracking-wider">Folders</span>
       {#if exploreState.isNavigating}
@@ -70,7 +70,7 @@
       <p class="text-xs text-tertiary mt-1">Scan folders to see them here</p>
     </div>
   {:else}
-    <div class="py-1 overflow-x-auto">
+    <div class="flex-1 overflow-auto py-1">
       <div class="min-w-fit">
         <DirectoryTree nodes={exploreState.roots} onSelect={selectFolder} />
       </div>
