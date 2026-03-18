@@ -1,10 +1,12 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { processingState, isAnyRunning } from '$lib/state/tasks.svelte';
+  import { viewState } from '$lib/state/view.svelte';
 
   // Get pending count for badge
   const pendingTotal = $derived(processingState.pendingCount.total);
   const isProcessing = $derived(isAnyRunning(processingState));
+  const collapsed = $derived(viewState.sidebarCollapsed);
 
   interface NavItem {
     href: string;
@@ -25,26 +27,38 @@
   }
 </script>
 
-<aside class="w-56 h-full flex flex-col sidebar-gradient border-r border-default">
+<aside
+  class="h-full flex flex-col sidebar-gradient border-r border-default transition-all duration-200 {collapsed
+    ? 'w-14'
+    : 'w-56'}"
+>
   <!-- Logo/Title -->
-  <div class="p-4 border-b border-default">
-    <h1 class="text-lg font-semibold text-primary tracking-tight">Asseteer</h1>
-    <p class="text-xs text-tertiary mt-0.5">Asset Manager</p>
+  <div class="border-b border-default {collapsed ? 'p-2' : 'p-4'}">
+    {#if collapsed}
+      <div class="flex items-center justify-center">
+        <span class="text-lg font-bold text-primary">A</span>
+      </div>
+    {:else}
+      <h1 class="text-lg font-semibold text-primary tracking-tight">Asseteer</h1>
+      <p class="text-xs text-tertiary mt-0.5">Asset Manager</p>
+    {/if}
   </div>
 
   <!-- Navigation -->
-  <nav class="flex-1 p-3 space-y-1">
+  <nav class="flex-1 p-2 space-y-1">
     {#each navItems as item}
       {@const active = isActive(item.href)}
       <a
         href={item.href}
-        class="flex items-center gap-3 px-3 py-2.5 rounded-lg transition-default
+        class="flex items-center rounded-lg transition-default
+               {collapsed ? 'justify-center p-2.5' : 'gap-3 px-3 py-2.5'}
                {active
           ? 'bg-accent-muted border-l-2 border-accent text-primary'
           : 'text-secondary hover:bg-tertiary hover:text-primary'}"
+        title={collapsed ? item.label : undefined}
       >
         <!-- Icon -->
-        <div class="w-5 h-5 flex items-center justify-center">
+        <div class="w-5 h-5 flex items-center justify-center flex-shrink-0">
           {#if item.icon === 'library'}
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -95,34 +109,45 @@
           {/if}
         </div>
 
-        <!-- Label -->
-        <span class="font-medium text-sm">{item.label}</span>
+        <!-- Label (hidden when collapsed) -->
+        {#if !collapsed}
+          <span class="font-medium text-sm">{item.label}</span>
 
-        <!-- Badge for processing -->
-        {#if item.icon === 'processing' && (pendingTotal > 0 || isProcessing)}
+          <!-- Badge for processing -->
+          {#if item.icon === 'processing' && (pendingTotal > 0 || isProcessing)}
+            <span
+              class="ml-auto px-1.5 py-0.5 text-xs font-medium rounded-full
+                         {isProcessing ? 'bg-accent text-white' : 'bg-tertiary text-secondary'}"
+            >
+              {isProcessing ? 'Active' : pendingTotal}
+            </span>
+          {/if}
+        {:else if item.icon === 'processing' && (pendingTotal > 0 || isProcessing)}
+          <!-- Small dot indicator when collapsed -->
           <span
-            class="ml-auto px-1.5 py-0.5 text-xs font-medium rounded-full
-                       {isProcessing ? 'bg-accent text-white' : 'bg-tertiary text-secondary'}"
-          >
-            {isProcessing ? 'Active' : pendingTotal}
-          </span>
+            class="absolute top-1 right-1 w-2 h-2 rounded-full {isProcessing
+              ? 'bg-accent'
+              : 'bg-tertiary'}"
+          ></span>
         {/if}
       </a>
     {/each}
   </nav>
 
   <!-- Bottom nav -->
-  <div class="p-3 border-t border-default space-y-1">
+  <div class="p-2 border-t border-default space-y-1">
     {#each bottomNavItems as item}
       {@const active = isActive(item.href)}
       <a
         href={item.href}
-        class="flex items-center gap-3 px-3 py-2 rounded-lg transition-default
+        class="flex items-center rounded-lg transition-default
+               {collapsed ? 'justify-center p-2' : 'gap-3 px-3 py-2'}
                {active
           ? 'bg-accent-muted border-l-2 border-accent text-primary'
           : 'text-tertiary hover:bg-tertiary hover:text-primary'}"
+        title={collapsed ? item.label : undefined}
       >
-        <div class="w-5 h-5 flex items-center justify-center">
+        <div class="w-5 h-5 flex items-center justify-center flex-shrink-0">
           {#if item.icon === 'settings'}
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -140,8 +165,38 @@
             </svg>
           {/if}
         </div>
-        <span class="text-sm">{item.label}</span>
+        {#if !collapsed}
+          <span class="text-sm">{item.label}</span>
+        {/if}
       </a>
     {/each}
+
+    <!-- Collapse/Expand toggle -->
+    <button
+      onclick={() => viewState.toggleSidebarCollapsed()}
+      class="flex items-center w-full rounded-lg transition-default text-tertiary hover:bg-tertiary hover:text-primary {collapsed
+        ? 'justify-center p-2'
+        : 'gap-3 px-3 py-2'}"
+      title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+    >
+      <div class="w-5 h-5 flex items-center justify-center flex-shrink-0">
+        <svg
+          class="w-4 h-4 transition-transform duration-200 {collapsed ? 'rotate-180' : ''}"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.5"
+            d="M11 19l-7-7 7-7m8 14l-7-7 7-7"
+          />
+        </svg>
+      </div>
+      {#if !collapsed}
+        <span class="text-sm">Collapse</span>
+      {/if}
+    </button>
   </div>
 </aside>

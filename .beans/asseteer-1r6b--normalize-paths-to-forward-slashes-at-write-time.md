@@ -5,8 +5,10 @@ status: todo
 type: task
 priority: low
 created_at: 2026-03-17T08:44:22Z
-updated_at: 2026-03-17T08:44:22Z
+updated_at: 2026-03-18T10:01:20Z
 parent: asseteer-i459
+blocked_by:
+    - asseteer-zmc8
 ---
 
 Currently paths are stored with native OS separators (backslashes on Windows). Frontend queries must use `REPLACE(path, '\', '/')` to normalize, which **defeats index usage** and causes full table scans.
@@ -30,3 +32,8 @@ If switching to relative paths (folder_id + rel_path), the same principle applie
 ## Impact
 - **Performance:** Eliminates all REPLACE()-based full table scans
 - **DX:** Simplifies query code on both frontend and backend
+
+
+## Note: also needed for folder tree
+
+The folder tree code currently uses `pathSep()` and `splitPath()` to handle both `/` and `\` separators. Normalizing to forward slashes at write time would simplify all tree-building logic significantly, since `splitPath` wouldn't need to detect the separator style.

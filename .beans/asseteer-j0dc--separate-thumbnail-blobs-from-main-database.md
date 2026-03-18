@@ -1,11 +1,11 @@
 ---
 # asseteer-j0dc
 title: Separate thumbnail BLOBs from main database
-status: todo
+status: scrapped
 type: task
 priority: high
 created_at: 2026-03-17T08:44:21Z
-updated_at: 2026-03-17T08:44:21Z
+updated_at: 2026-03-18T09:56:12Z
 parent: asseteer-i459
 ---
 
@@ -44,3 +44,8 @@ Option A — keeps atomic reads via SQL, allows the main DB to stay small. Thumb
 ## Impact
 - **Filesize:** Main DB shrinks dramatically (removes the largest data by far)
 - **Performance:** Metadata queries no longer compete with BLOBs for page cache
+
+
+## Reasons for Scrapping
+
+SQLite handles BLOBs well — they're stored in overflow pages only loaded when the BLOB column is explicitly selected. Metadata queries that don't SELECT thumbnail data won't touch those pages. The "page cache pollution" argument is theoretical until the DB is genuinely huge. A separate DB adds complexity (two connections, no FK enforcement, ATTACH overhead) for marginal benefit. Revisit only if DB file size causes real problems (e.g., Dropbox sync).

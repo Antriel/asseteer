@@ -15,8 +15,8 @@
 
   // Color classes
   const colorClasses = {
-    default: 'border-default border-t-accent',
-    blue: 'border-blue-500 border-t-transparent',
+    default: 'border-transparent border-t-[var(--color-accent)]',
+    blue: 'border-transparent border-t-blue-500',
   };
 
   const classes = $derived(`${sizeClasses[size]} ${colorClasses[color]}`);

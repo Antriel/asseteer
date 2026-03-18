@@ -20,12 +20,13 @@
   async function showInFolder() {
     viewState.openFolderSidebar();
     await exploreState.loadRoots();
-    // Navigate filesystem tree to the asset's directory (or the directory containing the ZIP)
-    await exploreState.navigateToAssetPath(asset.path);
+    await exploreState.navigateToAssetPath(asset.path, asset.zip_entry ?? undefined);
     const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
     if (asset.zip_entry) {
-      // ZIP entry: filter to the ZIP file
-      assetsState.setFolderFilter(asset.path + ZIP_SEP, assetType);
+      const zipParts = asset.zip_entry.split('/').filter(Boolean);
+      const zipDirParts = zipParts.slice(0, -1);
+      const zipPrefix = zipDirParts.length > 0 ? zipDirParts.join('/') + '/' : '';
+      assetsState.setFolderFilter(asset.path + ZIP_SEP + zipPrefix, assetType);
     } else {
       assetsState.setFolderFilter(asset.path, assetType);
     }

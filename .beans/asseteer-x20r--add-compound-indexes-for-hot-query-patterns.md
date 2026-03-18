@@ -1,11 +1,11 @@
 ---
 # asseteer-x20r
 title: Add compound indexes for hot query patterns
-status: todo
+status: draft
 type: task
 priority: normal
 created_at: 2026-03-17T08:44:22Z
-updated_at: 2026-03-17T08:55:55Z
+updated_at: 2026-03-18T09:56:14Z
 parent: asseteer-i459
 ---
 
@@ -45,3 +45,8 @@ CREATE INDEX idx_assets_folder_id ON assets(folder_id, id);
 ```
 
 This replaces the simpler `idx_assets_folder ON assets(folder_id)` proposed above.
+
+
+## Note: Benchmark first
+
+Do not add indexes speculatively. Benchmark current query performance first and only add indexes where there is measured evidence of a problem. This bean should not be worked on until profiling shows specific queries are too slow.

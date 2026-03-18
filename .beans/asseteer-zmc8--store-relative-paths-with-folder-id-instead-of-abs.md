@@ -5,7 +5,7 @@ status: todo
 type: task
 priority: normal
 created_at: 2026-03-17T08:44:22Z
-updated_at: 2026-03-17T08:55:58Z
+updated_at: 2026-03-18T10:01:14Z
 parent: asseteer-i459
 blocked_by:
     - asseteer-wxak
@@ -50,3 +50,10 @@ The `folder_id` + `rel_path` design naturally supports directory-scoped search:
 - **Combined with FTS**: `WHERE folder_id = ? AND id IN (SELECT rowid FROM assets_fts WHERE ...)`
 
 The FTS trigger should index only the directory components of `rel_path` (strip the filename) into a `dir_segments` column, since the filename is already indexed separately.
+
+
+## Note: folder tree browsing is blocked on this
+
+The current folder tree implementation (`buildChildNodes`, `getZipDirectoryChildren`) has persistent bugs because `assets.path` stores the full file path including filename. The tree code must distinguish files from directories by path depth heuristics, which breaks with ZIP files (they sit at the same depth as regular files but are browsable). Multiple fix attempts have been fragile.
+
+With `folder_id + rel_path` (where `rel_path` is the directory path without filename), tree queries would naturally `GROUP BY rel_path` and only produce directory nodes. ZIP files would need their own handling via `zip_entry`, but the filesystem tree would be correct by construction. This schema change would eliminate an entire class of tree-browsing bugs.

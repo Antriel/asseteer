@@ -41,9 +41,14 @@
   }
 </script>
 
-<div class="w-64 flex-shrink-0 border-r border-default overflow-y-auto bg-secondary">
+<div class="w-full h-full border-r border-default overflow-y-auto bg-secondary">
   <div class="flex items-center justify-between px-3 py-2 border-b border-default">
-    <span class="text-xs font-semibold text-tertiary uppercase tracking-wider">Folders</span>
+    <div class="flex items-center gap-2">
+      <span class="text-xs font-semibold text-tertiary uppercase tracking-wider">Folders</span>
+      {#if exploreState.isNavigating}
+        <Spinner size="sm" />
+      {/if}
+    </div>
     {#if assetsState.folderPath}
       <button
         class="text-xs text-secondary hover:text-primary transition-colors"
@@ -65,8 +70,10 @@
       <p class="text-xs text-tertiary mt-1">Scan folders to see them here</p>
     </div>
   {:else}
-    <div class="py-1">
-      <DirectoryTree nodes={exploreState.roots} onSelect={selectFolder} />
+    <div class="py-1 overflow-x-auto">
+      <div class="min-w-fit">
+        <DirectoryTree nodes={exploreState.roots} onSelect={selectFolder} />
+      </div>
     </div>
   {/if}
 </div>

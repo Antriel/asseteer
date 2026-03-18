@@ -9,6 +9,8 @@ class ViewState {
   layoutMode = $state<LayoutMode>('grid');
   thumbnailSize = $state<ThumbnailSize>('medium');
   folderSidebarOpen = $state(false);
+  sidebarCollapsed = $state(false);
+  folderPanelWidth = $state(280);
 
   // Lightbox state
   lightboxAsset = $state<Asset | null>(null);
@@ -19,6 +21,10 @@ class ViewState {
 
   openFolderSidebar() {
     this.folderSidebarOpen = true;
+  }
+
+  toggleSidebarCollapsed() {
+    this.sidebarCollapsed = !this.sidebarCollapsed;
   }
 
   setActiveTab(tab: AssetViewMode) {

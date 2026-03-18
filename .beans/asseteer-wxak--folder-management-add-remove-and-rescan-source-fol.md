@@ -5,9 +5,7 @@ status: draft
 type: feature
 priority: normal
 created_at: 2026-03-16T11:00:19Z
-updated_at: 2026-03-16T11:02:13Z
-blocked_by:
-    - asseteer-n0v9
+updated_at: 2026-03-18T09:59:45Z
 ---
 
 Complete folder management system so users can view their scanned folders, rescan them to pick up new/deleted files, and remove folders (with their assets) from the library.

@@ -11,7 +11,7 @@
 
   import TabBar from '$lib/components/shared/TabBar.svelte';
   import Toolbar from '$lib/components/shared/Toolbar.svelte';
-  import FolderSidebar from '$lib/components/FolderSidebar.svelte';
+  // FolderSidebar is now rendered in the root layout
   import ImageGrid from '$lib/components/ImageGrid.svelte';
   import AudioList from '$lib/components/AudioList.svelte';
   import AssetList from '$lib/components/AssetList.svelte';
@@ -116,14 +116,18 @@
 
   <!-- Main Content Area -->
   <main class="flex-1 overflow-hidden relative flex">
-    <!-- Folder Sidebar (collapsible) -->
-    {#if viewState.folderSidebarOpen}
-      <FolderSidebar />
-    {/if}
-
     <!-- Content Panel -->
-    <div class="flex-1 overflow-hidden">
-      {#if isLoading}
+    <div class="flex-1 overflow-hidden relative">
+      {#if isLoading && activeAssets.length > 0}
+        <!-- Loading overlay when we have previous results to keep visible -->
+        <div
+          class="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-3 py-1.5 bg-elevated rounded-full shadow-md border border-default"
+        >
+          <Spinner size="sm" />
+          <span class="text-xs text-secondary">Loading...</span>
+        </div>
+      {/if}
+      {#if isLoading && activeAssets.length === 0}
         <div class="flex flex-col items-center justify-center h-full gap-4">
           <Spinner size="lg" />
           <p class="text-secondary">
@@ -172,16 +176,45 @@
               d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
             />
           </svg>
-          <p class="text-primary font-medium">No matching {viewState.activeTab}</p>
-          <p class="text-sm text-secondary">
-            {#if assetsState.folderPath && hasActiveSearch}
-              Try adjusting your search or selecting a different folder
-            {:else if assetsState.folderPath}
-              No {viewState.activeTab} in this folder
-            {:else}
-              Try adjusting your search query
-            {/if}
-          </p>
+          {#if assetsState.folderPath && hasActiveSearch}
+            <p class="text-primary font-medium">No results found</p>
+            <p class="text-sm text-secondary text-center">
+              No {viewState.activeTab} matching your search in this folder
+            </p>
+            <div class="flex gap-2">
+              <button
+                class="px-3 py-1.5 text-sm rounded-md bg-tertiary text-primary hover:bg-elevated transition-colors"
+                onclick={() => {
+                  assetsState.searchAssets(
+                    '',
+                    viewState.activeTab === 'images' ? 'image' : 'audio',
+                  );
+                }}
+              >
+                Clear search
+              </button>
+              <button
+                class="px-3 py-1.5 text-sm rounded-md bg-tertiary text-primary hover:bg-elevated transition-colors"
+                onclick={() => {
+                  exploreState.selectedPath = null;
+                  assetsState.setFolderFilter(
+                    null,
+                    viewState.activeTab === 'images' ? 'image' : 'audio',
+                  );
+                }}
+              >
+                Clear folder
+              </button>
+            </div>
+          {:else if assetsState.folderPath}
+            <p class="text-primary font-medium">No {viewState.activeTab} in this folder</p>
+            <p class="text-sm text-secondary">
+              This folder doesn't contain any {viewState.activeTab}
+            </p>
+          {:else}
+            <p class="text-primary font-medium">No matching {viewState.activeTab}</p>
+            <p class="text-sm text-secondary">Try adjusting your search query</p>
+          {/if}
         </div>
       {:else if viewState.activeTab === 'images'}
         {#if viewState.layoutMode === 'grid'}

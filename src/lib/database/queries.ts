@@ -295,42 +295,63 @@ function addFolderFilterConditions(folderPath: string, conditions: string[], par
  * Paths are stored in the DB with native OS separators and queried directly
  * against idx_assets_path for fast index lookups.
  */
+/**
+ * Get root directories quickly (without asset counts).
+ * Returns roots with assetCount=0 and childCount=1 (assumed expandable).
+ */
+export async function getDirectoryRoots(db: Database): Promise<DirectoryNode[]> {
+  const roots = await db.select<Array<{ root_path: string }>>(
+    `SELECT DISTINCT root_path FROM scan_sessions ORDER BY root_path COLLATE NOCASE`,
+  );
+  return roots.map(({ root_path }) => {
+    const segments = splitPath(root_path);
+    return {
+      path: root_path,
+      name: segments[segments.length - 1] || root_path,
+      childCount: 1, // assume expandable until counts loaded
+      assetCount: 0,
+    };
+  });
+}
+
+/**
+ * Load asset counts and child counts for root directories.
+ * Filters out roots with no assets.
+ */
+export async function getDirectoryRootCounts(
+  db: Database,
+  roots: DirectoryNode[],
+): Promise<DirectoryNode[]> {
+  const results: DirectoryNode[] = [];
+  for (const root of roots) {
+    const sep = pathSep(root.path);
+    const countResult = await db.select<Array<{ asset_count: number }>>(
+      `SELECT COUNT(*) as asset_count
+      FROM assets
+      WHERE path LIKE ?`,
+      [root.path + sep + '%'],
+    );
+
+    if (countResult[0].asset_count > 0) {
+      results.push({
+        ...root,
+        childCount: 1, // roots are always expandable if they have assets
+        assetCount: countResult[0].asset_count,
+      });
+    }
+  }
+  return results;
+}
+
 export async function getDirectoryChildren(
   db: Database,
   parentPath: string | null,
 ): Promise<DirectoryNode[]> {
   if (parentPath === null) {
-    // Get scan roots from scan_sessions (fast: very few rows)
-    const roots = await db.select<Array<{ root_path: string }>>(
-      `SELECT DISTINCT root_path FROM scan_sessions ORDER BY root_path COLLATE NOCASE`,
-    );
-
-    const results: DirectoryNode[] = [];
-    for (const { root_path } of roots) {
-      const sep = pathSep(root_path);
-      // Count assets and distinct subdirectories under this root
-      // Uses idx_assets_path for both conditions
-      const countResult = await db.select<Array<{ asset_count: number; dir_count: number }>>(
-        `SELECT
-					COUNT(*) as asset_count,
-					COUNT(DISTINCT path) as dir_count
-				FROM assets
-				WHERE path = ? OR path LIKE ?`,
-        [root_path, root_path + sep + '%'],
-      );
-
-      if (countResult[0].asset_count > 0) {
-        const segments = splitPath(root_path);
-        results.push({
-          path: root_path,
-          name: segments[segments.length - 1] || root_path,
-          // dir_count includes the root itself if it has direct assets
-          childCount: Math.max(0, countResult[0].dir_count - 1),
-          assetCount: countResult[0].asset_count,
-        });
-      }
-    }
-    return results;
+    // Use the combined root loading functions
+    const db2 = db;
+    const roots = await getDirectoryRoots(db2);
+    return getDirectoryRootCounts(db2, roots);
   }
 
   // Get child directories of parentPath
@@ -365,22 +386,41 @@ function buildChildNodes(
 ): DirectoryNode[] {
   const parentDepth = splitPath(parentPath).length;
   const sep = pathSep(parentPath);
-  const childMap = new Map<string, { assetCount: number; childPaths: number; isZip: boolean }>();
+  const childMap = new Map<
+    string,
+    { assetCount: number; subDirs: Set<string>; isZip: boolean }
+  >();
 
   for (const row of rows) {
     const segments = splitPath(row.dir_path);
     if (segments.length <= parentDepth) continue;
 
-    // Reconstruct the immediate child path using the original separator
+    // path column stores full file paths (including filename).
+    // Entries at exactly parentDepth+1 are individual files in the parent — skip them,
+    // UNLESS they are ZIP files (which are browsable and should appear as tree nodes).
+    if (segments.length === parentDepth + 1) {
+      if (!zipPaths?.has(row.dir_path)) continue;
+      // ZIP file: create a node for it (will be marked as zip below)
+      const childPath = row.dir_path;
+      if (!childMap.has(childPath)) {
+        childMap.set(childPath, { assetCount: 0, subDirs: new Set(), isZip: false });
+      }
+      childMap.get(childPath)!.assetCount += row.asset_count;
+      continue;
+    }
+
+    // Reconstruct the immediate child directory path
     const childPath = segments.slice(0, parentDepth + 1).join(sep);
 
     if (!childMap.has(childPath)) {
-      childMap.set(childPath, { assetCount: 0, childPaths: 0, isZip: false });
+      childMap.set(childPath, { assetCount: 0, subDirs: new Set(), isZip: false });
     }
     const entry = childMap.get(childPath)!;
     entry.assetCount += row.asset_count;
-    if (segments.length > parentDepth + 1) {
-      entry.childPaths++;
+
+    // Track actual subdirectories (entries with more than just a filename below the child)
+    if (segments.length > parentDepth + 2) {
+      entry.subDirs.add(segments[parentDepth + 1]);
     }
   }
 
@@ -402,7 +442,7 @@ function buildChildNodes(
     return {
       path,
       name: segments[segments.length - 1],
-      childCount: data.isZip ? Math.max(1, data.childPaths) : data.childPaths,
+      childCount: data.isZip ? Math.max(1, data.subDirs.size) : data.subDirs.size,
       assetCount: data.assetCount,
       zipPrefix: data.isZip ? '' : undefined,
     };
@@ -432,7 +472,7 @@ export async function getZipDirectoryChildren(
   const prefixDepth = prefix === '' ? 0 : prefix.split('/').filter(Boolean).length;
   const childMap = new Map<
     string,
-    { assetCount: number; childPaths: Set<string>; isNestedZip: boolean }
+    { assetCount: number; subDirs: Set<string>; hasDirectFiles: boolean; isNestedZip: boolean }
   >();
 
   for (const row of rows) {
@@ -442,35 +482,56 @@ export async function getZipDirectoryChildren(
 
     // The immediate child segment
     const childName = segments[prefixDepth];
-    const childPrefix = segments.slice(0, prefixDepth + 1).join('/') + '/';
-
-    if (!childMap.has(childName)) {
-      childMap.set(childName, { assetCount: 0, childPaths: new Set(), isNestedZip: false });
-    }
-    const entry = childMap.get(childName)!;
 
     if (segments.length === prefixDepth + 1) {
-      // This is a direct file in this directory — count it as an asset
-      entry.assetCount++;
-      // Check if this is a nested ZIP file (a .zip file that has entries under it)
+      // This is a direct file at the current prefix level — not a directory node
+      // (e.g., a file sitting directly in the browsed directory)
+      // Check if it's a nested ZIP file
       if (childName.toLowerCase().endsWith('.zip')) {
-        entry.isNestedZip = true;
+        if (!childMap.has(childName)) {
+          childMap.set(childName, {
+            assetCount: 0,
+            subDirs: new Set(),
+            hasDirectFiles: false,
+            isNestedZip: true,
+          });
+        }
+        childMap.get(childName)!.isNestedZip = true;
+        childMap.get(childName)!.assetCount++;
       }
+      // Regular files at this level are not shown as tree nodes
+      continue;
+    }
+
+    // This entry is inside a child directory
+    if (!childMap.has(childName)) {
+      childMap.set(childName, {
+        assetCount: 0,
+        subDirs: new Set(),
+        hasDirectFiles: false,
+        isNestedZip: false,
+      });
+    }
+    const entry = childMap.get(childName)!;
+    entry.assetCount++;
+
+    if (segments.length === prefixDepth + 2) {
+      // Direct file in the child directory (e.g., "childDir/file.wav")
+      entry.hasDirectFiles = true;
     } else {
-      // This is a file in a subdirectory — count it as an asset AND track the subpath
-      entry.assetCount++;
-      entry.childPaths.add(segments[prefixDepth + 1]);
+      // File in a subdirectory of the child (e.g., "childDir/subDir/file.wav")
+      entry.subDirs.add(segments[prefixDepth + 1]);
     }
   }
 
   return [...childMap.entries()]
-    .filter(([_, data]) => data.childPaths.size > 0 || data.isNestedZip)
+    .filter(([_, data]) => data.subDirs.size > 0 || data.hasDirectFiles || data.isNestedZip)
     .map(([name, data]) => {
       const nodePrefix = prefix + name + '/';
       return {
         path: zipPath + ZIP_SEP + nodePrefix,
         name,
-        childCount: data.childPaths.size,
+        childCount: data.subDirs.size,
         assetCount: data.assetCount,
         zipPrefix: nodePrefix,
       };

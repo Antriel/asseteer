@@ -143,10 +143,27 @@
         placeholder={placeholderText}
         value={searchInput}
         oninput={handleSearch}
-        class="w-full py-2 px-2 pl-8 border border-default rounded-md bg-primary text-primary placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
+        class="w-full py-2 px-2 pl-8 {searchInput ? 'pr-8' : 'pr-2'} border border-default rounded-md bg-primary text-primary placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
         class:!border-purple-500={isSemanticModeEnabled}
         class:!ring-purple-500={isSemanticModeEnabled}
       />
+      {#if searchInput}
+        <button
+          class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-tertiary transition-colors"
+          onclick={() => {
+            searchInput = '';
+            if (clapState.semanticSearchEnabled && isAudioTab) {
+              clapState.clearSearch();
+              assetsState.searchAssets('', 'audio');
+            } else {
+              assetsState.searchAssets('', viewState.activeTab === 'images' ? 'image' : 'audio');
+            }
+          }}
+          title="Clear search"
+        >
+          <CloseIcon size="sm" class="text-secondary hover:text-primary" />
+        </button>
+      {/if}
     </div>
 
     <!-- Audio-specific filters (semantic search + duration filter) -->

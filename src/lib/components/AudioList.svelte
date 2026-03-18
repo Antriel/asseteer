@@ -90,10 +90,14 @@
   async function showInFolder(asset: Asset) {
     viewState.openFolderSidebar();
     await exploreState.loadRoots();
-    await exploreState.navigateToAssetPath(asset.path);
+    await exploreState.navigateToAssetPath(asset.path, asset.zip_entry ?? undefined);
     const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
     if (asset.zip_entry) {
-      assetsState.setFolderFilter(asset.path + ZIP_SEP, assetType);
+      // Build the correct ZIP folder filter including the internal directory
+      const zipParts = asset.zip_entry.split('/').filter(Boolean);
+      const zipDirParts = zipParts.slice(0, -1);
+      const zipPrefix = zipDirParts.length > 0 ? zipDirParts.join('/') + '/' : '';
+      assetsState.setFolderFilter(asset.path + ZIP_SEP + zipPrefix, assetType);
     } else {
       assetsState.setFolderFilter(asset.path, assetType);
     }

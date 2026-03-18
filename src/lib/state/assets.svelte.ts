@@ -43,11 +43,9 @@ class AssetsState {
     // Increment version to cancel any in-progress search
     const currentVersion = ++this.searchVersion;
 
-    // Clear previous results and show loading state immediately
-    this.assets = [];
+    // Show loading state but keep previous results visible
     this.isLoading = true;
     this.hasMoreResults = false;
-    clearThumbnailCache();
 
     try {
       const db = await getDatabase();
@@ -57,6 +55,7 @@ class AssetsState {
       if (!this.searchText?.trim() && !this.folderPath) {
         if (currentVersion !== this.searchVersion) return;
 
+        clearThumbnailCache();
         this.assets = [];
         this.hasMoreResults = false;
 
@@ -102,6 +101,7 @@ class AssetsState {
       }
 
       // Only keep up to MAX_DISPLAY_LIMIT
+      clearThumbnailCache();
       this.assets = result.slice(0, MAX_DISPLAY_LIMIT);
 
       // Load total count
