@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "requests>=2.28.0",
+# ]
+# ///
 """
 CLAP Processing Benchmark
 
 Measures where time is spent during CLAP embedding generation:
-- Pure inference time (file path → embedding via /embed/audio)
+- Pure inference time (file path -> embedding via /embed/audio)
 - ZIP extraction + upload time (extract in Python, send bytes via /embed/audio/upload)
 - librosa loading overhead (measured server-side, visible in logs)
 
@@ -95,7 +101,7 @@ def benchmark_filesystem(files: list[Path]) -> dict:
         if (i + 1) % 10 == 0 or i == 0:
             print(f"  [{i+1}/{len(files)}] {elapsed:.3f}s - {f.name}")
 
-    return {"times": times, "errors": errors, "label": "Filesystem → /embed/audio"}
+    return {"times": times, "errors": errors, "label": "Filesystem -> /embed/audio"}
 
 
 def benchmark_zip_upload(zip_path: Path, entries: list[str]) -> dict:
@@ -846,7 +852,3 @@ if __name__ == "__main__":
         main_multiworker()
     else:
         main()
-
-
-if __name__ == "__main__":
-    main()

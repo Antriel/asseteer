@@ -21,13 +21,32 @@ struct TextRequest {
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 struct AudioPathRequest {
     audio_path: String,
+}
+
+#[derive(Serialize)]
+struct BatchAudioPathRequest {
+    audio_paths: Vec<String>,
 }
 
 #[derive(Deserialize)]
 struct EmbeddingResponse {
     embedding: Vec<f32>,
+}
+
+#[derive(Deserialize)]
+struct BatchEmbeddingItem {
+    #[allow(dead_code)]
+    path: String,
+    embedding: Option<Vec<f32>>,
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BatchEmbeddingResponse {
+    results: Vec<BatchEmbeddingItem>,
 }
 
 /// Async HTTP client for communicating with the CLAP Python server
@@ -123,6 +142,7 @@ impl ClapClient {
     }
 
     /// Generate audio embedding from a file path
+    #[allow(dead_code)]
     pub async fn embed_audio_path(&self, path: &str) -> Result<Vec<f32>, String> {
         let url = format!("{}/embed/audio", self.base_url);
         let request = AudioPathRequest {
@@ -150,6 +170,7 @@ impl ClapClient {
     }
 
     /// Generate audio embedding from raw bytes (for ZIP files)
+    #[allow(dead_code)]
     pub async fn embed_audio_bytes(&self, bytes: Vec<u8>, filename: &str) -> Result<Vec<f32>, String> {
         let url = format!("{}/embed/audio/upload", self.base_url);
 
@@ -174,6 +195,92 @@ impl ClapClient {
             .map_err(|e| format!("Parse error: {}", e))?;
 
         Ok(embed.embedding)
+    }
+
+    /// Generate audio embeddings for multiple file paths in a single batched request
+    pub async fn embed_audio_batch_paths(&self, paths: &[String]) -> Result<Vec<Result<Vec<f32>, String>>, String> {
+        let url = format!("{}/embed/audio/batch", self.base_url);
+        let request = BatchAudioPathRequest {
+            audio_paths: paths.to_vec(),
+        };
+
+        let response = self
+            .client
+            .post(&url)
+            .timeout(Duration::from_secs(120))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| format!("Batch request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Batch server error {}: {}", status, body));
+        }
+
+        let batch: BatchEmbeddingResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Batch parse error: {}", e))?;
+
+        Ok(batch
+            .results
+            .into_iter()
+            .map(|item| {
+                if let Some(emb) = item.embedding {
+                    Ok(emb)
+                } else {
+                    Err(item.error.unwrap_or_else(|| "Unknown error".to_string()))
+                }
+            })
+            .collect())
+    }
+
+    /// Generate audio embeddings for multiple byte buffers in a single batched request
+    pub async fn embed_audio_batch_bytes(
+        &self,
+        items: Vec<(Vec<u8>, String)>, // (bytes, filename)
+    ) -> Result<Vec<Result<Vec<f32>, String>>, String> {
+        let url = format!("{}/embed/audio/batch/upload", self.base_url);
+
+        let mut form = multipart::Form::new();
+        for (bytes, filename) in items {
+            let part = multipart::Part::bytes(bytes).file_name(filename);
+            form = form.part("files", part);
+        }
+
+        let response = self
+            .client
+            .post(&url)
+            .timeout(Duration::from_secs(120))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| format!("Batch upload request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!("Batch upload server error {}: {}", status, body));
+        }
+
+        let batch: BatchEmbeddingResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Batch upload parse error: {}", e))?;
+
+        Ok(batch
+            .results
+            .into_iter()
+            .map(|item| {
+                if let Some(emb) = item.embedding {
+                    Ok(emb)
+                } else {
+                    Err(item.error.unwrap_or_else(|| "Unknown error".to_string()))
+                }
+            })
+            .collect())
     }
 }
 

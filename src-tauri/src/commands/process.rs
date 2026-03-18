@@ -44,11 +44,13 @@ pub async fn start_processing(
         }
         ProcessingCategory::Clap => {
             // CLAP embeddings - audio assets without embeddings
+            // Sort by path + zip_entry so files from the same ZIP/nested ZIP are consecutive,
+            // enabling inner ZIP caching in the batch processor
             sqlx::query_as(
                 "SELECT a.* FROM assets a
                  LEFT JOIN audio_embeddings ae ON a.id = ae.asset_id
                  WHERE a.asset_type = 'audio' AND ae.asset_id IS NULL
-                 ORDER BY a.id"
+                 ORDER BY a.path, a.zip_entry"
             )
             .fetch_all(&state.pool)
             .await

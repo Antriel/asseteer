@@ -315,6 +315,27 @@ def _decode_audio_bytes(content: bytes, filename: str, target_sr: int) -> tuple:
         ) from e
 
 
+def _batch_encode(audio_arrays: list[np.ndarray], target_sr: int) -> np.ndarray:
+    """Run batched CLAP inference on multiple audio arrays. Returns (N, 512) numpy array."""
+    import torch
+
+    inputs = clap_model.processor(
+        audio=audio_arrays,
+        sampling_rate=target_sr,
+        return_tensors="pt",
+    )
+    inputs = {k: v.to(clap_model.device) for k, v in inputs.items()}
+
+    with torch.no_grad():
+        audio_embeds = clap_model.model.get_audio_features(**inputs)
+
+    # Handle both raw tensor and model output object
+    if not isinstance(audio_embeds, torch.Tensor):
+        audio_embeds = audio_embeds.pooler_output
+
+    return audio_embeds.cpu().numpy()
+
+
 def _process_audio_bytes(content: bytes, filename: str) -> list[float]:
     """Process audio bytes into embedding (blocking, runs in thread pool)."""
     logger.info(f"Encoding uploaded audio: {filename} ({len(content)} bytes)")
@@ -367,19 +388,11 @@ def embed_audio_batch(request: BatchAudioPathRequest):
 
     # Batch inference - pass all audio arrays to the processor at once
     audio_arrays = [audio for _, audio in loaded]
-    inputs = clap_model.processor(
-        audio=audio_arrays,
-        sampling_rate=target_sr,
-        return_tensors="pt",
-        padding=True,
-    )
-    inputs = {k: v.to(clap_model.device) for k, v in inputs.items()}
-
-    import torch
-    with torch.no_grad():
-        audio_embeds = clap_model.model.get_audio_features(**inputs)
-
-    embeddings = audio_embeds.cpu().numpy()
+    try:
+        embeddings = _batch_encode(audio_arrays, target_sr)
+    except Exception as e:
+        logger.exception("Batch inference failed")
+        raise HTTPException(status_code=500, detail=f"Batch inference failed: {e}")
 
     # Normalize and assign results
     for batch_idx, (orig_idx, _) in enumerate(loaded):
@@ -445,19 +458,11 @@ def _process_batch_bytes(file_data: list[tuple[str, bytes]]) -> BatchEmbeddingRe
 
     # Batch inference
     audio_arrays = [audio for _, audio in loaded]
-    inputs = clap_model.processor(
-        audio=audio_arrays,
-        sampling_rate=target_sr,
-        return_tensors="pt",
-        padding=True,
-    )
-    inputs = {k: v.to(clap_model.device) for k, v in inputs.items()}
-
-    import torch
-    with torch.no_grad():
-        audio_embeds = clap_model.model.get_audio_features(**inputs)
-
-    embeddings = audio_embeds.cpu().numpy()
+    try:
+        embeddings = _batch_encode(audio_arrays, target_sr)
+    except Exception as e:
+        logger.exception("Batch upload inference failed")
+        raise HTTPException(status_code=500, detail=f"Batch inference failed: {e}")
 
     for batch_idx, (orig_idx, _) in enumerate(loaded):
         emb = embeddings[batch_idx]

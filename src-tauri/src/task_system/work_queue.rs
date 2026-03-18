@@ -1,6 +1,6 @@
 /// Work queue with worker pool for processing assets
 use crate::models::{Asset, ProcessingCategory};
-use crate::task_system::processor::{process_asset, process_clap_embedding};
+use crate::task_system::processor::{process_asset, process_clap_embedding_batch};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -220,54 +220,98 @@ impl WorkQueue {
                             break;
                         };
 
-                        // Set current file before processing
-                        {
-                            let mut current = state.current_file.write().await;
-                            *current = Some(asset.filename.clone());
-                        }
+                        // For CLAP, collect a batch before processing
+                        if category == ProcessingCategory::Clap {
+                            let mut batch = vec![asset];
+                            const CLAP_BATCH_SIZE: usize = 8;
 
-                        // Process the asset based on category
-                        let result = match category {
-                            ProcessingCategory::Image | ProcessingCategory::Audio => {
-                                process_asset(&asset, &db).await
+                            // Try to collect more items for the batch
+                            while batch.len() < CLAP_BATCH_SIZE {
+                                match work_rx.try_recv() {
+                                    Ok((cat, gen, next_asset)) => {
+                                        if cat == ProcessingCategory::Clap
+                                            && gen == state.generation.load(Ordering::SeqCst)
+                                            && !state.stop_signal.load(Ordering::SeqCst)
+                                        {
+                                            batch.push(next_asset);
+                                        }
+                                        // If different category/generation, we can't put it back
+                                        // in a crossbeam channel easily, so just skip
+                                        // (this is fine since CLAP runs with concurrency=1)
+                                    }
+                                    Err(_) => break,
+                                }
                             }
-                            ProcessingCategory::Clap => {
-                                process_clap_embedding(&asset, &db).await
+
+                            let batch_len = batch.len();
+                            {
+                                let mut current = state.current_file.write().await;
+                                *current = Some(format!("batch of {} files", batch_len));
                             }
-                        };
 
-                        // Clear current file after processing
-                        {
-                            let mut current = state.current_file.write().await;
-                            *current = None;
-                        }
+                            let results = process_clap_embedding_batch(&batch, &db).await;
 
-                        // Permit is automatically released when _permit goes out of scope
+                            {
+                                let mut current = state.current_file.write().await;
+                                *current = None;
+                            }
 
-                        // Update category-specific counters
-                        if result.success {
-                            state.completed_assets.fetch_add(1, Ordering::SeqCst);
+                            for result in results {
+                                if result.success {
+                                    state.completed_assets.fetch_add(1, Ordering::SeqCst);
+                                } else {
+                                    state.failed_assets.fetch_add(1, Ordering::SeqCst);
+                                    if let Some(error_msg) = &result.error {
+                                        let now = unix_now();
+                                        let _ = sqlx::query(
+                                            "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
+                                             VALUES (?, ?, ?, ?, 0)"
+                                        )
+                                        .bind(result.asset_id)
+                                        .bind(category.as_str())
+                                        .bind(error_msg)
+                                        .bind(now)
+                                        .execute(&db)
+                                        .await;
+                                    }
+                                }
+                            }
                         } else {
-                            state.failed_assets.fetch_add(1, Ordering::SeqCst);
-                            println!(
-                                "[Worker {}] Failed to process asset {}: {:?}",
-                                worker_id, asset.filename, result.error
-                            );
+                            // Non-CLAP: process one at a time as before
+                            {
+                                let mut current = state.current_file.write().await;
+                                *current = Some(asset.filename.clone());
+                            }
 
-                            // Save error to database
-                            if let Some(error_msg) = &result.error {
-                                let now = unix_now();
+                            let result = process_asset(&asset, &db).await;
 
-                                let _ = sqlx::query(
-                                    "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
-                                     VALUES (?, ?, ?, ?, 0)"
-                                )
-                                .bind(asset.id)
-                                .bind(category.as_str())
-                                .bind(error_msg)
-                                .bind(now)
-                                .execute(&db)
-                                .await;
+                            {
+                                let mut current = state.current_file.write().await;
+                                *current = None;
+                            }
+
+                            if result.success {
+                                state.completed_assets.fetch_add(1, Ordering::SeqCst);
+                            } else {
+                                state.failed_assets.fetch_add(1, Ordering::SeqCst);
+                                println!(
+                                    "[Worker {}] Failed to process asset {}: {:?}",
+                                    worker_id, asset.filename, result.error
+                                );
+
+                                if let Some(error_msg) = &result.error {
+                                    let now = unix_now();
+                                    let _ = sqlx::query(
+                                        "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
+                                         VALUES (?, ?, ?, ?, 0)"
+                                    )
+                                    .bind(asset.id)
+                                    .bind(category.as_str())
+                                    .bind(error_msg)
+                                    .bind(now)
+                                    .execute(&db)
+                                    .await;
+                                }
                             }
                         }
                     }

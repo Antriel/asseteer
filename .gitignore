@@ -13,3 +13,4 @@ vite.config.ts.timestamp-*
 # CLAP models (large ONNX files - download manually)
 /models/
 __pycache__/
+/perf-test/

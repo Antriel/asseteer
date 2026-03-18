@@ -17,7 +17,7 @@ fn unix_now() -> i64 {
 }
 
 /// Result of processing an asset
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ProcessingResult {
     pub asset_id: i64,
@@ -264,79 +264,245 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     }
 }
 
-/// Process CLAP embedding for an audio asset
+/// Process CLAP embedding for an audio asset (single - fallback)
+#[allow(dead_code)]
 pub async fn process_clap_embedding(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
-    let asset_id = asset.id;
+    let results = process_clap_embedding_batch(&[asset.clone()], db).await;
+    results.into_iter().next().unwrap_or(ProcessingResult {
+        asset_id: asset.id,
+        success: false,
+        error: Some("Batch returned no results".to_string()),
+    })
+}
 
+/// Process CLAP embeddings for a batch of audio assets
+pub async fn process_clap_embedding_batch(assets: &[Asset], db: &SqlitePool) -> Vec<ProcessingResult> {
     // Ensure CLAP server is running (this is a no-op if already running)
     if let Err(e) = ensure_server_running().await {
-        return ProcessingResult {
-            asset_id,
-            success: false,
-            error: Some(format!("CLAP server unavailable: {}", e)),
-        };
+        return assets
+            .iter()
+            .map(|a| ProcessingResult {
+                asset_id: a.id,
+                success: false,
+                error: Some(format!("CLAP server unavailable: {}", e)),
+            })
+            .collect();
     }
 
     let client = get_clap_client().await;
 
-    // Generate embedding - handle ZIP entries vs regular files
-    let embedding_result = if asset.zip_entry.is_some() {
-        // Audio inside ZIP - load bytes and send to server
-        match load_asset_bytes(asset) {
-            Ok(bytes) => client.embed_audio_bytes(bytes, &asset.filename).await,
-            Err(e) => Err(format!("Failed to load asset bytes: {}", e)),
+    // Partition assets into filesystem files and ZIP files
+    let mut fs_indices = Vec::new();
+    let mut fs_paths = Vec::new();
+    let mut zip_indices = Vec::new();
+    let mut zip_items: Vec<(Vec<u8>, String)> = Vec::new();
+    let mut load_errors: Vec<(usize, String)> = Vec::new();
+
+    // Use inner ZIP cache for efficient nested ZIP extraction
+    let mut inner_zip_cache: Option<(String, String, zip::ZipArchive<std::io::Cursor<Vec<u8>>>)> = None;
+
+    for (i, asset) in assets.iter().enumerate() {
+        if asset.zip_entry.is_some() {
+            match load_asset_bytes_cached(asset, &mut inner_zip_cache) {
+                Ok(bytes) => {
+                    zip_indices.push(i);
+                    zip_items.push((bytes, asset.filename.clone()));
+                }
+                Err(e) => {
+                    load_errors.push((i, format!("Failed to load asset bytes: {}", e)));
+                }
+            }
+        } else {
+            fs_indices.push(i);
+            fs_paths.push(asset.path.clone());
         }
-    } else {
-        // Regular file - send path directly
-        client.embed_audio_path(&asset.path).await
+    }
+
+    // Initialize results
+    let mut results: Vec<Option<ProcessingResult>> = vec![None; assets.len()];
+
+    // Fill in load errors
+    for (idx, err) in load_errors {
+        results[idx] = Some(ProcessingResult {
+            asset_id: assets[idx].id,
+            success: false,
+            error: Some(err),
+        });
+    }
+
+    // Batch request for filesystem files
+    if !fs_paths.is_empty() {
+        match client.embed_audio_batch_paths(&fs_paths).await {
+            Ok(embeddings) => {
+                for (batch_idx, embed_result) in embeddings.into_iter().enumerate() {
+                    let asset_idx = fs_indices[batch_idx];
+                    results[asset_idx] = Some(match embed_result {
+                        Ok(embedding) => store_embedding(assets[asset_idx].id, &embedding, db).await,
+                        Err(e) => ProcessingResult {
+                            asset_id: assets[asset_idx].id,
+                            success: false,
+                            error: Some(e),
+                        },
+                    });
+                }
+            }
+            Err(e) => {
+                // Batch failed entirely - mark all as failed
+                for &idx in &fs_indices {
+                    results[idx] = Some(ProcessingResult {
+                        asset_id: assets[idx].id,
+                        success: false,
+                        error: Some(format!("Batch request failed: {}", e)),
+                    });
+                }
+            }
+        }
+    }
+
+    // Batch request for ZIP files
+    if !zip_items.is_empty() {
+        match client.embed_audio_batch_bytes(zip_items).await {
+            Ok(embeddings) => {
+                for (batch_idx, embed_result) in embeddings.into_iter().enumerate() {
+                    let asset_idx = zip_indices[batch_idx];
+                    results[asset_idx] = Some(match embed_result {
+                        Ok(embedding) => store_embedding(assets[asset_idx].id, &embedding, db).await,
+                        Err(e) => ProcessingResult {
+                            asset_id: assets[asset_idx].id,
+                            success: false,
+                            error: Some(e),
+                        },
+                    });
+                }
+            }
+            Err(e) => {
+                for &idx in &zip_indices {
+                    results[idx] = Some(ProcessingResult {
+                        asset_id: assets[idx].id,
+                        success: false,
+                        error: Some(format!("Batch upload failed: {}", e)),
+                    });
+                }
+            }
+        }
+    }
+
+    // Convert to final results
+    results
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| {
+            r.unwrap_or(ProcessingResult {
+                asset_id: assets[i].id,
+                success: false,
+                error: Some("No result produced".to_string()),
+            })
+        })
+        .collect()
+}
+
+/// Load asset bytes with caching for nested ZIP archives.
+///
+/// When processing consecutive files from the same nested ZIP (e.g., inner.zip inside outer.zip),
+/// this keeps the decompressed inner ZIP in memory to avoid re-reading ~700MB+ per file.
+fn load_asset_bytes_cached(
+    asset: &Asset,
+    cache: &mut Option<(String, String, zip::ZipArchive<std::io::Cursor<Vec<u8>>>)>,
+) -> Result<Vec<u8>, String> {
+    let zip_entry_path = match &asset.zip_entry {
+        Some(p) => p,
+        None => return load_asset_bytes(asset),
     };
 
-    match embedding_result {
-        Ok(embedding) => {
-            // Store embedding in database
-            let blob = embedding_to_blob(&embedding);
-            let now = unix_now();
+    // Check if this is a nested ZIP (has .zip/ in the entry path)
+    let path_lower = zip_entry_path.to_lowercase();
+    let nested_boundary = path_lower.find(".zip/").map(|pos| pos + 4);
 
-            match sqlx::query(
-                "INSERT INTO audio_embeddings (asset_id, embedding, created_at)
-                 VALUES (?, ?, ?)
-                 ON CONFLICT (asset_id) DO UPDATE SET
-                     embedding = excluded.embedding,
-                     created_at = excluded.created_at",
-            )
-            .bind(asset_id)
-            .bind(&blob)
-            .bind(now)
-            .execute(db)
-            .await
+    if let Some(boundary) = nested_boundary {
+        let inner_zip_name = &zip_entry_path[..boundary];
+        let inner_entry = &zip_entry_path[boundary + 1..]; // skip the '/'
+
+        // Check cache: same outer ZIP path + same inner ZIP name
+        let cache_hit = cache
+            .as_ref()
+            .map(|(cached_path, cached_inner, _)| {
+                cached_path == &asset.path && cached_inner == inner_zip_name
+            })
+            .unwrap_or(false);
+
+        if !cache_hit {
+            // Cache miss - read inner ZIP from outer
+            let zip_file = std::fs::File::open(&asset.path)
+                .map_err(|e| format!("Failed to open zip {}: {}", asset.path, e))?;
+            let mut outer = zip::ZipArchive::new(zip_file)
+                .map_err(|e| format!("Failed to read zip {}: {}", asset.path, e))?;
+
+            let mut inner_bytes = Vec::new();
             {
-                Ok(_) => {
-                    // Mark any existing errors as resolved
-                    let _ = sqlx::query(
-                        "UPDATE processing_errors SET resolved_at = ? WHERE asset_id = ? AND category = 'clap' AND resolved_at IS NULL"
-                    )
-                    .bind(now)
-                    .bind(asset_id)
-                    .execute(db)
-                    .await;
+                let mut entry = outer.by_name(inner_zip_name)
+                    .map_err(|e| format!("Failed to find {} in {}: {}", inner_zip_name, asset.path, e))?;
+                std::io::Read::read_to_end(&mut entry, &mut inner_bytes)
+                    .map_err(|e| format!("Failed to read {} from {}: {}", inner_zip_name, asset.path, e))?;
+            }
 
-                    ProcessingResult {
-                        asset_id,
-                        success: true,
-                        error: None,
-                    }
-                }
-                Err(e) => ProcessingResult {
-                    asset_id,
-                    success: false,
-                    error: Some(format!("Failed to save embedding: {}", e)),
-                },
+            let cursor = std::io::Cursor::new(inner_bytes);
+            let inner_archive = zip::ZipArchive::new(cursor)
+                .map_err(|e| format!("Failed to open inner zip {}: {}", inner_zip_name, e))?;
+
+            *cache = Some((asset.path.clone(), inner_zip_name.to_string(), inner_archive));
+        }
+
+        // Extract from cached inner ZIP
+        let (_, _, ref mut archive) = cache.as_mut().unwrap();
+        let mut entry = archive.by_name(inner_entry)
+            .map_err(|e| format!("Failed to find {} in inner zip: {}", inner_entry, e))?;
+        let mut buffer = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut buffer)
+            .map_err(|e| format!("Failed to read {} from inner zip: {}", inner_entry, e))?;
+        Ok(buffer)
+    } else {
+        // Not nested - use regular loading
+        load_asset_bytes(asset)
+    }
+}
+
+/// Store an embedding in the database and resolve errors
+async fn store_embedding(asset_id: i64, embedding: &[f32], db: &SqlitePool) -> ProcessingResult {
+    let blob = embedding_to_blob(embedding);
+    let now = unix_now();
+
+    match sqlx::query(
+        "INSERT INTO audio_embeddings (asset_id, embedding, created_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT (asset_id) DO UPDATE SET
+             embedding = excluded.embedding,
+             created_at = excluded.created_at",
+    )
+    .bind(asset_id)
+    .bind(&blob)
+    .bind(now)
+    .execute(db)
+    .await
+    {
+        Ok(_) => {
+            let _ = sqlx::query(
+                "UPDATE processing_errors SET resolved_at = ? WHERE asset_id = ? AND category = 'clap' AND resolved_at IS NULL",
+            )
+            .bind(now)
+            .bind(asset_id)
+            .execute(db)
+            .await;
+
+            ProcessingResult {
+                asset_id,
+                success: true,
+                error: None,
             }
         }
         Err(e) => ProcessingResult {
             asset_id,
             success: false,
-            error: Some(e),
+            error: Some(format!("Failed to save embedding: {}", e)),
         },
     }
 }
