@@ -5,7 +5,7 @@ status: in-progress
 type: task
 priority: high
 created_at: 2026-03-16T09:38:19Z
-updated_at: 2026-03-16T10:43:09Z
+updated_at: 2026-03-18T11:32:14Z
 parent: asseteer-526f
 ---
 
@@ -101,3 +101,15 @@ Batching plateaus at ~1.5x. Reason: model forward pass is only 66% of in-process
 **Bugs found during benchmarking:**
 - `async def` endpoints blocked the event loop (fixed: changed to sync `def`)
 - `clap_test.py` verbose prints filled subprocess pipe buffer causing deadlock (fixed: removed prints)
+
+
+## HTTP Overhead Benchmark (2026-03-18)
+
+Added a /noop endpoint and measured pure HTTP round-trip (200 requests):
+
+| Mode | Mean | Median |
+|------|------|--------|
+| New connection each | 0.63ms | 0.61ms |
+| Keep-alive | 0.26ms | 0.23ms |
+
+**Conclusion:** The 22ms "HTTP overhead" from earlier benchmarks is actually server contention (waiting for the previous inference to finish), not transport cost. HTTP on localhost is essentially free (<1ms). No need for WebSocket, Unix sockets, or any transport-layer optimization.

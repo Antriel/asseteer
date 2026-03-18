@@ -5,7 +5,7 @@ status: todo
 type: task
 priority: high
 created_at: 2026-03-16T09:38:40Z
-updated_at: 2026-03-16T10:43:34Z
+updated_at: 2026-03-18T11:17:20Z
 parent: asseteer-526f
 blocked_by:
     - asseteer-8yo6
@@ -27,3 +27,9 @@ Increase CLAP concurrency and spawn multiple server processes for parallel infer
 ## Also fixed during benchmarking
 - [x] async def endpoints blocking event loop (changed to sync def)
 - [x] clap_test.py print statements causing pipe buffer deadlock (removed)
+
+
+## Implementation Notes
+- **Only spawn 2nd server during processing** — search only converts a single text string to an embedding vector, no benefit from a second server
+- **Check free memory before spawning 2nd server** — each server process uses ~2GB RAM. Only start the second if there's enough headroom
+- Keep single-server as the default; 2nd server is an optimization for batch processing only
