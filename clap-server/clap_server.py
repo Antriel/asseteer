@@ -11,6 +11,7 @@
 #     "uvicorn[standard]>=0.27.0",
 #     "python-multipart>=0.0.6",
 #     "miniaudio>=1.2",
+#     "imageio-ffmpeg>=0.5.1",
 # ]
 # ///
 """
@@ -34,6 +35,7 @@ Run with:
 
 import io
 import logging
+import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -50,6 +52,14 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def _win_path(path_str: str) -> str:
+    """On Windows, prefix with \\?\\ to support paths longer than MAX_PATH (260 chars)."""
+    if sys.platform != 'win32' or path_str.startswith('\\\\?\\'):
+        return path_str
+    return '\\\\?\\' + path_str.replace('/', '\\')
+
 
 # Global model instance (loaded once at startup)
 clap_model: ClapTester | None = None
@@ -178,7 +188,7 @@ def embed_audio(request: AudioPathRequest):
     Response:
         {"embedding": [0.123, -0.456, ...]}  // 512-dim array
     """
-    path = Path(request.audio_path)
+    path = Path(_win_path(request.audio_path))
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {request.audio_path}")
 
@@ -218,23 +228,91 @@ async def embed_audio_upload(audio: UploadFile = File(...)):
 
 
 def _decode_audio_bytes(content: bytes, filename: str, target_sr: int) -> tuple:
-    """Decode audio bytes to (samples, sample_rate), trying soundfile then miniaudio."""
+    """Decode audio bytes to (samples, sample_rate).
+
+    Tries four backends in order:
+    1. soundfile via BytesIO (fast, handles WAV/FLAC/OGG/etc.)
+    2. miniaudio (handles MP3 and other formats soundfile can't read from BytesIO)
+    3. ffmpeg pipe via imageio-ffmpeg (handles M4A/AAC/anything ffmpeg supports)
+    4. temp file + librosa (last resort for edge cases)
+    """
+    soundfile_err_msg = None
+    miniaudio_err_msg = None
+    ffmpeg_err_msg = None
+
     try:
         return librosa.load(io.BytesIO(content), sr=target_sr, mono=True)
-    except Exception as soundfile_err:
-        logger.info(f"soundfile failed for '{filename}', trying miniaudio: {soundfile_err}")
+    except Exception as e:
+        soundfile_err_msg = str(e)
+        logger.info(f"soundfile/BytesIO failed for '{filename}', trying miniaudio: {e}")
+
+    try:
+        import miniaudio
+        decoded = miniaudio.decode(content, output_format=miniaudio.SampleFormat.FLOAT32, nchannels=1, sample_rate=target_sr)
+        audio_data = np.frombuffer(decoded.samples, dtype=np.float32)
+        return audio_data, target_sr
+    except Exception as e:
+        miniaudio_err_msg = str(e)
+        logger.info(f"miniaudio failed for '{filename}', trying ffmpeg pipe: {e}")
+
+    try:
+        import subprocess
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        cmd = [
+            ffmpeg_exe, "-hide_banner", "-loglevel", "warning",
+            "-i", "pipe:0",
+            "-f", "f32le", "-acodec", "pcm_f32le",
+            "-ar", str(target_sr), "-ac", "1",
+            "-vn", "pipe:1",
+        ]
+        proc = subprocess.run(cmd, input=content, capture_output=True)
+        stderr_out = proc.stderr.decode(errors='replace').strip()
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg exited {proc.returncode}: {stderr_out}")
+        audio_data = np.frombuffer(proc.stdout, dtype=np.float32)
+        if len(audio_data) == 0:
+            raise RuntimeError(f"ffmpeg produced no audio output (stderr: {stderr_out})")
+        return audio_data, target_sr
+    except Exception as e:
+        ffmpeg_err_msg = str(e)
+        logger.info(f"ffmpeg pipe failed for '{filename}', trying temp file: {e}")
+
+    try:
+        # MP4/M4A need seeking to read the moov atom — pipe stdin can't seek,
+        # so write to a temp file and let ffmpeg read it by path.
+        import os, tempfile
+        import imageio_ffmpeg
+        suffix = Path(filename).suffix or ".audio"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
+            tf.write(content)
+            tmp_path = tf.name
         try:
-            import miniaudio
-            import numpy as np
-            decoded = miniaudio.decode(content, output_format=miniaudio.SampleFormat.FLOAT32, nchannels=1, sample_rate=target_sr)
-            audio_data = np.frombuffer(decoded.samples, dtype=np.float32)
+            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+            cmd = [
+                ffmpeg_exe, "-hide_banner", "-loglevel", "warning",
+                "-i", tmp_path,
+                "-f", "f32le", "-acodec", "pcm_f32le",
+                "-ar", str(target_sr), "-ac", "1",
+                "-vn", "pipe:1",
+            ]
+            proc = subprocess.run(cmd, capture_output=True)
+            stderr_out = proc.stderr.decode(errors='replace').strip()
+            if proc.returncode != 0:
+                raise RuntimeError(f"ffmpeg exited {proc.returncode}: {stderr_out}")
+            audio_data = np.frombuffer(proc.stdout, dtype=np.float32)
+            if len(audio_data) == 0:
+                raise RuntimeError(f"ffmpeg produced no audio output (stderr: {stderr_out})")
             return audio_data, target_sr
-        except Exception as miniaudio_err:
-            ext = Path(filename).suffix.lower()
-            raise RuntimeError(
-                f"Failed to decode audio file '{filename}' ({ext}): "
-                f"soundfile: {soundfile_err}; miniaudio: {miniaudio_err}"
-            ) from miniaudio_err
+        finally:
+            os.unlink(tmp_path)
+    except Exception as e:
+        ext = Path(filename).suffix.lower()
+        raise RuntimeError(
+            f"Failed to decode audio file '{filename}' ({ext}): all backends failed. "
+            f"soundfile: {soundfile_err_msg}; miniaudio: {miniaudio_err_msg}; "
+            f"ffmpeg pipe: {ffmpeg_err_msg}; ffmpeg file: {e}"
+        ) from e
 
 
 def _process_audio_bytes(content: bytes, filename: str) -> list[float]:
@@ -274,7 +352,7 @@ def embed_audio_batch(request: BatchAudioPathRequest):
     results = [None] * len(request.audio_paths)
 
     for i, audio_path in enumerate(request.audio_paths):
-        path = Path(audio_path)
+        path = Path(_win_path(audio_path))
         if not path.exists():
             results[i] = BatchEmbeddingItem(path=audio_path, error=f"File not found: {audio_path}")
             continue
