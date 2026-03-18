@@ -102,8 +102,11 @@
   });
 
   function reloadWithFilter() {
-    // If semantic search is active, re-run semantic search with the new filter
-    if (clapState.semanticSearchEnabled && clapState.lastSearchQuery) {
+    // If similarity search is active, re-run with the new filter
+    if (clapState.similarToAssetId !== null && clapState.similarToFilename) {
+      clapState.searchBySimilarity(clapState.similarToAssetId, clapState.similarToFilename, undefined, assetsState.durationFilter);
+    } else if (clapState.semanticSearchEnabled && clapState.lastSearchQuery) {
+      // If semantic search is active, re-run semantic search with the new filter
       clapState.search(clapState.lastSearchQuery, undefined, assetsState.durationFilter);
     } else {
       // Otherwise reload regular assets

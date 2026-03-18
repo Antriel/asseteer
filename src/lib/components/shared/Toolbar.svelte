@@ -13,6 +13,9 @@
   let searchInput = $state(assetsState.searchText);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Saved search text from before entering similarity mode, for restoring on cancel
+  let preSimilarityState: { searchText: string } | null = null;
+
   // Debounce delay in ms (shorter for FTS, longer for semantic)
   const FTS_DEBOUNCE_MS = 150;
   const SEMANTIC_DEBOUNCE_MS = 300;
@@ -23,6 +26,12 @@
   function handleSearch(e: Event) {
     const value = (e.target as HTMLInputElement).value;
     searchInput = value;
+
+    // In similarity mode, typing filters the similarity results client-side
+    if (isSimilarityMode) {
+      clapState.similarityFilterText = value;
+      return;
+    }
 
     // Clear any pending debounced search
     if (debounceTimer) {
@@ -105,12 +114,56 @@
   // Check if semantic mode is active
   let isSemanticModeEnabled = $derived(isAudioTab && clapState.semanticSearchEnabled);
 
+  // Check if similarity search is active
+  let isSimilarityMode = $derived(isAudioTab && clapState.similarToAssetId !== null);
+
+  // Save search text and clear input when entering similarity mode
+  $effect(() => {
+    if (isSimilarityMode) {
+      if (!preSimilarityState) {
+        preSimilarityState = { searchText: searchInput };
+      }
+      searchInput = '';
+    }
+  });
+
+  function cancelSimilaritySearch() {
+    const saved = preSimilarityState;
+    const wasSemanticEnabled = clapState.preSimilaritySemanticEnabled;
+    preSimilarityState = null;
+
+    if (searchInput) {
+      // User typed something new — keep it, run FTS search
+      clapState.clearSimilaritySearch();
+      assetsState.searchAssets(searchInput, 'audio');
+    } else if (saved) {
+      // Input still empty — restore previous state
+      clapState.clearSimilaritySearch();
+      searchInput = saved.searchText;
+      if (wasSemanticEnabled && saved.searchText.trim()) {
+        clapState.semanticSearchEnabled = true;
+        handleSemanticSearch(saved.searchText);
+      } else if (saved.searchText.trim()) {
+        assetsState.searchAssets(saved.searchText, 'audio');
+      } else {
+        assetsState.searchAssets('', 'audio');
+      }
+    } else {
+      clapState.clearSimilaritySearch();
+      assetsState.searchAssets('', 'audio');
+    }
+  }
+
   // Unified stats - what to show in the toolbar
   let activeResultCount = $derived(
     isSemanticModeEnabled ? clapState.semanticResults.length : assetsState.assets.length,
   );
   let hasActiveSearch = $derived(
-    isSemanticModeEnabled ? !!clapState.lastSearchQuery?.trim() : !!assetsState.searchText?.trim(),
+    isSimilarityMode
+      ? true
+      : isSemanticModeEnabled
+        ? !!clapState.lastSearchQuery?.trim()
+        : !!assetsState.searchText?.trim(),
   );
   let hasMoreResults = $derived(
     isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults,
@@ -118,9 +171,11 @@
 
   // Placeholder text based on search mode
   let placeholderText = $derived(
-    isSemanticModeEnabled
-      ? 'Semantic search (e.g., "footsteps on wood")...'
-      : `Search ${viewState.activeTab}...`,
+    isSimilarityMode
+      ? 'Filter results by filename...'
+      : isSemanticModeEnabled
+        ? 'Semantic search (e.g., "footsteps on wood")...'
+        : `Search ${viewState.activeTab}...`,
   );
 </script>
 
@@ -144,15 +199,17 @@
         value={searchInput}
         oninput={handleSearch}
         class="w-full py-2 px-2 pl-8 {searchInput ? 'pr-8' : 'pr-2'} border border-default rounded-md bg-primary text-primary placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
-        class:!border-purple-500={isSemanticModeEnabled}
-        class:!ring-purple-500={isSemanticModeEnabled}
+        class:!border-purple-500={isSemanticModeEnabled && !isSimilarityMode}
+        class:!ring-purple-500={isSemanticModeEnabled && !isSimilarityMode}
       />
       {#if searchInput}
         <button
           class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-tertiary transition-colors"
           onclick={() => {
             searchInput = '';
-            if (clapState.semanticSearchEnabled && isAudioTab) {
+            if (isSimilarityMode) {
+              clapState.similarityFilterText = '';
+            } else if (clapState.semanticSearchEnabled && isAudioTab) {
               clapState.clearSearch();
               assetsState.searchAssets('', 'audio');
             } else {
@@ -170,14 +227,17 @@
     {#if isAudioTab}
       <button
         onclick={toggleSemanticSearch}
+        disabled={isSimilarityMode}
         class="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md transition-colors"
-        class:bg-purple-500={isSemanticModeEnabled}
-        class:text-white={isSemanticModeEnabled}
-        class:bg-secondary={!isSemanticModeEnabled}
-        class:text-secondary={!isSemanticModeEnabled}
-        class:hover:bg-purple-600={isSemanticModeEnabled}
-        class:hover:bg-tertiary={!isSemanticModeEnabled}
-        title={isSemanticModeEnabled ? 'Switch to text search' : 'Switch to semantic search'}
+        class:bg-purple-500={isSemanticModeEnabled && !isSimilarityMode}
+        class:text-white={isSemanticModeEnabled && !isSimilarityMode}
+        class:bg-secondary={!isSemanticModeEnabled || isSimilarityMode}
+        class:text-secondary={!isSemanticModeEnabled || isSimilarityMode}
+        class:hover:bg-purple-600={isSemanticModeEnabled && !isSimilarityMode}
+        class:hover:bg-tertiary={!isSemanticModeEnabled && !isSimilarityMode}
+        class:opacity-50={isSimilarityMode}
+        class:cursor-not-allowed={isSimilarityMode}
+        title={isSimilarityMode ? 'Exit similarity search first' : isSemanticModeEnabled ? 'Switch to text search' : 'Switch to semantic search'}
       >
         <!-- Brain/AI icon for semantic search -->
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -225,6 +285,25 @@
       {/if}
     </div>
   </div>
+
+  <!-- Similarity search banner -->
+  {#if isSimilarityMode}
+    <div class="flex items-center gap-2 px-4 py-1.5 bg-purple-50 dark:bg-purple-900/20 border-b border-purple-200 dark:border-purple-800">
+      <svg class="w-4 h-4 text-purple-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+      </svg>
+      <span class="text-sm text-purple-700 dark:text-purple-300">
+        Similar to: <strong class="font-semibold">"{clapState.similarToFilename}"</strong>
+      </span>
+      <button
+        onclick={cancelSimilaritySearch}
+        class="flex-shrink-0 p-0.5 rounded hover:bg-purple-100 dark:hover:bg-purple-800/40 transition-colors"
+        title="Clear similarity search"
+      >
+        <CloseIcon size="sm" class="text-purple-500 hover:text-purple-700 dark:hover:text-purple-300" />
+      </button>
+    </div>
+  {/if}
 
   <!-- Folder breadcrumb (when a folder filter is active) -->
   {#if assetsState.folderPath}

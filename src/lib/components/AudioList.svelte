@@ -8,6 +8,8 @@
   import { viewState } from '$lib/state/view.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
   import { exploreState } from '$lib/state/explore.svelte';
+  import { clapState } from '$lib/state/clap.svelte';
+  import { showToast } from '$lib/state/ui.svelte';
   import { ZIP_SEP } from '$lib/database/queries';
 
   // Extended asset type with optional similarity score
@@ -144,6 +146,27 @@
     }
   }
 
+  // Context menu
+  let contextMenu = $state<{ x: number; y: number; asset: AudioAsset } | null>(null);
+
+  function handleContextMenu(e: MouseEvent, asset: AudioAsset) {
+    e.preventDefault();
+    contextMenu = { x: e.clientX, y: e.clientY, asset };
+  }
+
+  function closeContextMenu() {
+    contextMenu = null;
+  }
+
+  async function findSimilar(asset: AudioAsset) {
+    closeContextMenu();
+    try {
+      await clapState.searchBySimilarity(asset.id, asset.filename, undefined, assetsState.durationFilter);
+    } catch (error) {
+      showToast(`${error}`, 'error');
+    }
+  }
+
   function handleKeyDown(e: KeyboardEvent) {
     const currentIndex = getSelectedIndex();
 
@@ -243,6 +266,15 @@
           </div>
         </div>
         <button
+          class="w-8 h-8 flex items-center justify-center text-secondary hover:text-purple-500 border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
+          onclick={() => findSimilar(selectedAsset!)}
+          title="Find similar sounds"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+        </button>
+        <button
           class="w-8 h-8 flex items-center justify-center text-secondary hover:text-accent border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
           onclick={() => showInFolder(selectedAsset!)}
           title="Show in folder"
@@ -304,6 +336,7 @@
               class:!bg-accent-light={selectedAsset?.id === asset.id}
               class:!border-accent={selectedAsset?.id === asset.id}
               onclick={() => playAsset(asset)}
+              oncontextmenu={(e) => handleContextMenu(e, asset)}
               tabindex="-1"
               title={formatLocation(asset)}
             >
@@ -365,3 +398,44 @@
     </VirtualList>
   </div>
 </div>
+
+<!-- Context menu -->
+{#if contextMenu}
+  <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+  <div
+    class="fixed inset-0 z-50"
+    onclick={closeContextMenu}
+    oncontextmenu={(e) => { e.preventDefault(); closeContextMenu(); }}
+  >
+    <div
+      class="absolute bg-elevated border border-default rounded-lg shadow-lg py-1 min-w-[180px]"
+      style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+    >
+      <button
+        class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
+        onclick={() => findSimilar(contextMenu!.asset)}
+      >
+        <svg class="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+        </svg>
+        Find Similar Sounds
+      </button>
+      <button
+        class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
+        onclick={() => { closeContextMenu(); showInFolder(contextMenu!.asset); }}
+      >
+        <FolderIcon size="sm" class="text-secondary" />
+        Show in Folder
+      </button>
+      <button
+        class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
+        onclick={() => { closeContextMenu(); openDirectory(contextMenu!.asset); }}
+      >
+        <svg class="w-4 h-4 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+        </svg>
+        Open in File Explorer
+      </button>
+    </div>
+  </div>
+{/if}

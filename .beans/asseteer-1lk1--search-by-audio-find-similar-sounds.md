@@ -1,11 +1,11 @@
 ---
 # asseteer-1lk1
 title: 'Search by audio: find similar sounds'
-status: draft
+status: completed
 type: feature
 priority: normal
 created_at: 2026-03-18T09:18:44Z
-updated_at: 2026-03-18T09:22:15Z
+updated_at: 2026-03-18T10:32:58Z
 ---
 
 Allow users to find audio assets similar to a selected audio asset by comparing CLAP embeddings directly (audio-to-audio similarity), reusing the existing text-to-audio semantic search infrastructure.
@@ -110,15 +110,15 @@ When `similarToAssetId` is set:
 
 ## Implementation Plan
 
-- [ ] Add `search_audio_by_similarity` Tauri command (backend)
-- [ ] Add `searchAudioBySimilarity` query wrapper (frontend)
-- [ ] Add state management for similarity search mode in `clap.svelte.ts`
-- [ ] Add "Find Similar" to audio asset context menu
-- [ ] Show "Similar to: filename" banner/chip when in similarity mode
-- [ ] Wire up results display (reuse AudioList + similarity %)
-- [ ] Handle edge case: asset has no embedding yet (show toast: "This asset hasn't been processed yet")
-- [ ] Ensure duration filter works in similarity mode
-- [ ] Optional: Add "Find Similar" button in audio player/detail area
+- [x] Add `search_audio_by_similarity` Tauri command (backend)
+- [x] Add `searchAudioBySimilarity` query wrapper (frontend)
+- [x] Add state management for similarity search mode in `clap.svelte.ts`
+- [x] Add "Find Similar" to audio asset context menu
+- [x] Show "Similar to: filename" banner/chip when in similarity mode
+- [x] Wire up results display (reuse AudioList + similarity %)
+- [x] Handle edge case: asset has no embedding yet (show toast: "This asset hasn't been processed yet")
+- [x] Ensure duration filter works in similarity mode
+- [x] Optional: Add "Find Similar" button in audio player/detail area
 
 ## Notes
 
@@ -126,3 +126,33 @@ When `similarToAssetId` is set:
 - Performance should be identical to text semantic search (same vector comparison loop).
 - The `SemanticSearchResult` struct works as-is — no changes needed.
 - Could later extend this to drag-and-drop an external audio file (would need server to generate embedding on the fly), but that's a separate feature.
+
+## Summary of Changes
+
+Implemented audio-to-audio similarity search using stored CLAP embeddings:
+
+**Backend** (`src-tauri/src/commands/search.rs`):
+- Added `search_audio_by_similarity` Tauri command that fetches a source asset's embedding and computes cosine similarity against all other audio embeddings
+- Returns error if the asset hasn't been processed yet
+
+**Frontend query** (`src/lib/database/queries.ts`):
+- Added `searchAudioBySimilarity()` invoke wrapper
+
+**State management** (`src/lib/state/clap.svelte.ts`):
+- Added `similarToAssetId` and `similarToFilename` state
+- Added `searchBySimilarity()` method with cancellation support
+- Added `clearSimilaritySearch()` method
+- Updated `clearSearch()` to also clear similarity state
+
+**UI - AudioList** (`src/lib/components/AudioList.svelte`):
+- Added right-click context menu with "Find Similar Sounds", "Show in Folder", "Open in File Explorer"
+- Added "Find Similar" button in the audio player detail area
+
+**UI - Toolbar** (`src/lib/components/shared/Toolbar.svelte`):
+- Added purple "Similar to: filename" banner with dismiss button when similarity mode is active
+
+**UI - DurationFilter** (`src/lib/components/shared/DurationFilter.svelte`):
+- Updated `reloadWithFilter()` to re-run similarity search when duration filter changes
+
+**UI - Library page** (`src/routes/(app)/library/+page.svelte`):
+- Updated `hasAnyFilter` to include similarity mode so empty state doesn't show

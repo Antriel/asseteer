@@ -134,6 +134,101 @@ pub async fn search_audio_semantic(
     Ok(results)
 }
 
+/// Find audio assets similar to a given audio asset using its stored CLAP embedding
+#[tauri::command]
+pub async fn search_audio_by_similarity(
+    asset_id: i64,
+    limit: usize,
+    min_duration_ms: Option<i64>,
+    max_duration_ms: Option<i64>,
+    state: State<'_, AppState>,
+) -> Result<Vec<SemanticSearchResult>, String> {
+    // Fetch the source asset's embedding
+    let source_row: Option<(Vec<u8>,)> = sqlx::query_as(
+        "SELECT embedding FROM audio_embeddings WHERE asset_id = ?",
+    )
+    .bind(asset_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let source_embedding = match source_row {
+        Some((blob,)) => blob_to_embedding(&blob),
+        None => return Err("This asset hasn't been processed yet".to_string()),
+    };
+
+    // Build WHERE clause: exclude source asset + optional duration filtering
+    let mut where_clauses: Vec<String> = vec!["a.id != ?".to_string()];
+    if min_duration_ms.is_some() {
+        where_clauses.push("am.duration_ms >= ?".to_string());
+    }
+    if max_duration_ms.is_some() {
+        where_clauses.push("am.duration_ms <= ?".to_string());
+    }
+
+    let where_clause = format!("WHERE {}", where_clauses.join(" AND "));
+
+    let sql = format!(
+        r#"
+        SELECT
+            a.id, a.filename, a.path, a.zip_entry, a.asset_type, a.format,
+            a.file_size, a.created_at, a.modified_at,
+            am.duration_ms, am.sample_rate, am.channels,
+            ae.embedding
+        FROM assets a
+        JOIN audio_embeddings ae ON a.id = ae.asset_id
+        LEFT JOIN audio_metadata am ON a.id = am.asset_id
+        {}
+        "#,
+        where_clause
+    );
+
+    // Build query with bindings
+    let mut query = sqlx::query_as::<_, SemanticSearchRow>(&sql);
+    query = query.bind(asset_id);
+    if let Some(min) = min_duration_ms {
+        query = query.bind(min);
+    }
+    if let Some(max) = max_duration_ms {
+        query = query.bind(max);
+    }
+
+    let rows: Vec<SemanticSearchRow> = query
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Compute similarities
+    let mut results: Vec<SemanticSearchResult> = rows
+        .into_iter()
+        .map(|row| {
+            let embedding = blob_to_embedding(&row.embedding);
+            let similarity = cosine_similarity(&source_embedding, &embedding);
+            SemanticSearchResult {
+                id: row.id,
+                filename: row.filename,
+                path: row.path,
+                zip_entry: row.zip_entry,
+                asset_type: row.asset_type,
+                format: row.format,
+                file_size: row.file_size,
+                created_at: row.created_at,
+                modified_at: row.modified_at,
+                duration_ms: row.duration_ms,
+                sample_rate: row.sample_rate,
+                channels: row.channels,
+                similarity,
+            }
+        })
+        .collect();
+
+    // Sort by similarity descending
+    results.sort_by(|a, b| b.similarity.total_cmp(&a.similarity));
+    results.truncate(limit);
+
+    Ok(results)
+}
+
 /// Get count of audio assets pending CLAP embedding
 #[tauri::command]
 pub async fn get_pending_clap_count(state: State<'_, AppState>) -> Result<i64, String> {

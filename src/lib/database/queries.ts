@@ -602,6 +602,22 @@ export async function searchAudioSemantic(
 }
 
 /**
+ * Find audio assets similar to a given audio asset using its stored CLAP embedding
+ */
+export async function searchAudioBySimilarity(
+  assetId: number,
+  limit: number = 500,
+  durationFilter?: DurationFilter,
+): Promise<SemanticSearchResult[]> {
+  return invoke('search_audio_by_similarity', {
+    assetId,
+    limit,
+    minDurationMs: durationFilter?.minMs ?? null,
+    maxDurationMs: durationFilter?.maxMs ?? null,
+  });
+}
+
+/**
  * Get count of audio assets pending CLAP embedding
  */
 export async function getPendingClapCount(): Promise<number> {

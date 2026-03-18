@@ -79,13 +79,19 @@
   );
 
   // Semantic search results with Asset compatibility (add width/height as null)
-  let semanticAssets = $derived(
-    clapState.semanticResults.map((result) => ({
+  // Apply client-side filename filter when in similarity mode
+  let semanticAssets = $derived.by(() => {
+    let results = clapState.semanticResults;
+    const filter = clapState.similarityFilterText.trim().toLowerCase();
+    if (filter) {
+      results = results.filter((r) => r.filename.toLowerCase().includes(filter));
+    }
+    return results.map((result) => ({
       ...result,
       width: null,
       height: null,
-    })),
-  );
+    }));
+  });
 
   // Unified "active assets" - what should be displayed based on current mode
   let activeAssets = $derived(isSemanticModeEnabled ? semanticAssets : assetsState.assets);
@@ -95,8 +101,8 @@
     isSemanticModeEnabled ? !!clapState.lastSearchQuery?.trim() : !!assetsState.searchText?.trim(),
   );
 
-  // Whether any filter is active (search or folder)
-  let hasAnyFilter = $derived(hasActiveSearch || !!assetsState.folderPath);
+  // Whether any filter is active (search, folder, or similarity)
+  let hasAnyFilter = $derived(hasActiveSearch || !!assetsState.folderPath || !!clapState.similarToAssetId);
 
   // Unified "is loading" - whether a search is in progress
   let isLoading = $derived(isSemanticModeEnabled ? clapState.isSearching : assetsState.isLoading);

@@ -9,6 +9,7 @@ import {
   checkClapServer,
   startClapServer,
   searchAudioSemantic,
+  searchAudioBySimilarity,
   getClapServerInfo,
   getClapCacheSize,
   clearClapCache,
@@ -61,6 +62,13 @@ class ClapState {
   isSearching = $state(false);
   lastSearchQuery = $state('');
   hasMoreResults = $state(false);
+
+  // Similarity search (find similar to an audio asset)
+  similarToAssetId = $state<number | null>(null);
+  similarToFilename = $state<string | null>(null);
+  similarityFilterText = $state('');
+  /** Whether semantic search was enabled before entering similarity mode */
+  preSimilaritySemanticEnabled = false;
 
   // Health monitoring
   private healthInterval: ReturnType<typeof setInterval> | null = null;
@@ -214,6 +222,69 @@ class ClapState {
   }
 
   /**
+   * Find audio assets similar to a given asset using its stored embedding
+   */
+  async searchBySimilarity(
+    assetId: number,
+    filename: string,
+    limit: number = MAX_SEMANTIC_RESULTS,
+    durationFilter?: DurationFilter,
+  ): Promise<SemanticSearchResult[]> {
+    const currentVersion = ++this.searchVersion;
+
+    // Save whether semantic was on before we override it
+    if (this.similarToAssetId === null) {
+      this.preSimilaritySemanticEnabled = this.semanticSearchEnabled;
+    }
+
+    this.semanticResults = [];
+    this.isSearching = true;
+    this.similarToAssetId = assetId;
+    this.similarToFilename = filename;
+    this.semanticSearchEnabled = true;
+    this.lastSearchQuery = '';
+    this.hasMoreResults = false;
+
+    // Check if cancelled
+    if (currentVersion !== this.searchVersion) {
+      return [];
+    }
+
+    try {
+      const results = await searchAudioBySimilarity(assetId, limit + 1, durationFilter);
+
+      if (currentVersion === this.searchVersion) {
+        this.hasMoreResults = results.length > limit;
+        this.semanticResults = results.slice(0, limit);
+        this.isSearching = false;
+        return this.semanticResults;
+      }
+      return [];
+    } catch (error) {
+      if (currentVersion === this.searchVersion) {
+        console.error('[CLAP] Similarity search failed:', error);
+        this.semanticResults = [];
+        this.isSearching = false;
+        throw error;
+      }
+      return [];
+    }
+  }
+
+  /**
+   * Clear similarity search mode and results
+   */
+  clearSimilaritySearch() {
+    this.similarToAssetId = null;
+    this.similarToFilename = null;
+    this.similarityFilterText = '';
+    this.semanticResults = [];
+    this.semanticSearchEnabled = false;
+    this.hasMoreResults = false;
+    this.isSearching = false;
+  }
+
+  /**
    * Clear semantic search results
    */
   clearSearch() {
@@ -221,6 +292,9 @@ class ClapState {
     this.lastSearchQuery = '';
     this.semanticSearchEnabled = false;
     this.hasMoreResults = false;
+    this.similarToAssetId = null;
+    this.similarToFilename = null;
+    this.similarityFilterText = '';
   }
 
   /**

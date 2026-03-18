@@ -85,6 +85,7 @@ pub fn run() {
             commands::process::clear_processing_errors,
             // CLAP semantic search commands
             commands::search::search_audio_semantic,
+            commands::search::search_audio_by_similarity,
             commands::search::get_pending_clap_count,
             commands::search::check_clap_server,
             commands::search::start_clap_server,
