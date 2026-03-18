@@ -79,11 +79,7 @@
   });
 </script>
 
-<div
-  bind:this={containerElement}
-  class="relative overflow-y-auto h-full"
-  onscroll={handleScroll}
->
+<div bind:this={containerElement} class="relative overflow-y-auto h-full" onscroll={handleScroll}>
   {#if isLoading}
     <div class="flex items-center justify-center h-full">
       <p class="text-secondary">Loading...</p>
@@ -94,7 +90,9 @@
     </div>
   {:else}
     <!-- Header row (sticky) -->
-    <div class="sticky top-0 bg-secondary border-b border-default z-10 grid grid-cols-[80px_1fr_100px_120px_100px] px-4 py-2 text-sm font-medium text-secondary">
+    <div
+      class="sticky top-0 bg-secondary border-b border-default z-10 grid grid-cols-[80px_1fr_100px_120px_100px] px-4 py-2 text-sm font-medium text-secondary"
+    >
       <span>Preview</span>
       <span>Name</span>
       <span>Type</span>
@@ -106,7 +104,10 @@
     <div style="height: {totalHeight}px; position: relative;">
       <div class="absolute w-full" style="transform: translateY({offsetY}px);">
         {#each visibleAssets as asset (asset.id)}
-          <div class="grid grid-cols-[80px_1fr_100px_120px_100px] items-center px-4 border-b border-default hover:bg-secondary" style="height: {rowHeight}px;">
+          <div
+            class="grid grid-cols-[80px_1fr_100px_120px_100px] items-center px-4 border-b border-default hover:bg-secondary"
+            style="height: {rowHeight}px;"
+          >
             <button class="py-2 cursor-pointer" onclick={() => viewState.openLightbox(asset)}>
               <AssetThumbnail {asset} />
             </button>

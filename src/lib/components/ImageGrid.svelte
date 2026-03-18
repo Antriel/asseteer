@@ -18,9 +18,12 @@
   // Computed grid column classes and counts
   const gridClasses = $derived.by(() => {
     switch (viewState.thumbnailSize) {
-      case 'small': return 'grid-cols-6 xl:grid-cols-8';
-      case 'medium': return 'grid-cols-4 xl:grid-cols-6';
-      case 'large': return 'grid-cols-3 xl:grid-cols-4';
+      case 'small':
+        return 'grid-cols-6 xl:grid-cols-8';
+      case 'medium':
+        return 'grid-cols-4 xl:grid-cols-6';
+      case 'large':
+        return 'grid-cols-3 xl:grid-cols-4';
     }
   });
 
@@ -29,9 +32,12 @@
     const isXL = windowWidth >= 1280;
 
     switch (viewState.thumbnailSize) {
-      case 'small': return isXL ? 8 : 6;
-      case 'medium': return isXL ? 6 : 4;
-      case 'large': return isXL ? 4 : 3;
+      case 'small':
+        return isXL ? 8 : 6;
+      case 'medium':
+        return isXL ? 6 : 4;
+      case 'large':
+        return isXL ? 4 : 3;
     }
   });
 
@@ -39,9 +45,12 @@
   // Thumbnail height + fixed info area (40px) + gap (8px) + border (2px)
   const rowHeight = $derived.by(() => {
     switch (viewState.thumbnailSize) {
-      case 'small': return 128 + 40 + 8 + 2;   // 178
-      case 'medium': return 192 + 40 + 8 + 2;   // 242
-      case 'large': return 256 + 40 + 8 + 2;    // 306
+      case 'small':
+        return 128 + 40 + 8 + 2; // 178
+      case 'medium':
+        return 192 + 40 + 8 + 2; // 242
+      case 'large':
+        return 256 + 40 + 8 + 2; // 306
     }
   });
 
@@ -86,7 +95,9 @@
       resizeObserver.observe(containerElement);
     }
 
-    const handleResize = () => { windowWidth = window.innerWidth; };
+    const handleResize = () => {
+      windowWidth = window.innerWidth;
+    };
     window.addEventListener('resize', handleResize);
 
     return () => {
@@ -96,11 +107,7 @@
   });
 </script>
 
-<div
-  bind:this={containerElement}
-  class="relative overflow-y-auto h-full"
-  onscroll={handleScroll}
->
+<div bind:this={containerElement} class="relative overflow-y-auto h-full" onscroll={handleScroll}>
   <div style="height: {totalHeight}px; position: relative;">
     <div
       class="grid {gridClasses} gap-2 p-4 absolute w-full"
@@ -113,11 +120,17 @@
         >
           <ImageThumbnail {asset} size={viewState.thumbnailSize} />
           {#if asset.format === 'gif'}
-            <span class="absolute top-1.5 left-1.5 text-[0.625rem] font-bold leading-none px-1 py-0.5 rounded bg-black/60 text-white tracking-wide">GIF</span>
+            <span
+              class="absolute top-1.5 left-1.5 text-[0.625rem] font-bold leading-none px-1 py-0.5 rounded bg-black/60 text-white tracking-wide"
+              >GIF</span
+            >
           {/if}
 
           <div class="h-10 p-2 bg-primary">
-            <p class="text-xs font-medium text-primary whitespace-nowrap overflow-hidden text-ellipsis" title={asset.filename}>
+            <p
+              class="text-xs font-medium text-primary whitespace-nowrap overflow-hidden text-ellipsis"
+              title={asset.filename}
+            >
               {asset.filename}
             </p>
             {#if asset.width && asset.height}

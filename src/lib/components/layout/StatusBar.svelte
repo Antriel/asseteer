@@ -27,10 +27,16 @@
 
   $effect(() => {
     if (thumbnailActive) {
-      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+      if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+      }
       showThumbnails = true;
     } else if (showThumbnails) {
-      hideTimer = setTimeout(() => { showThumbnails = false; hideTimer = null; }, 1000);
+      hideTimer = setTimeout(() => {
+        showThumbnails = false;
+        hideTimer = null;
+      }, 1000);
     }
   });
 
@@ -58,7 +64,12 @@
         {#if uiState.scanDetails.phase === 'discovering'}
           <span class="text-secondary">{uiState.scanDetails.filesFound} found</span>
         {:else if uiState.scanDetails.phase === 'inserting'}
-          {@const pct = uiState.scanDetails.filesTotal > 0 ? Math.round((uiState.scanDetails.filesInserted / uiState.scanDetails.filesTotal) * 100) : 0}
+          {@const pct =
+            uiState.scanDetails.filesTotal > 0
+              ? Math.round(
+                  (uiState.scanDetails.filesInserted / uiState.scanDetails.filesTotal) * 100,
+                )
+              : 0}
           <span class="text-secondary">{pct}%</span>
         {/if}
       </div>
@@ -132,7 +143,9 @@
         <span class="text-accent">CLAP: Searching...</span>
       {:else if clapState.setupStatus === 'ready' && clapState.serverAvailable}
         <div class="w-2 h-2 rounded-full bg-success"></div>
-        <span class="text-secondary">CLAP: Ready ({clapState.device === 'cuda' ? 'GPU' : 'CPU'})</span>
+        <span class="text-secondary"
+          >CLAP: Ready ({clapState.device === 'cuda' ? 'GPU' : 'CPU'})</span
+        >
       {:else if clapState.setupStatus === 'offline'}
         <div class="w-2 h-2 rounded-full bg-tertiary"></div>
         <span class="text-tertiary">CLAP: Offline</span>
@@ -159,7 +172,13 @@
             <div class="w-12 h-1.5 rounded-full bg-tertiary overflow-hidden">
               <div
                 class="h-full rounded-full transition-all duration-300
-                       {status === 'running' ? 'bg-accent' : status === 'paused' ? 'bg-warning' : status === 'completed' ? 'bg-success' : 'bg-secondary'}"
+                       {status === 'running'
+                  ? 'bg-accent'
+                  : status === 'paused'
+                    ? 'bg-warning'
+                    : status === 'completed'
+                      ? 'bg-success'
+                      : 'bg-secondary'}"
                 style="width: {percent}%"
               ></div>
             </div>

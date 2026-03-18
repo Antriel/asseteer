@@ -12,11 +12,16 @@
       class:bg-accent={viewState.layoutMode === 'grid'}
       class:text-white={viewState.layoutMode === 'grid'}
       class:hover:bg-tertiary={viewState.layoutMode !== 'grid'}
-      onclick={() => viewState.layoutMode = 'grid'}
+      onclick={() => (viewState.layoutMode = 'grid')}
       title="Grid View"
     >
       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"
+        />
       </svg>
     </button>
 
@@ -25,11 +30,16 @@
       class:bg-accent={viewState.layoutMode === 'table'}
       class:text-white={viewState.layoutMode === 'table'}
       class:hover:bg-tertiary={viewState.layoutMode !== 'table'}
-      onclick={() => viewState.layoutMode = 'table'}
+      onclick={() => (viewState.layoutMode = 'table')}
       title="Table View"
     >
       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18M3 6h18M3 18h18" />
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M3 10h18M3 14h18M3 6h18M3 18h18"
+        />
       </svg>
     </button>
 

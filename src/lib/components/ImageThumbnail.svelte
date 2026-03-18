@@ -3,7 +3,12 @@
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { invoke } from '@tauri-apps/api/core';
   import type { Asset } from '$lib/types';
-  import { getThumbnailUrl, hasThumbnailFailed, requestThumbnail, cancelThumbnail } from '$lib/state/thumbnails.svelte';
+  import {
+    getThumbnailUrl,
+    hasThumbnailFailed,
+    requestThumbnail,
+    cancelThumbnail,
+  } from '$lib/state/thumbnails.svelte';
   import Spinner from '$lib/components/shared/Spinner.svelte';
 
   interface Props {
@@ -17,16 +22,21 @@
 
   const sizeClasses = $derived.by(() => {
     switch (size) {
-      case 'small': return 'h-32';
-      case 'medium': return 'h-48';
-      case 'large': return 'h-64';
+      case 'small':
+        return 'h-32';
+      case 'medium':
+        return 'h-48';
+      case 'large':
+        return 'h-64';
     }
   });
 
   // Small images don't need thumbnails — show original directly
   let isSmallImage = $derived(
-    asset.width != null && asset.height != null &&
-    asset.width <= THUMBNAIL_MAX && asset.height <= THUMBNAIL_MAX
+    asset.width != null &&
+      asset.height != null &&
+      asset.width <= THUMBNAIL_MAX &&
+      asset.height <= THUMBNAIL_MAX,
   );
 
   let thumbnailUrl = $derived(getThumbnailUrl(asset.id));
@@ -37,9 +47,7 @@
   let smallImageFailed = $state(false);
 
   let isLoading = $derived(
-    isSmallImage
-      ? !smallImageUrl && !smallImageFailed
-      : !thumbnailUrl && !thumbnailFailed
+    isSmallImage ? !smallImageUrl && !smallImageFailed : !thumbnailUrl && !thumbnailFailed,
   );
 
   let displayUrl = $derived(isSmallImage ? smallImageUrl : thumbnailUrl);
@@ -80,11 +88,7 @@
       <Spinner size="md" />
     </div>
   {:else if displayUrl}
-    <img
-      src={displayUrl}
-      alt="Thumbnail"
-      class="w-full h-full object-cover"
-    />
+    <img src={displayUrl} alt="Thumbnail" class="w-full h-full object-cover" />
   {:else}
     <div class="flex items-center justify-center w-full h-full">
       <span class="text-xs text-secondary">No preview</span>

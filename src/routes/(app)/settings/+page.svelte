@@ -11,17 +11,17 @@
   const statusLabel: Record<ClapSetupStatus, string> = {
     'not-configured': 'Not set up',
     'setting-up': 'Setting up...',
-    'ready': 'Ready',
-    'offline': 'Offline',
-    'error': 'Error',
+    ready: 'Ready',
+    offline: 'Offline',
+    error: 'Error',
   };
 
   const statusColor: Record<ClapSetupStatus, string> = {
     'not-configured': 'bg-tertiary',
     'setting-up': 'bg-warning',
-    'ready': 'bg-success',
-    'offline': 'bg-tertiary',
-    'error': 'bg-error',
+    ready: 'bg-success',
+    offline: 'bg-tertiary',
+    error: 'bg-error',
   };
 
   function formatBytes(bytes: number): string {
@@ -38,7 +38,7 @@
   async function handleClearCache() {
     const confirmed = await confirm(
       'This will remove the downloaded Python environment and AI model. You will need to set up again to use semantic search.',
-      { title: 'Clear Cache', okLabel: 'Clear', cancelLabel: 'Cancel' }
+      { title: 'Clear Cache', okLabel: 'Clear', cancelLabel: 'Cancel' },
     );
     if (!confirmed) return;
 
@@ -83,7 +83,9 @@
         <div class="flex items-center justify-between">
           <div>
             <div class="text-sm font-medium text-primary">CLAP Server</div>
-            <div class="text-xs text-tertiary mt-0.5">AI-powered audio search using text descriptions</div>
+            <div class="text-xs text-tertiary mt-0.5">
+              AI-powered audio search using text descriptions
+            </div>
           </div>
           <div class="flex items-center gap-2">
             <div class="w-2 h-2 rounded-full {statusColor[clapState.setupStatus]}"></div>
@@ -113,7 +115,9 @@
           <div class="pt-3 border-t border-default space-y-2">
             <div class="flex items-center justify-between text-sm">
               <span class="text-tertiary">Device</span>
-              <span class="text-secondary">{clapState.device === 'cuda' ? 'GPU (CUDA)' : 'CPU'}</span>
+              <span class="text-secondary"
+                >{clapState.device === 'cuda' ? 'GPU (CUDA)' : 'CPU'}</span
+              >
             </div>
             <div class="flex items-center justify-between text-sm">
               <span class="text-tertiary">Model</span>

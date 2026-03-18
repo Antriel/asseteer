@@ -28,11 +28,16 @@
   });
 
   function startTimer() {
-    timer = setInterval(() => { elapsedSeconds += 1; }, 1000);
+    timer = setInterval(() => {
+      elapsedSeconds += 1;
+    }, 1000);
   }
 
   function stopTimer() {
-    if (timer) { clearInterval(timer); timer = null; }
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
   }
 
   async function runSetup() {
@@ -65,7 +70,7 @@
 
   function stepStatus(stepName: string): StepDisplayStatus {
     const steps = ['downloading-tools', 'installing-python', 'downloading-model'] as const;
-    const stepIdx = steps.indexOf(stepName as typeof steps[number]);
+    const stepIdx = steps.indexOf(stepName as (typeof steps)[number]);
 
     if (step === 'done') return 'done';
     if (step === 'error') return stepIdx <= activeStepIdx ? 'error' : 'idle';
@@ -82,29 +87,44 @@
     <!-- Header -->
     <div class="px-6 pt-6 pb-2">
       <h2 class="text-lg font-semibold text-primary">Setting Up Semantic Search</h2>
-      <p class="text-sm text-tertiary mt-1">This is a one-time setup. Future starts will be instant.</p>
+      <p class="text-sm text-tertiary mt-1">
+        This is a one-time setup. Future starts will be instant.
+      </p>
     </div>
 
     <!-- Steps -->
     <div class="px-6 py-4 space-y-4">
-      {#each [
-        { key: 'downloading-tools', label: 'Downloading runtime tools', size: '~30 MB' },
-        { key: 'installing-python', label: 'Installing Python environment', size: '~500 MB' },
-        { key: 'downloading-model', label: 'Downloading AI model', size: '~1-2 GB' },
-      ] as item (item.key)}
+      {#each [{ key: 'downloading-tools', label: 'Downloading runtime tools', size: '~30 MB' }, { key: 'installing-python', label: 'Installing Python environment', size: '~500 MB' }, { key: 'downloading-model', label: 'Downloading AI model', size: '~1-2 GB' }] as item (item.key)}
         {@const status = stepStatus(item.key)}
         <div class="flex items-center gap-3">
           <!-- Icon -->
           <div class="w-5 h-5 flex items-center justify-center">
             {#if status === 'done'}
-              <svg class="w-5 h-5 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+              <svg
+                class="w-5 h-5 text-success"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M5 13l4 4L19 7"
+                />
               </svg>
             {:else if status === 'running'}
-              <div class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin"></div>
+              <div
+                class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin"
+              ></div>
             {:else if status === 'error'}
               <svg class="w-5 h-5 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M6 18L18 6M6 6l12 12"
+                />
               </svg>
             {:else}
               <div class="w-4 h-4 rounded-full border-2 border-default"></div>

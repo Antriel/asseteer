@@ -1,6 +1,11 @@
 import type { Asset } from '$lib/types';
 import { getDatabase } from '$lib/database/connection';
-import { searchAssets as dbSearchAssets, countSearchResults, getAssetCount, getAssetCountByType } from '$lib/database/queries';
+import {
+  searchAssets as dbSearchAssets,
+  countSearchResults,
+  getAssetCount,
+  getAssetCountByType,
+} from '$lib/database/queries';
 import { clearThumbnailCache } from '$lib/state/thumbnails.svelte';
 
 // Maximum number of assets to display in the UI
@@ -18,7 +23,7 @@ class AssetsState {
   assets = $state<Asset[]>([]);
   isLoading = $state(false);
   totalCount = $state(0);
-  searchText = $state("");
+  searchText = $state('');
   // Track if there are more results than displayed
   hasMoreResults = $state(false);
   totalMatchingCount = $state(0);
@@ -34,7 +39,7 @@ class AssetsState {
    * Load assets from the database with optional type filter
    * Only loads assets when there's a search query to avoid loading millions of items
    */
-  async loadAssets(assetType?: "image" | "audio") {
+  async loadAssets(assetType?: 'image' | 'audio') {
     // Increment version to cancel any in-progress search
     const currentVersion = ++this.searchVersion;
 
@@ -72,7 +77,7 @@ class AssetsState {
         MAX_DISPLAY_LIMIT + 1,
         0,
         durationFilter,
-        this.folderPath
+        this.folderPath,
       );
 
       // Only update if this search is still current
@@ -83,7 +88,13 @@ class AssetsState {
 
       if (this.hasMoreResults) {
         // Results were truncated - run a COUNT query to get the true total
-        this.totalMatchingCount = await countSearchResults(db, this.searchText, assetType, durationFilter, this.folderPath);
+        this.totalMatchingCount = await countSearchResults(
+          db,
+          this.searchText,
+          assetType,
+          durationFilter,
+          this.folderPath,
+        );
         // Re-check cancellation after the count query
         if (currentVersion !== this.searchVersion) return;
       } else {
@@ -103,7 +114,7 @@ class AssetsState {
     } catch (error) {
       // Only log if this search is still current
       if (currentVersion === this.searchVersion) {
-        console.error("Failed to load assets:", error);
+        console.error('Failed to load assets:', error);
       }
     } finally {
       // Only clear loading if this search is still current
@@ -116,7 +127,7 @@ class AssetsState {
   /**
    * Search for assets with optional type filter
    */
-  searchAssets(text: string, assetType?: "image" | "audio") {
+  searchAssets(text: string, assetType?: 'image' | 'audio') {
     this.searchText = text;
     this.loadAssets(assetType);
   }
@@ -131,7 +142,7 @@ class AssetsState {
   /**
    * Set folder path filter and reload assets
    */
-  setFolderFilter(path: string | null, assetType?: "image" | "audio") {
+  setFolderFilter(path: string | null, assetType?: 'image' | 'audio') {
     this.folderPath = path;
     this.loadAssets(assetType);
   }
@@ -139,7 +150,7 @@ class AssetsState {
   /**
    * Get filtered assets by type (for derived computations)
    */
-  getFilteredAssets(assetType: "image" | "audio"): Asset[] {
+  getFilteredAssets(assetType: 'image' | 'audio'): Asset[] {
     return this.assets.filter((a) => a.asset_type === assetType);
   }
 }

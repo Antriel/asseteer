@@ -5,7 +5,9 @@
     items: any[];
     itemHeight: number;
     bufferItems?: number;
-    children: Snippet<[{ visibleItems: any[], startIndex: number, offsetY: number, endIndex: number }]>;
+    children: Snippet<
+      [{ visibleItems: any[]; startIndex: number; offsetY: number; endIndex: number }]
+    >;
   }
 
   let { items, itemHeight, bufferItems = 5, children }: Props = $props();
@@ -51,7 +53,7 @@
       // Item is below visible area (or too close to bottom) - scroll down
       const targetScroll = Math.min(
         totalHeight - containerHeight,
-        itemBottom - containerHeight + bufferPx
+        itemBottom - containerHeight + bufferPx,
       );
       containerElement.scrollTop = targetScroll;
       scrollTop = targetScroll;
@@ -82,16 +84,9 @@
   });
 </script>
 
-<div
-  bind:this={containerElement}
-  class="relative overflow-y-auto h-full"
-  onscroll={handleScroll}
->
+<div bind:this={containerElement} class="relative overflow-y-auto h-full" onscroll={handleScroll}>
   <div style="height: {totalHeight}px; position: relative;">
-    <div
-      class="absolute w-full"
-      style="transform: translateY({offsetY}px);"
-    >
+    <div class="absolute w-full" style="transform: translateY({offsetY}px);">
       {@render children({ visibleItems, startIndex, offsetY, endIndex })}
     </div>
   </div>

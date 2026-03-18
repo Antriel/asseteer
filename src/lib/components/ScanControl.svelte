@@ -33,9 +33,10 @@
       return `Scanning... ${progress.files_found} found, ${progress.files_inserted} saved${zipInfo}`;
     }
     if (progress.phase === 'inserting') {
-      const pct = progress.files_total > 0
-        ? Math.round((progress.files_inserted / progress.files_total) * 100)
-        : 0;
+      const pct =
+        progress.files_total > 0
+          ? Math.round((progress.files_inserted / progress.files_total) * 100)
+          : 0;
       return `Saving to database... ${progress.files_inserted}/${progress.files_total} (${pct}%)`;
     }
     return `Scan complete! ${progress.files_found} assets discovered.`;
@@ -118,7 +119,9 @@
 
   {#if assetsState.totalCount > 0}
     <div class="text-sm text-secondary">
-      Total assets discovered: <span class="font-semibold text-primary">{assetsState.totalCount}</span>
+      Total assets discovered: <span class="font-semibold text-primary"
+        >{assetsState.totalCount}</span
+      >
     </div>
   {/if}
 </div>

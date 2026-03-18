@@ -21,7 +21,9 @@
 
   <div>
     <button
-      class="flex items-center w-full gap-1 px-2 py-1 text-sm rounded hover:bg-tertiary transition-colors group {isSelected ? 'bg-accent-muted text-accent' : 'text-primary'}"
+      class="flex items-center w-full gap-1 px-2 py-1 text-sm rounded hover:bg-tertiary transition-colors group {isSelected
+        ? 'bg-accent-muted text-accent'
+        : 'text-primary'}"
       style="padding-left: {depth * 16 + 8}px"
       onclick={() => {
         onSelect(node);
@@ -36,14 +38,26 @@
         {/if}
       </span>
       {#if isZip}
-        <svg class="w-4 h-4 flex-shrink-0 {isSelected ? 'text-accent' : 'text-secondary'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+        <svg
+          class="w-4 h-4 flex-shrink-0 {isSelected ? 'text-accent' : 'text-secondary'}"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
+          />
         </svg>
       {:else}
         <FolderIcon size="sm" class={isSelected ? 'text-accent' : 'text-secondary'} />
       {/if}
       <span class="truncate flex-1 text-left">{node.name}</span>
-      <span class="text-xs text-tertiary flex-shrink-0 opacity-0 group-hover:opacity-100">{node.assetCount}</span>
+      <span class="text-xs text-tertiary flex-shrink-0 opacity-0 group-hover:opacity-100"
+        >{node.assetCount}</span
+      >
     </button>
 
     {#if isExpanded && children.length > 0}

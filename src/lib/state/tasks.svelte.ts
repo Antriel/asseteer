@@ -137,7 +137,7 @@ class ProcessingState {
         this.startProcessing(category).catch((error) => {
           console.error(`Failed to start ${category}:`, error);
           // Continue with other categories even if one fails
-        })
+        }),
       );
 
     if (promises.length === 0) {
@@ -393,7 +393,7 @@ export function getOverallProgress(state: ProcessingState): {
  */
 export function getCategoryProgress(
   state: ProcessingState,
-  category: ProcessingCategory
+  category: ProcessingCategory,
 ): CategoryProgress | null {
   return state.categoryProgress.get(category) || null;
 }
@@ -460,7 +460,7 @@ export function canStartCategory(state: ProcessingState, category: ProcessingCat
  */
 export function getCategoryStatus(
   state: ProcessingState,
-  category: ProcessingCategory
+  category: ProcessingCategory,
 ): 'idle' | 'running' | 'paused' | 'completed' {
   const progress = state.categoryProgress.get(category);
 

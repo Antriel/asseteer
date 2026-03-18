@@ -86,7 +86,7 @@
 
   // Check if filter is active
   let isFilterActive = $derived(
-    assetsState.durationFilter.minMs !== null || assetsState.durationFilter.maxMs !== null
+    assetsState.durationFilter.minMs !== null || assetsState.durationFilter.maxMs !== null,
   );
 
   // Summary text for the button
@@ -122,7 +122,7 @@
     isOpen = false;
   }
 
-  function applyPreset(preset: typeof presets[0]) {
+  function applyPreset(preset: (typeof presets)[0]) {
     assetsState.setDurationFilter(preset.min, preset.max);
 
     // Update inputs to show the preset values
@@ -164,7 +164,7 @@
 <div class="relative">
   <!-- Toggle Button -->
   <button
-    onclick={() => isOpen = !isOpen}
+    onclick={() => (isOpen = !isOpen)}
     class="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md transition-colors"
     class:bg-blue-500={isFilterActive}
     class:text-white={isFilterActive}
@@ -176,20 +176,38 @@
   >
     <!-- Clock icon -->
     <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="2"
+        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+      />
     </svg>
     <span class="max-w-[120px] truncate">{filterSummary()}</span>
     {#if isFilterActive}
       <span
         role="button"
         tabindex="0"
-        onclick={(e) => { e.stopPropagation(); clearFilter(); }}
-        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); clearFilter(); } }}
+        onclick={(e) => {
+          e.stopPropagation();
+          clearFilter();
+        }}
+        onkeydown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.stopPropagation();
+            clearFilter();
+          }
+        }}
         class="ml-1 hover:bg-blue-600 rounded p-0.5 cursor-pointer"
         title="Clear filter"
       >
         <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M6 18L18 6M6 6l12 12"
+          />
         </svg>
       </span>
     {/if}
@@ -200,13 +218,15 @@
     <!-- Backdrop -->
     <button
       class="fixed inset-0 z-40"
-      onclick={() => isOpen = false}
+      onclick={() => (isOpen = false)}
       onkeydown={(e) => e.key === 'Escape' && (isOpen = false)}
       aria-label="Close duration filter"
     ></button>
 
     <!-- Popover content -->
-    <div class="absolute top-full left-0 mt-2 z-50 w-72 bg-elevated border border-default rounded-lg shadow-lg p-4">
+    <div
+      class="absolute top-full left-0 mt-2 z-50 w-72 bg-elevated border border-default rounded-lg shadow-lg p-4"
+    >
       <h3 class="text-sm font-medium text-primary mb-3">Filter by Duration</h3>
 
       <!-- Custom range inputs -->
@@ -237,9 +257,7 @@
       </div>
 
       <!-- Format hint -->
-      <p class="text-xs text-tertiary mb-3">
-        Formats: 50ms, 1.5s, 2m, 2m30s, 1:30
-      </p>
+      <p class="text-xs text-tertiary mb-3">Formats: 50ms, 1.5s, 2m, 2m30s, 1:30</p>
 
       <!-- Apply button -->
       <button

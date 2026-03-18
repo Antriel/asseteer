@@ -79,5 +79,5 @@ export function showToast(message: string, type: ToastType = 'info', duration: n
  * Dismiss a toast notification
  */
 export function dismissToast(id: number) {
-  uiState.toasts = uiState.toasts.filter(t => t.id !== id);
+  uiState.toasts = uiState.toasts.filter((t) => t.id !== id);
 }

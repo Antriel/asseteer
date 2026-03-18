@@ -144,10 +144,7 @@
                   <div class="font-medium text-primary truncate" title={error.path}>
                     {error.filename}
                   </div>
-                  <div
-                    class="text-red-600 dark:text-red-400 truncate"
-                    title={error.error_message}
-                  >
+                  <div class="text-red-600 dark:text-red-400 truncate" title={error.error_message}>
                     {error.error_message}
                   </div>
                   {#if error.retry_count > 0}

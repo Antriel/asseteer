@@ -107,22 +107,20 @@
 
   // Unified stats - what to show in the toolbar
   let activeResultCount = $derived(
-    isSemanticModeEnabled ? clapState.semanticResults.length : assetsState.assets.length
+    isSemanticModeEnabled ? clapState.semanticResults.length : assetsState.assets.length,
   );
   let hasActiveSearch = $derived(
-    isSemanticModeEnabled
-      ? !!clapState.lastSearchQuery?.trim()
-      : !!assetsState.searchText?.trim()
+    isSemanticModeEnabled ? !!clapState.lastSearchQuery?.trim() : !!assetsState.searchText?.trim(),
   );
   let hasMoreResults = $derived(
-    isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults
+    isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults,
   );
 
   // Placeholder text based on search mode
   let placeholderText = $derived(
     isSemanticModeEnabled
       ? 'Semantic search (e.g., "footsteps on wood")...'
-      : `Search ${viewState.activeTab}...`
+      : `Search ${viewState.activeTab}...`,
   );
 </script>
 
@@ -135,7 +133,10 @@
           <Spinner size="sm" />
         </div>
       {:else}
-        <SearchIcon size="sm" class="absolute left-2 top-1/2 -translate-y-1/2 text-secondary pointer-events-none" />
+        <SearchIcon
+          size="sm"
+          class="absolute left-2 top-1/2 -translate-y-1/2 text-secondary pointer-events-none"
+        />
       {/if}
       <input
         type="text"
@@ -163,7 +164,12 @@
       >
         <!-- Brain/AI icon for semantic search -->
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+          />
         </svg>
         <span>Semantic</span>
       </button>
@@ -178,22 +184,27 @@
     <!-- Stats -->
     <div class="ml-auto flex items-center gap-2">
       {#if activeResultCount > 0}
-        <span class="text-sm" class:text-purple-600={isSemanticModeEnabled} class:dark:text-purple-400={isSemanticModeEnabled} class:text-secondary={!isSemanticModeEnabled}>
-          {activeResultCount.toLocaleString()} {isSemanticModeEnabled ? 'matches' : viewState.activeTab}
+        <span
+          class="text-sm"
+          class:text-purple-600={isSemanticModeEnabled}
+          class:dark:text-purple-400={isSemanticModeEnabled}
+          class:text-secondary={!isSemanticModeEnabled}
+        >
+          {activeResultCount.toLocaleString()}
+          {isSemanticModeEnabled ? 'matches' : viewState.activeTab}
         </span>
         {#if hasMoreResults}
-          <span class="text-xs text-warning" title="Results are limited for performance. Refine your search to see more specific results.">
+          <span
+            class="text-xs text-warning"
+            title="Results are limited for performance. Refine your search to see more specific results."
+          >
             (limit reached)
           </span>
         {/if}
       {:else if hasActiveSearch}
-        <span class="text-sm text-secondary">
-          No results
-        </span>
+        <span class="text-sm text-secondary"> No results </span>
       {:else}
-        <span class="text-sm text-tertiary">
-          Search to browse
-        </span>
+        <span class="text-sm text-tertiary"> Search to browse </span>
       {/if}
     </div>
   </div>

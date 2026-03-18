@@ -18,7 +18,7 @@
   let categoryDescription = $derived(
     category === 'image'
       ? 'Generates thumbnails and extracts dimensions'
-      : 'Extracts duration, sample rate, and channel info'
+      : 'Extracts duration, sample rate, and channel info',
   );
   let total = $derived(progress?.total || 0);
   let completed = $derived(progress?.completed || 0);

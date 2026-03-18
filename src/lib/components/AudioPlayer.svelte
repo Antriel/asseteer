@@ -14,14 +14,22 @@
     onEnded?: () => void;
   }
 
-  let { asset, isActive = false, autoPlay = false, restartKey = 0, onPlay, onPause, onEnded }: Props = $props();
+  let {
+    asset,
+    isActive = false,
+    autoPlay = false,
+    restartKey = 0,
+    onPlay,
+    onPause,
+    onEnded,
+  }: Props = $props();
 
   // Exported function to seek by percentage delta (e.g., 0.1 for +10%, -0.1 for -10%)
   // Returns { playing: boolean, stopped: boolean } indicating state after seek
   export function seekByPercent(delta: number): { playing: boolean; stopped: boolean } {
     if (!audioElement || !duration) return { playing: false, stopped: false };
 
-    const newTime = currentTime + (delta * duration);
+    const newTime = currentTime + delta * duration;
 
     if (newTime >= duration) {
       // Seeking past end - stop playback
@@ -240,14 +248,17 @@
   $effect(() => {
     if (restartKey > 0 && audioElement && audioSrc) {
       audioElement.currentTime = 0;
-      audioElement.play().then(() => {
-        isPlaying = true;
-        onPlay?.();
-      }).catch((error) => {
-        if (error.name !== 'AbortError') {
-          console.error('Restart play failed:', error);
-        }
-      });
+      audioElement
+        .play()
+        .then(() => {
+          isPlaying = true;
+          onPlay?.();
+        })
+        .catch((error) => {
+          if (error.name !== 'AbortError') {
+            console.error('Restart play failed:', error);
+          }
+        });
     }
   });
 
@@ -255,16 +266,19 @@
   function handleCanPlay() {
     if (shouldAutoPlay && audioElement) {
       shouldAutoPlay = false;
-      audioElement.play().then(() => {
-        isPlaying = true;
-        onPlay?.();
-      }).catch((error) => {
-        // Ignore AbortError - it's expected when source changes rapidly
-        if (error.name !== 'AbortError') {
-          console.error('Auto-play failed:', error);
-        }
-        isPlaying = false;
-      });
+      audioElement
+        .play()
+        .then(() => {
+          isPlaying = true;
+          onPlay?.();
+        })
+        .catch((error) => {
+          // Ignore AbortError - it's expected when source changes rapidly
+          if (error.name !== 'AbortError') {
+            console.error('Auto-play failed:', error);
+          }
+          isPlaying = false;
+        });
     }
   }
 </script>
@@ -295,48 +309,57 @@
       {/if}
     </button>
 
-  <!-- Progress bar -->
-  <div
-    class="flex-1 cursor-pointer"
-    role="slider"
-    tabindex="0"
-    aria-valuemin={0}
-    aria-valuemax={Math.round(duration)}
-    aria-valuenow={Math.round(currentTime)}
-    aria-label="Seek audio"
-    onclick={seek}
-    onkeydown={(e) => {
-      if (!audioElement) return;
-      if (e.key === 'ArrowRight') { e.preventDefault(); audioElement.currentTime = Math.min(duration, currentTime + duration * 0.05); }
-      else if (e.key === 'ArrowLeft') { e.preventDefault(); audioElement.currentTime = Math.max(0, currentTime - duration * 0.05); }
-    }}
-  >
-    <div class="h-1 bg-default rounded-sm overflow-hidden">
-      <div
-        class="h-full bg-accent transition-[width] duration-40"
-        style="width: {duration ? (currentTime / duration) * 100 : 0}%"
-      ></div>
+    <!-- Progress bar -->
+    <div
+      class="flex-1 cursor-pointer"
+      role="slider"
+      tabindex="0"
+      aria-valuemin={0}
+      aria-valuemax={Math.round(duration)}
+      aria-valuenow={Math.round(currentTime)}
+      aria-label="Seek audio"
+      onclick={seek}
+      onkeydown={(e) => {
+        if (!audioElement) return;
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          audioElement.currentTime = Math.min(duration, currentTime + duration * 0.05);
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          audioElement.currentTime = Math.max(0, currentTime - duration * 0.05);
+        }
+      }}
+    >
+      <div class="h-1 bg-default rounded-sm overflow-hidden">
+        <div
+          class="h-full bg-accent transition-[width] duration-40"
+          style="width: {duration ? (currentTime / duration) * 100 : 0}%"
+        ></div>
+      </div>
+      <div class="flex justify-between mt-1 text-[0.625rem] text-secondary">
+        <span>{formatTime(currentTime)}</span>
+        <span>{formatTime(duration)}</span>
+      </div>
     </div>
-    <div class="flex justify-between mt-1 text-[0.625rem] text-secondary">
-      <span>{formatTime(currentTime)}</span>
-      <span>{formatTime(duration)}</span>
-    </div>
-  </div>
 
-  <!-- Volume control -->
-  <div class="flex items-center gap-2 flex-shrink-0">
-    <svg class="w-4 h-4 text-secondary" fill="currentColor" viewBox="0 0 20 20">
-      <path fill-rule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414zm-2.829 2.828a1 1 0 011.415 0A5.983 5.983 0 0115 10a5.984 5.984 0 01-1.757 4.243 1 1 0 01-1.415-1.415A3.984 3.984 0 0013 10a3.983 3.983 0 00-1.172-2.828 1 1 0 010-1.415z" clip-rule="evenodd" />
-    </svg>
-    <input
-      type="range"
-      min="0"
-      max="1"
-      step="0.1"
-      bind:value={volume}
-      oninput={() => audioElement && (audioElement.volume = volume)}
-      class="w-[60px]"
-    />
-  </div>
+    <!-- Volume control -->
+    <div class="flex items-center gap-2 flex-shrink-0">
+      <svg class="w-4 h-4 text-secondary" fill="currentColor" viewBox="0 0 20 20">
+        <path
+          fill-rule="evenodd"
+          d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414zm-2.829 2.828a1 1 0 011.415 0A5.983 5.983 0 0115 10a5.984 5.984 0 01-1.757 4.243 1 1 0 01-1.415-1.415A3.984 3.984 0 0013 10a3.983 3.983 0 00-1.172-2.828 1 1 0 010-1.415z"
+          clip-rule="evenodd"
+        />
+      </svg>
+      <input
+        type="range"
+        min="0"
+        max="1"
+        step="0.1"
+        bind:value={volume}
+        oninput={() => audioElement && (audioElement.volume = volume)}
+        class="w-[60px]"
+      />
+    </div>
   {/if}
 </div>

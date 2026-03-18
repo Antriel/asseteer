@@ -139,7 +139,9 @@
   role="button"
   tabindex="0"
   onclick={onClose}
-  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClose(); }}
+  onkeydown={(e) => {
+    if (e.key === 'Enter' || e.key === ' ') onClose();
+  }}
 >
   <div
     class="relative w-[90vw] h-[90vh] flex flex-col"
@@ -150,27 +152,16 @@
     onkeydown={(e) => e.stopPropagation()}
   >
     <!-- Close button -->
-    <button
-      class="absolute top-4 right-4 btn-lightbox-nav z-10"
-      onclick={onClose}
-    >
-      ×
-    </button>
+    <button class="absolute top-4 right-4 btn-lightbox-nav z-10" onclick={onClose}> × </button>
 
     <!-- Navigation -->
     {#if onPrev}
-      <button
-        class="absolute top-1/2 -translate-y-1/2 left-4 btn-lightbox-nav"
-        onclick={onPrev}
-      >
+      <button class="absolute top-1/2 -translate-y-1/2 left-4 btn-lightbox-nav" onclick={onPrev}>
         ‹
       </button>
     {/if}
     {#if onNext}
-      <button
-        class="absolute top-1/2 -translate-y-1/2 right-4 btn-lightbox-nav"
-        onclick={onNext}
-      >
+      <button class="absolute top-1/2 -translate-y-1/2 right-4 btn-lightbox-nav" onclick={onNext}>
         ›
       </button>
     {/if}
@@ -200,20 +191,35 @@
       <div>
         <p class="font-medium">{asset.filename}</p>
         {#if asset.width && asset.height}
-          <p class="text-sm text-gray-300">{asset.width} × {asset.height} • {(asset.file_size / 1024).toFixed(0)} KB</p>
+          <p class="text-sm text-gray-300">
+            {asset.width} × {asset.height} • {(asset.file_size / 1024).toFixed(0)} KB
+          </p>
         {/if}
       </div>
 
       <div class="flex gap-2 items-center">
         <button class="btn-lightbox-control" onclick={showInFolder} title="Show in folder">
-          <svg class="w-4 h-4 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+          <svg class="w-4 h-4 inline-block" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            ><path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+            /></svg
+          >
         </button>
         <span class="w-px h-5 bg-gray-600"></span>
-        <button class="btn-lightbox-control" onclick={() => zoom = Math.max(zoom - 0.5, 0.5)}>−</button>
+        <button class="btn-lightbox-control" onclick={() => (zoom = Math.max(zoom - 0.5, 0.5))}
+          >−</button
+        >
         <span class="min-w-[4rem] text-center">{Math.round(zoom * 100)}%</span>
-        <button class="btn-lightbox-control" onclick={() => zoom = Math.min(zoom + 0.5, 5)}>+</button>
-        <button class="btn-lightbox-control" onclick={() => zoom = 1}>Reset</button>
-        <button class="btn-lightbox-control" onclick={() => showMetadata = !showMetadata}>Info</button>
+        <button class="btn-lightbox-control" onclick={() => (zoom = Math.min(zoom + 0.5, 5))}
+          >+</button
+        >
+        <button class="btn-lightbox-control" onclick={() => (zoom = 1)}>Reset</button>
+        <button class="btn-lightbox-control" onclick={() => (showMetadata = !showMetadata)}
+          >Info</button
+        >
       </div>
     </div>
 

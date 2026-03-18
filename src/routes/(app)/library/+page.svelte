@@ -57,8 +57,14 @@
       await assetsState.loadAssets(currentType);
     };
 
-    const unlistenImageComplete = await listen<CategoryProgress>('processing-complete-image', handleProcessingComplete);
-    const unlistenAudioComplete = await listen<CategoryProgress>('processing-complete-audio', handleProcessingComplete);
+    const unlistenImageComplete = await listen<CategoryProgress>(
+      'processing-complete-image',
+      handleProcessingComplete,
+    );
+    const unlistenAudioComplete = await listen<CategoryProgress>(
+      'processing-complete-audio',
+      handleProcessingComplete,
+    );
 
     unlistenFns.push(unlistenScan, unlistenImageComplete, unlistenAudioComplete);
   });
@@ -69,42 +75,35 @@
 
   // Check if we're in semantic search mode on audio tab
   let isSemanticModeEnabled = $derived(
-    viewState.activeTab === 'audio' &&
-    clapState.semanticSearchEnabled
+    viewState.activeTab === 'audio' && clapState.semanticSearchEnabled,
   );
 
   // Semantic search results with Asset compatibility (add width/height as null)
   let semanticAssets = $derived(
-    clapState.semanticResults.map(result => ({
+    clapState.semanticResults.map((result) => ({
       ...result,
       width: null,
       height: null,
-    }))
+    })),
   );
 
   // Unified "active assets" - what should be displayed based on current mode
-  let activeAssets = $derived(
-    isSemanticModeEnabled ? semanticAssets : assetsState.assets
-  );
+  let activeAssets = $derived(isSemanticModeEnabled ? semanticAssets : assetsState.assets);
 
   // Unified "has search" - whether there's an active search query
   let hasActiveSearch = $derived(
-    isSemanticModeEnabled
-      ? !!clapState.lastSearchQuery?.trim()
-      : !!assetsState.searchText?.trim()
+    isSemanticModeEnabled ? !!clapState.lastSearchQuery?.trim() : !!assetsState.searchText?.trim(),
   );
 
   // Whether any filter is active (search or folder)
   let hasAnyFilter = $derived(hasActiveSearch || !!assetsState.folderPath);
 
   // Unified "is loading" - whether a search is in progress
-  let isLoading = $derived(
-    isSemanticModeEnabled ? clapState.isSearching : assetsState.isLoading
-  );
+  let isLoading = $derived(isSemanticModeEnabled ? clapState.isSearching : assetsState.isLoading);
 
   // Unified "has more results" - whether results were truncated
   let hasMoreResults = $derived(
-    isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults
+    isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults,
   );
 </script>
 
@@ -127,18 +126,31 @@
       {#if isLoading}
         <div class="flex flex-col items-center justify-center h-full gap-4">
           <Spinner size="lg" />
-          <p class="text-secondary">{isSemanticModeEnabled ? 'Searching...' : 'Loading assets...'}</p>
+          <p class="text-secondary">
+            {isSemanticModeEnabled ? 'Searching...' : 'Loading assets...'}
+          </p>
         </div>
       {:else if !hasAnyFilter && activeAssets.length === 0}
         <!-- Empty state: No search query and no folder selected -->
         <div class="flex flex-col items-center justify-center h-full gap-4">
-          <svg class="w-16 h-16 text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          <svg
+            class="w-16 h-16 text-tertiary"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+            />
           </svg>
           <p class="text-primary font-medium">Search your {viewState.activeTab}</p>
           <p class="text-sm text-secondary">
             {#if assetsState.totalMatchingCount > 0}
-              You have {assetsState.totalMatchingCount.toLocaleString()} {viewState.activeTab} - type to search or open the folder panel
+              You have {assetsState.totalMatchingCount.toLocaleString()}
+              {viewState.activeTab} - type to search or open the folder panel
             {:else}
               No {viewState.activeTab} found - try scanning for assets first
             {/if}
@@ -147,8 +159,18 @@
       {:else if activeAssets.length === 0}
         <!-- Empty state: Filter active but no results -->
         <div class="flex flex-col items-center justify-center h-full gap-4">
-          <svg class="w-16 h-16 text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+          <svg
+            class="w-16 h-16 text-tertiary"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
+            />
           </svg>
           <p class="text-primary font-medium">No matching {viewState.activeTab}</p>
           <p class="text-sm text-secondary">
@@ -161,17 +183,15 @@
             {/if}
           </p>
         </div>
-      {:else}
-        {#if viewState.activeTab === 'images'}
-          {#if viewState.layoutMode === 'grid'}
-            <ImageGrid assets={activeAssets} />
-          {:else}
-            <!-- Table view for images -->
-            <AssetList assets={activeAssets} isLoading={assetsState.isLoading} />
-          {/if}
+      {:else if viewState.activeTab === 'images'}
+        {#if viewState.layoutMode === 'grid'}
+          <ImageGrid assets={activeAssets} />
         {:else}
-          <AudioList assets={activeAssets} showSimilarity={isSemanticModeEnabled} />
+          <!-- Table view for images -->
+          <AssetList assets={activeAssets} isLoading={assetsState.isLoading} />
         {/if}
+      {:else}
+        <AudioList assets={activeAssets} showSimilarity={isSemanticModeEnabled} />
       {/if}
     </div>
   </main>

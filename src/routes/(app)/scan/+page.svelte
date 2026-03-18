@@ -58,9 +58,8 @@
         uiState.scanProgress = `Scanning... ${event.files_found} found, ${event.files_inserted} saved${zipInfo}`;
       }
     } else if (event.phase === 'inserting') {
-      const pct = event.files_total > 0
-        ? Math.round((event.files_inserted / event.files_total) * 100)
-        : 0;
+      const pct =
+        event.files_total > 0 ? Math.round((event.files_inserted / event.files_total) * 100) : 0;
       uiState.scanProgress = `Saving to database... ${event.files_inserted}/${event.files_total} (${pct}%)`;
     } else {
       uiState.scanProgress = `Scan complete! ${event.files_found} assets discovered.`;
@@ -136,7 +135,7 @@
   let progressPercent = $derived(
     uiState.scanDetails.filesTotal > 0
       ? Math.round((uiState.scanDetails.filesInserted / uiState.scanDetails.filesTotal) * 100)
-      : 0
+      : 0,
   );
 </script>
 
@@ -178,7 +177,9 @@
               <p class="text-3xl font-bold text-accent">{uiState.scanDetails.filesFound}</p>
               <p class="text-sm text-secondary">files found</p>
               {#if uiState.scanDetails.zipsScanned > 0}
-                <p class="text-xs text-tertiary mt-1">{uiState.scanDetails.zipsScanned} zip archives scanned</p>
+                <p class="text-xs text-tertiary mt-1">
+                  {uiState.scanDetails.zipsScanned} zip archives scanned
+                </p>
               {/if}
             </div>
           {:else if uiState.scanDetails.phase === 'scanning'}
@@ -187,7 +188,9 @@
                 <!-- Discovery done: show progress bar for remaining inserts -->
                 <div class="flex items-center justify-between text-sm mb-2">
                   <span class="text-secondary">Progress</span>
-                  <span class="text-primary font-medium">{uiState.scanDetails.filesInserted} / {uiState.scanDetails.filesTotal}</span>
+                  <span class="text-primary font-medium"
+                    >{uiState.scanDetails.filesInserted} / {uiState.scanDetails.filesTotal}</span
+                  >
                 </div>
                 <div class="h-2 bg-tertiary rounded-full overflow-hidden">
                   <div
@@ -204,12 +207,16 @@
                     <p class="text-xs text-secondary">found</p>
                   </div>
                   <div class="text-center flex-1">
-                    <p class="text-2xl font-bold text-success">{uiState.scanDetails.filesInserted}</p>
+                    <p class="text-2xl font-bold text-success">
+                      {uiState.scanDetails.filesInserted}
+                    </p>
                     <p class="text-xs text-secondary">saved</p>
                   </div>
                 </div>
                 {#if uiState.scanDetails.zipsScanned > 0}
-                  <p class="text-xs text-tertiary text-center mt-1">{uiState.scanDetails.zipsScanned} zip archives scanned</p>
+                  <p class="text-xs text-tertiary text-center mt-1">
+                    {uiState.scanDetails.zipsScanned} zip archives scanned
+                  </p>
                 {/if}
               {/if}
             </div>
@@ -217,7 +224,9 @@
             <div class="mb-4">
               <div class="flex items-center justify-between text-sm mb-2">
                 <span class="text-secondary">Progress</span>
-                <span class="text-primary font-medium">{uiState.scanDetails.filesInserted} / {uiState.scanDetails.filesTotal}</span>
+                <span class="text-primary font-medium"
+                  >{uiState.scanDetails.filesInserted} / {uiState.scanDetails.filesTotal}</span
+                >
               </div>
               <div class="h-2 bg-tertiary rounded-full overflow-hidden">
                 <div
@@ -229,7 +238,10 @@
             </div>
           {/if}
 
-          <p class="text-xs text-tertiary text-center truncate" title={uiState.scanDetails.currentPath}>
+          <p
+            class="text-xs text-tertiary text-center truncate"
+            title={uiState.scanDetails.currentPath}
+          >
             {uiState.scanDetails.currentPath}
           </p>
         </div>
@@ -237,9 +249,16 @@
     {:else if uiState.scanDetails.phase === 'complete'}
       <!-- Scan complete -->
       <div class="text-center">
-        <div class="w-20 h-20 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-4">
+        <div
+          class="w-20 h-20 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-4"
+        >
           <svg class="w-10 h-10 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M5 13l4 4L19 7"
+            />
           </svg>
         </div>
         <h3 class="text-xl font-semibold text-primary mb-2">Scan Complete</h3>
@@ -265,25 +284,32 @@
         onclick={selectFolder}
         class="group flex flex-col items-center justify-center w-full max-w-md p-12 border-2 border-dashed border-default hover:border-accent rounded-2xl transition-default cursor-pointer bg-secondary/50 hover:bg-secondary"
       >
-        <div class="w-20 h-20 rounded-full bg-accent/10 group-hover:bg-accent/20 flex items-center justify-center mb-4 transition-default">
+        <div
+          class="w-20 h-20 rounded-full bg-accent/10 group-hover:bg-accent/20 flex items-center justify-center mb-4 transition-default"
+        >
           <svg class="w-10 h-10 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+            />
           </svg>
         </div>
         <h3 class="text-xl font-semibold text-primary mb-2">Select a Folder</h3>
         <p class="text-sm text-secondary text-center">
           Choose a folder to scan for images and audio files
         </p>
-        <p class="text-xs text-tertiary mt-2">
-          Supports ZIP archives
-        </p>
+        <p class="text-xs text-tertiary mt-2">Supports ZIP archives</p>
       </button>
 
       <!-- Asset stats -->
       {#if assetsState.totalCount > 0}
         <div class="mt-8 text-center">
           <p class="text-sm text-secondary">
-            Total assets in library: <span class="font-semibold text-primary">{assetsState.totalCount}</span>
+            Total assets in library: <span class="font-semibold text-primary"
+              >{assetsState.totalCount}</span
+            >
           </p>
         </div>
       {/if}

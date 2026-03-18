@@ -1,11 +1,11 @@
 ---
 # asseteer-x16e
 title: Frontend testing & debug stuck Loading assets
-status: todo
+status: completed
 type: task
 priority: high
 created_at: 2026-03-17T06:13:02Z
-updated_at: 2026-03-17T06:13:02Z
+updated_at: 2026-03-18T08:10:15Z
 ---
 
 Investigate and fix the "Loading assets..." hang in the library search view, and set up frontend testing infrastructure.

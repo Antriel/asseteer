@@ -126,12 +126,7 @@
       {@const pendingCount = processingState.getPendingCountForCategory(category)}
       {@const disabled = pendingCount === 0 && !progress?.isRunning}
 
-      <ProcessingCategoryCard
-        {category}
-        {progress}
-        {pendingCount}
-        {disabled}
-      />
+      <ProcessingCategoryCard {category} {progress} {pendingCount} {disabled} />
     {/each}
 
     <!-- CLAP audio embeddings processing -->
@@ -149,12 +144,7 @@
     <div
       class="flex items-center gap-2 p-3 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded"
     >
-      <svg
-        class="w-5 h-5 text-orange-500"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-      >
+      <svg class="w-5 h-5 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path
           stroke-linecap="round"
           stroke-linejoin="round"

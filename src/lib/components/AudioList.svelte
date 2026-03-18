@@ -120,7 +120,7 @@
 
   function getSelectedIndex(): number {
     if (!selectedAsset) return -1;
-    return assets.findIndex(a => a.id === selectedAsset!.id);
+    return assets.findIndex((a) => a.id === selectedAsset!.id);
   }
 
   function navigateToIndex(newIndex: number) {
@@ -226,7 +226,9 @@
             {selectedAsset.filename}
           </p>
           <div class="flex gap-4 mt-1 text-xs text-secondary">
-            <span>{selectedAsset.duration_ms ? formatDuration(selectedAsset.duration_ms) : '—'}</span>
+            <span
+              >{selectedAsset.duration_ms ? formatDuration(selectedAsset.duration_ms) : '—'}</span
+            >
             {#if selectedAsset.sample_rate}
               <span>{selectedAsset.sample_rate / 1000} kHz</span>
             {/if}
@@ -249,7 +251,12 @@
           title="Open in file explorer"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+            />
           </svg>
         </button>
       </div>
@@ -275,7 +282,9 @@
       />
     </div>
   {:else}
-    <div class="p-6 bg-secondary border border-default rounded-lg text-center text-secondary flex-shrink-0">
+    <div
+      class="p-6 bg-secondary border border-default rounded-lg text-center text-secondary flex-shrink-0"
+    >
       Select an audio file to play
     </div>
   {/if}
@@ -295,17 +304,29 @@
               title={formatLocation(asset)}
             >
               <!-- Audio icon -->
-              <div class="w-12 h-12 flex items-center justify-center rounded-lg flex-shrink-0" class:bg-accent={selectedAsset?.id === asset.id} class:bg-primary={selectedAsset?.id !== asset.id}>
-                <AudioIcon size="lg" class={selectedAsset?.id === asset.id ? 'text-white' : 'text-secondary'} />
+              <div
+                class="w-12 h-12 flex items-center justify-center rounded-lg flex-shrink-0"
+                class:bg-accent={selectedAsset?.id === asset.id}
+                class:bg-primary={selectedAsset?.id !== asset.id}
+              >
+                <AudioIcon
+                  size="lg"
+                  class={selectedAsset?.id === asset.id ? 'text-white' : 'text-secondary'}
+                />
               </div>
 
               <!-- Audio metadata -->
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2 min-w-0">
-                  <p class="font-semibold text-primary whitespace-nowrap overflow-hidden text-ellipsis flex-shrink-0">
+                  <p
+                    class="font-semibold text-primary whitespace-nowrap overflow-hidden text-ellipsis flex-shrink-0"
+                  >
                     {asset.filename}
                   </p>
-                  <span class="text-xs text-secondary whitespace-nowrap overflow-hidden text-ellipsis flex-1 min-w-0" style="direction: rtl;">
+                  <span
+                    class="text-xs text-secondary whitespace-nowrap overflow-hidden text-ellipsis flex-1 min-w-0"
+                    style="direction: rtl;"
+                  >
                     {formatDirectoryPath(asset)}
                   </span>
                   {#if asset.zip_entry}
@@ -327,11 +348,12 @@
 
               <!-- Similarity score (semantic search) -->
               {#if showSimilarity && asset.similarity !== undefined}
-                <div class="flex-shrink-0 px-2 py-1 bg-purple-100 dark:bg-purple-900/30 rounded text-xs font-medium text-purple-700 dark:text-purple-300">
+                <div
+                  class="flex-shrink-0 px-2 py-1 bg-purple-100 dark:bg-purple-900/30 rounded text-xs font-medium text-purple-700 dark:text-purple-300"
+                >
                   {formatSimilarity(asset.similarity)}
                 </div>
               {/if}
-
             </button>
           {/each}
         </div>

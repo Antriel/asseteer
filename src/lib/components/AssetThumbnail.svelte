@@ -3,7 +3,12 @@
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { invoke } from '@tauri-apps/api/core';
   import type { Asset } from '$lib/types';
-  import { getThumbnailUrl, hasThumbnailFailed, requestThumbnail, cancelThumbnail } from '$lib/state/thumbnails.svelte';
+  import {
+    getThumbnailUrl,
+    hasThumbnailFailed,
+    requestThumbnail,
+    cancelThumbnail,
+  } from '$lib/state/thumbnails.svelte';
 
   interface Props {
     asset: Asset;
@@ -15,8 +20,10 @@
 
   let isSmallImage = $derived(
     asset.asset_type === 'image' &&
-    asset.width != null && asset.height != null &&
-    asset.width <= THUMBNAIL_MAX && asset.height <= THUMBNAIL_MAX
+      asset.width != null &&
+      asset.height != null &&
+      asset.width <= THUMBNAIL_MAX &&
+      asset.height <= THUMBNAIL_MAX,
   );
 
   let thumbnailUrl = $derived(getThumbnailUrl(asset.id));
@@ -26,10 +33,11 @@
   let smallImageFailed = $state(false);
 
   let isLoading = $derived(
-    asset.asset_type !== 'image' ? false :
-    isSmallImage
-      ? !smallImageUrl && !smallImageFailed
-      : !thumbnailUrl && !thumbnailFailed
+    asset.asset_type !== 'image'
+      ? false
+      : isSmallImage
+        ? !smallImageUrl && !smallImageFailed
+        : !thumbnailUrl && !thumbnailFailed,
   );
 
   let displayUrl = $derived(isSmallImage ? smallImageUrl : thumbnailUrl);
@@ -63,7 +71,9 @@
   });
 </script>
 
-<div class="flex items-center justify-center w-16 h-16 bg-secondary border border-default rounded overflow-hidden">
+<div
+  class="flex items-center justify-center w-16 h-16 bg-secondary border border-default rounded overflow-hidden"
+>
   {#if isLoading}
     <span class="text-xs text-secondary">...</span>
   {:else if displayUrl}
