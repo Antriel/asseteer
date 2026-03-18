@@ -184,7 +184,10 @@ pub fn get_clap_cache_size() -> Result<u64, String> {
 
 /// Clear the uv cache (downloaded Python, packages, etc.)
 #[tauri::command]
-pub fn clear_clap_cache() -> Result<(), String> {
+pub async fn clear_clap_cache() -> Result<(), String> {
+    // Stop the server first so it releases file locks on the cache directory
+    crate::clap::stop_server_and_wait().await;
+
     let cache_dir = crate::clap::uv::uv_cache_dir();
     if cache_dir.exists() {
         std::fs::remove_dir_all(&cache_dir)

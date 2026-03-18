@@ -31,6 +31,9 @@ class UIState {
   // Toast notifications
   toasts = $state<Toast[]>([]);
 
+  // Confirm dialog
+  confirm = $state<ConfirmRequest | null>(null);
+
   // Reset scan details
   resetScanDetails() {
     this.scanDetails = {
@@ -42,6 +45,13 @@ class UIState {
       currentPath: null,
     };
   }
+}
+
+export interface ConfirmRequest {
+  message: string;
+  title: string;
+  confirmLabel: string;
+  resolve: (value: boolean) => void;
 }
 
 // Toast notification types
@@ -80,4 +90,23 @@ export function showToast(message: string, type: ToastType = 'info', duration: n
  */
 export function dismissToast(id: number) {
   uiState.toasts = uiState.toasts.filter((t) => t.id !== id);
+}
+
+/**
+ * Show a confirm dialog. Returns true if confirmed, false if cancelled.
+ */
+export function showConfirm(
+  message: string,
+  title: string = 'Confirm',
+  confirmLabel: string = 'Confirm',
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    uiState.confirm = { message, title, confirmLabel, resolve };
+  });
+}
+
+export function resolveConfirm(value: boolean) {
+  const req = uiState.confirm;
+  uiState.confirm = null;
+  req?.resolve(value);
 }

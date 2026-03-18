@@ -1,7 +1,6 @@
 <script lang="ts">
   import { clapState, type ClapSetupStatus } from '$lib/state/clap.svelte';
-  import { showToast } from '$lib/state/ui.svelte';
-  import { confirm } from '@tauri-apps/plugin-dialog';
+  import { showToast, showConfirm } from '$lib/state/ui.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { openPath } from '@tauri-apps/plugin-opener';
   import ClapSetupDialog from '$lib/components/ClapSetupDialog.svelte';
@@ -36,9 +35,10 @@
   }
 
   async function handleClearCache() {
-    const confirmed = await confirm(
+    const confirmed = await showConfirm(
       'This will remove the downloaded Python environment and AI model. You will need to set up again to use semantic search.',
-      { title: 'Clear Cache', okLabel: 'Clear', cancelLabel: 'Cancel' },
+      'Clear Cache',
+      'Clear',
     );
     if (!confirmed) return;
 

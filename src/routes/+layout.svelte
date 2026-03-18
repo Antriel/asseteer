@@ -4,6 +4,7 @@
   import Sidebar from '$lib/components/layout/Sidebar.svelte';
   import StatusBar from '$lib/components/layout/StatusBar.svelte';
   import ToastContainer from '$lib/components/shared/ToastContainer.svelte';
+  import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
   import { processingState } from '$lib/state/tasks.svelte';
   import { clapState } from '$lib/state/clap.svelte';
 
@@ -39,4 +40,7 @@
 
   <!-- Global toast notifications -->
   <ToastContainer />
+
+  <!-- Global confirm dialog -->
+  <ConfirmDialog />
 </div>

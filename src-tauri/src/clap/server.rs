@@ -261,3 +261,14 @@ pub fn stop_server() {
         }
     }
 }
+
+/// Stops the CLAP server and waits for the process to fully exit.
+/// Use this before deleting files the server may have open.
+pub async fn stop_server_and_wait() {
+    let mut guard = SERVER_PROCESS.lock().await;
+    if let Some(mut child) = guard.take() {
+        let _ = child.kill();
+        // Wait for the process to exit so the OS releases file handles
+        let _ = child.wait();
+    }
+}
