@@ -46,6 +46,13 @@
 					textClass: 'text-orange-700 dark:text-orange-300'
 				};
 			case 'completed':
+				if (failed > 0) {
+					return {
+						label: 'Completed with errors',
+						bgClass: 'bg-red-100 dark:bg-red-900/30',
+						textClass: 'text-red-700 dark:text-red-300'
+					};
+				}
 				return {
 					label: 'Completed',
 					bgClass: 'bg-green-100 dark:bg-green-900/30',
@@ -235,8 +242,8 @@
 			</div>
 		</div>
 
-		<!-- Progress display when processing -->
-		{#if progress && (status === 'running' || status === 'paused')}
+		<!-- Progress display when processing or completed -->
+		{#if progress && (status === 'running' || status === 'paused' || status === 'completed')}
 			<div class="flex flex-col gap-2">
 				<!-- Progress bar -->
 				<div class="flex flex-col gap-1">
