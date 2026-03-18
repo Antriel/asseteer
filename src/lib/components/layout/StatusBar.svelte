@@ -137,7 +137,7 @@
     <a href="/settings" class="flex items-center gap-2 text-xs hover:text-accent transition-colors">
       {#if clapState.serverStarting || clapState.setupStatus === 'setting-up'}
         <div class="w-2 h-2 rounded-full bg-warning animate-pulse"></div>
-        <span class="text-warning">CLAP: Starting...</span>
+        <span class="text-warning">CLAP: {clapState.startupDetail ?? 'Starting...'}</span>
       {:else if clapState.isSearching}
         <div class="w-2 h-2 rounded-full bg-accent animate-pulse"></div>
         <span class="text-accent">CLAP: Searching...</span>

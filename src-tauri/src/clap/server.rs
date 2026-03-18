@@ -13,16 +13,37 @@ use super::logs;
 use super::uv;
 
 use once_cell::sync::Lazy;
+use tauri::Emitter;
+
+#[derive(Clone, serde::Serialize)]
+pub struct ClapStartupProgress {
+    pub phase: String,
+    pub detail: Option<String>,
+}
+
+fn emit_startup_progress(phase: &str, detail: Option<&str>) {
+    if let Some(handle) = super::get_app_handle() {
+        let _ = handle.emit(
+            "clap-startup-progress",
+            ClapStartupProgress {
+                phase: phase.to_string(),
+                detail: detail.map(|s| s.to_string()),
+            },
+        );
+    }
+}
 
 static SERVER_PROCESS: Lazy<Mutex<Option<Child>>> = Lazy::new(|| Mutex::new(None));
 
 /// Ensures CLAP server is running, starts it if needed
 pub async fn ensure_server_running() -> Result<(), String> {
     println!("[CLAP] Checking if server is running...");
+    emit_startup_progress("checking", None);
 
     // Check if already running (quick check without lock)
     if get_clap_client().await.health_check().await.is_ok() {
         println!("[CLAP] Server already running");
+        emit_startup_progress("ready", None);
         return Ok(());
     }
 
@@ -34,12 +55,19 @@ pub async fn ensure_server_running() -> Result<(), String> {
     // Double-check after acquiring lock
     if get_clap_client().await.health_check().await.is_ok() {
         println!("[CLAP] Server started by another task");
+        emit_startup_progress("ready", None);
         return Ok(());
     }
 
     let clap_dir = find_clap_server_dir()?;
 
-    let child = start_server_process(&clap_dir).await?;
+    let child = match start_server_process(&clap_dir).await {
+        Ok(child) => child,
+        Err(e) => {
+            emit_startup_progress("error", Some(&e));
+            return Err(e);
+        }
+    };
 
     println!("[CLAP] Process spawned with PID: {}", child.id());
 
@@ -52,12 +80,19 @@ pub async fn ensure_server_running() -> Result<(), String> {
 
     // Hold lock until server is ready — prevents concurrent callers from
     // spawning duplicate server processes during the startup window
-    wait_for_server_ready().await?;
+    emit_startup_progress("waiting-for-server", Some("Starting Python server"));
+    if let Err(e) = wait_for_server_ready().await {
+        emit_startup_progress("error", Some(&e));
+        return Err(e);
+    }
 
     drop(guard);
 
     // Trigger model preload so first inference is fast
+    emit_startup_progress("loading-model", Some("Loading AI model"));
     call_preload().await;
+
+    emit_startup_progress("ready", None);
 
     Ok(())
 }
@@ -92,10 +127,16 @@ fn find_clap_server_dir() -> Result<std::path::PathBuf, String> {
 async fn start_server_process(clap_dir: &std::path::Path) -> Result<Child, String> {
     let (stdout, stderr, log_path) = logs::create_log_file()?;
 
+    // Emit download event only if uv isn't already cached
+    if !uv::uv_bin_path().exists() {
+        emit_startup_progress("downloading-uv", Some("Downloading runtime tools (~30 MB)"));
+    }
+
     // Try uv first
     match uv::get_or_download_uv().await {
         Ok(uv_path) => {
             println!("[CLAP] Starting server via uv: {:?}", uv_path);
+            emit_startup_progress("starting-process", Some("Starting Python server"));
             let child = Command::new(&uv_path)
                 .args([
                     "run",

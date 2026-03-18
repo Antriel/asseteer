@@ -184,7 +184,17 @@
   {:else if clapState.serverStarting}
     <div class="flex items-center gap-2 p-3 bg-secondary rounded">
       <Spinner size="sm" />
-      <span class="text-sm text-secondary">Starting CLAP server (loading model)...</span>
+      <span class="text-sm text-secondary">
+        {#if clapState.startupPhase === 'downloading-uv'}
+          Downloading runtime tools...
+        {:else if clapState.startupPhase === 'loading-model'}
+          Loading AI model...
+        {:else if clapState.startupDetail}
+          {clapState.startupDetail}...
+        {:else}
+          Starting CLAP server...
+        {/if}
+      </span>
     </div>
   {:else}
     <!-- Server is available - show processing controls -->

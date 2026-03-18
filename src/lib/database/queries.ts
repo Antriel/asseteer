@@ -591,3 +591,15 @@ export async function getClapCacheSize(): Promise<number> {
 export async function clearClapCache(): Promise<void> {
   return invoke('clear_clap_cache');
 }
+
+/**
+ * Check what CLAP setup artifacts exist on disk
+ */
+export interface ClapSetupStateInfo {
+  uv_installed: boolean;
+  cache_exists: boolean;
+}
+
+export async function checkClapSetupState(): Promise<ClapSetupStateInfo> {
+  return invoke('check_clap_setup_state');
+}

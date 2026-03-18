@@ -204,6 +204,28 @@ pub fn get_clap_log_dir() -> String {
     crate::clap::log_dir().to_string_lossy().into_owned()
 }
 
+/// Check what CLAP setup artifacts exist on disk
+#[derive(Serialize)]
+pub struct ClapSetupState {
+    pub uv_installed: bool,
+    pub cache_exists: bool,
+}
+
+#[tauri::command]
+pub fn check_clap_setup_state() -> ClapSetupState {
+    let uv_installed = crate::clap::uv::uv_bin_path().exists();
+    let cache_dir = crate::clap::uv::uv_cache_dir();
+    let cache_exists = cache_dir.exists()
+        && cache_dir
+            .read_dir()
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false);
+    ClapSetupState {
+        uv_installed,
+        cache_exists,
+    }
+}
+
 fn dir_size(path: &std::path::Path) -> std::io::Result<u64> {
     let mut total = 0;
     if path.is_dir() {

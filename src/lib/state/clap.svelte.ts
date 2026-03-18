@@ -12,9 +12,11 @@ import {
   getClapServerInfo,
   getClapCacheSize,
   clearClapCache,
+  checkClapSetupState,
   type SemanticSearchResult,
   type ClapServerInfo,
 } from '$lib/database/queries';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { DurationFilter } from '$lib/state/assets.svelte';
 
 // Maximum number of semantic search results to display
@@ -24,6 +26,15 @@ const MAX_SEMANTIC_RESULTS = 500;
  * CLAP state for server management and semantic search
  */
 export type ClapSetupStatus = 'not-configured' | 'setting-up' | 'ready' | 'offline' | 'error';
+
+export type ClapStartupPhase =
+  | 'checking'
+  | 'downloading-uv'
+  | 'starting-process'
+  | 'waiting-for-server'
+  | 'loading-model'
+  | 'ready'
+  | 'error';
 
 class ClapState {
   // Server status
@@ -40,6 +51,10 @@ class ClapState {
   setupError = $state<string | null>(null);
   cacheSize = $state(0);
 
+  // Startup progress (from backend events)
+  startupPhase = $state<ClapStartupPhase | null>(null);
+  startupDetail = $state<string | null>(null);
+
   // Semantic search
   semanticSearchEnabled = $state(false);
   semanticResults = $state<SemanticSearchResult[]>([]);
@@ -49,6 +64,9 @@ class ClapState {
 
   // Health monitoring
   private healthInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Startup event listener
+  private unlistenStartup: UnlistenFn | null = null;
 
   // Search cancellation tracking
   private searchVersion = 0;
@@ -71,6 +89,30 @@ class ClapState {
   }
 
   /**
+   * Listen for startup progress events from the backend
+   */
+  async listenForStartupEvents(): Promise<void> {
+    if (this.unlistenStartup) return; // Already listening
+    this.unlistenStartup = await listen<{ phase: string; detail: string | null }>(
+      'clap-startup-progress',
+      (event) => {
+        this.startupPhase = event.payload.phase as ClapStartupPhase;
+        this.startupDetail = event.payload.detail;
+
+        if (event.payload.phase === 'ready') {
+          this.serverAvailable = true;
+          this.serverStarting = false;
+          this.setupStatus = 'ready';
+        } else if (event.payload.phase === 'error') {
+          this.serverStarting = false;
+          this.setupError = event.payload.detail;
+          this.setupStatus = 'error';
+        }
+      },
+    );
+  }
+
+  /**
    * Start CLAP server if not running
    */
   async ensureServer(): Promise<boolean> {
@@ -78,18 +120,30 @@ class ClapState {
     if (this.serverAvailable) return true;
 
     this.serverStarting = true;
+    this.setupStatus = 'setting-up';
+    this.setupError = null;
+    this.startupPhase = null;
+    this.startupDetail = null;
     try {
       console.log('[CLAP State] Calling startClapServer...');
       await startClapServer();
       console.log('[CLAP State] startClapServer returned successfully');
       this.serverAvailable = true;
+      this.setupStatus = 'ready';
+      await this.refreshServerInfo();
+      this.startHealthMonitor();
       return true;
     } catch (error) {
       console.error('[CLAP State] Failed to start server:', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      this.setupError = msg;
+      this.setupStatus = 'error';
       this.serverAvailable = false;
       return false;
     } finally {
       this.serverStarting = false;
+      this.startupPhase = null;
+      this.startupDetail = null;
       console.log('[CLAP State] ensureServer finished, serverAvailable:', this.serverAvailable);
     }
   }
@@ -180,24 +234,11 @@ class ClapState {
   }
 
   /**
-   * Run first-time setup: start server (triggers uv download + Python install + model download)
+   * Run first-time setup or restart server.
+   * Delegates to ensureServer() which handles all status updates.
    */
   async setup(): Promise<boolean> {
-    this.setupStatus = 'setting-up';
-    this.setupError = null;
-    try {
-      await startClapServer();
-      this.serverAvailable = true;
-      await this.refreshServerInfo();
-      this.setupStatus = 'ready';
-      this.startHealthMonitor();
-      return true;
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      this.setupError = msg;
-      this.setupStatus = 'error';
-      return false;
-    }
+    return this.ensureServer();
   }
 
   /**
@@ -269,11 +310,26 @@ class ClapState {
    * Initialize: check if server is already running, update state accordingly
    */
   async initialize(): Promise<void> {
+    // Start listening for backend startup events
+    await this.listenForStartupEvents();
+
     const available = await this.checkServer();
     if (available) {
       await this.refreshServerInfo();
       this.setupStatus = 'ready';
       this.startHealthMonitor();
+    } else {
+      // Check if setup artifacts exist to distinguish "never set up" from "offline"
+      try {
+        const state = await checkClapSetupState();
+        if (state.uv_installed || state.cache_exists) {
+          this.setupStatus = 'offline';
+        } else {
+          this.setupStatus = 'not-configured';
+        }
+      } catch {
+        this.setupStatus = 'not-configured';
+      }
     }
     await this.refreshCacheSize();
   }

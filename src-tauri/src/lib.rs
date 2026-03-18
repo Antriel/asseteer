@@ -42,6 +42,9 @@ pub fn run() {
             // Initialize uv module with app data directory
             clap::uv::init_app_data_dir(app_dir.clone());
 
+            // Store app handle for CLAP event emission
+            clap::init_app_handle(app.handle().clone());
+
             // Initialize database pool
             let db_path = app_dir.join("asseteer.db");
             let pool = tauri::async_runtime::block_on(async {
@@ -89,6 +92,7 @@ pub fn run() {
             commands::search::get_clap_cache_size,
             commands::search::clear_clap_cache,
             commands::search::get_clap_log_dir,
+            commands::search::check_clap_setup_state,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

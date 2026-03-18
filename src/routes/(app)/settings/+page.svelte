@@ -126,12 +126,12 @@
           </div>
         {:else if clapState.setupStatus === 'offline'}
           <div class="flex items-center justify-between pt-3 border-t border-default">
-            <span class="text-sm text-secondary">Server stopped unexpectedly</span>
+            <span class="text-sm text-secondary">CLAP server not running</span>
             <button
               onclick={handleSetup}
               class="px-4 py-2 text-sm font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors"
             >
-              Restart
+              Start Server
             </button>
           </div>
         {/if}
