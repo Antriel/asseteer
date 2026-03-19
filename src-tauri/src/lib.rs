@@ -15,13 +15,16 @@ use database::{initialize_db, close_db, DbPool};
 use task_system::WorkQueue;
 use thumbnail_worker::ThumbnailWorkerHandle;
 use tauri::Manager;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 /// Application state shared across all commands
 pub struct AppState {
     pub pool: DbPool,
     pub work_queue: Arc<WorkQueue>,
     pub thumbnail_worker: ThumbnailWorkerHandle,
+    /// Cached rescan previews, keyed by folder_id
+    pub(crate) rescan_previews: Mutex<HashMap<i64, commands::rescan::CachedRescanPreview>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -66,6 +69,7 @@ pub fn run() {
                 pool: pool.clone(),
                 work_queue: work_queue.clone(),
                 thumbnail_worker,
+                rescan_previews: Mutex::new(HashMap::new()),
             });
 
             Ok(())
@@ -78,6 +82,8 @@ pub fn run() {
             commands::folders::list_folders,
             commands::folders::remove_folder,
             commands::folders::rename_folder,
+            commands::rescan::preview_rescan,
+            commands::rescan::apply_rescan,
             commands::process::start_processing,
             commands::process::pause_processing,
             commands::process::resume_processing,

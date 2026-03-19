@@ -36,25 +36,25 @@ const CHUNK_SIZE: usize = 200;
 const EMIT_INTERVAL_MS: u128 = 100;
 
 /// Represents a discovered asset (either a regular file or a zip entry)
-#[derive(Debug)]
-struct DiscoveredAsset {
-    filename: String,
-    folder_id: i64,
-    rel_path: String,
-    zip_file: Option<String>,
-    zip_entry: Option<String>,
-    format: String,
-    asset_type: AssetType,
-    file_size: i64,
-    fs_modified_at: i64,
+#[derive(Debug, Clone)]
+pub(crate) struct DiscoveredAsset {
+    pub filename: String,
+    pub folder_id: i64,
+    pub rel_path: String,
+    pub zip_file: Option<String>,
+    pub zip_entry: Option<String>,
+    pub format: String,
+    pub asset_type: AssetType,
+    pub file_size: i64,
+    pub fs_modified_at: i64,
 }
 
 /// Shared progress counters between discovery and insertion tasks
-struct ScanProgressState {
-    files_found: AtomicUsize,
-    files_inserted: AtomicUsize,
-    zips_scanned: AtomicUsize,
-    discovery_complete: AtomicBool,
+pub(crate) struct ScanProgressState {
+    pub files_found: AtomicUsize,
+    pub files_inserted: AtomicUsize,
+    pub zips_scanned: AtomicUsize,
+    pub discovery_complete: AtomicBool,
 }
 
 /// Add a folder as a source folder and scan it for assets.
@@ -119,7 +119,7 @@ pub async fn add_folder(
     let discover_app = app.clone();
     let discover_progress = progress.clone();
     let discovery_handle = tokio::task::spawn_blocking(move || {
-        discover_files_streaming(&discover_app, &root_path_buf, folder_id, tx, &discover_progress)
+        discover_files_streaming(&discover_app, &root_path_buf, folder_id, tx, &discover_progress, "scan-progress")
     });
 
     // Receive chunks and insert them as they arrive
@@ -260,19 +260,20 @@ async fn update_session_status(
 
 /// Stream-discover all supported asset files, sending chunks through the channel.
 /// Runs on a blocking thread via spawn_blocking.
-fn discover_files_streaming(
+pub(crate) fn discover_files_streaming(
     app: &AppHandle,
     root_path: &Path,
     folder_id: i64,
     tx: mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
+    event_name: &str,
 ) -> Result<(), String> {
     let mut chunk = Vec::with_capacity(CHUNK_SIZE);
     let mut last_emit = Instant::now();
 
     // Initial progress event
     let _ = app.emit(
-        "scan-progress",
+        event_name,
         ScanProgress {
             phase: "scanning".to_string(),
             files_found: 0,
@@ -386,7 +387,7 @@ fn discover_files_streaming(
             let inserted = progress.files_inserted.load(Ordering::Relaxed);
             let zips = progress.zips_scanned.load(Ordering::Relaxed);
             let _ = app.emit(
-                "scan-progress",
+                event_name,
                 ScanProgress {
                     phase: "scanning".to_string(),
                     files_found: found,
@@ -413,7 +414,7 @@ fn discover_files_streaming(
 /// Compute the relative directory path from root to the file's parent directory.
 /// Returns forward-slash-separated path with no leading/trailing slashes.
 /// Returns empty string if the file is directly in the root directory.
-fn compute_rel_path(root: &Path, file_path: &Path) -> String {
+pub(crate) fn compute_rel_path(root: &Path, file_path: &Path) -> String {
     let relative = file_path
         .parent()
         .unwrap_or(file_path)
@@ -558,7 +559,7 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
 }
 
 /// Insert a chunk of assets in a single transaction
-async fn insert_asset_chunk(
+pub(crate) async fn insert_asset_chunk(
     pool: &sqlx::SqlitePool,
     assets: &[DiscoveredAsset],
 ) -> Result<(), String> {

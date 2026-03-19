@@ -5,7 +5,7 @@ status: in-progress
 type: feature
 priority: normal
 created_at: 2026-03-16T11:00:19Z
-updated_at: 2026-03-19T08:02:57Z
+updated_at: 2026-03-19T08:24:08Z
 ---
 
 Complete folder management system: persistent source folders, relative paths, add/remove/rescan, and management UI.
@@ -204,8 +204,8 @@ This is not just a query change — it touches state management, UI components, 
 - [x] Update `start_scan` / `add_folder` to compute `rel_path` + `filename` + `zip_file` from discovered absolute paths (normalize to forward slashes)
 - [x] Store actual filesystem mtime in `fs_modified_at` (not scan time) and `file_size` during scan
 - [x] Implement `list_folders` command
-- [ ] Implement `preview_rescan` command (dry-run diff using `file_size` + `fs_modified_at` comparison)
-- [ ] Implement `apply_rescan` command (commit previewed changes)
+- [x] Implement `preview_rescan` command (dry-run diff using `file_size` + `fs_modified_at` comparison)
+- [x] Implement `apply_rescan` command (commit previewed changes)
 - [x] Implement `remove_folder` command (just DELETE, cascade does the rest)
 - [x] Implement `rename_folder` command
 - [ ] Implement `update_search_config` command + FTS re-index logic
