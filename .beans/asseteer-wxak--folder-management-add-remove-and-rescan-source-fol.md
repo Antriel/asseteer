@@ -5,7 +5,7 @@ status: in-progress
 type: feature
 priority: normal
 created_at: 2026-03-16T11:00:19Z
-updated_at: 2026-03-19T10:16:18Z
+updated_at: 2026-03-19T10:21:29Z
 ---
 
 Complete folder management system: persistent source folders, relative paths, add/remove/rescan, and management UI.
@@ -226,7 +226,7 @@ All code that references `assets.path` or the `path::zip_prefix` convention must
 
 ### Frontend — folder management UI
 - [x] Define `FolderLocation` type and replace `folderPath: string | null` throughout
-- [ ] Build folder list UI (sidebar section)
+- [x] Build folder list UI (sidebar section)
 - [x] Build folder management page (`/folders` route)
 - [x] Build rescan UX (two-phase: preview → confirm → apply)
 - [x] Build remove UX (confirmation dialog)
