@@ -465,8 +465,13 @@ export function getCategoryStatus(
   const progress = state.categoryProgress.get(category);
 
   if (!progress || !progress.isRunning) {
-    // Check if completed (all processed)
-    if (progress && progress.total > 0 && progress.completed + progress.failed === progress.total) {
+    // Check if completed (all processed and no new pending assets)
+    if (
+      progress &&
+      progress.total > 0 &&
+      progress.completed + progress.failed === progress.total &&
+      state.getPendingCountForCategory(category) === 0
+    ) {
       return 'completed';
     }
     return 'idle';
