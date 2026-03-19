@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+  import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { onMount, onDestroy } from 'svelte';
   import { open } from '@tauri-apps/plugin-dialog';
   import { showToast, showConfirm, uiState } from '$lib/state/ui.svelte';
@@ -13,7 +13,7 @@
   import FolderIcon from '$lib/components/icons/FolderIcon.svelte';
 
   interface ScanProgressEvent {
-    phase: 'discovering' | 'inserting' | 'scanning' | 'complete';
+    phase: string;
     files_found: number;
     files_inserted: number;
     files_total: number;
@@ -21,14 +21,42 @@
     current_path: string | null;
   }
 
+  interface RescanPreviewResult {
+    preview_id: string;
+    added_count: number;
+    removed_count: number;
+    modified_count: number;
+    unchanged_count: number;
+  }
+
+  interface RescanApplyResult {
+    inserted: number;
+    deleted: number;
+    updated: number;
+  }
+
+  // Rescan state for a folder
+  type RescanPhase = 'scanning' | 'preview' | 'applying' | 'done';
+
+  interface RescanState {
+    phase: RescanPhase;
+    progress: string;
+    preview: RescanPreviewResult | null;
+    applyResult: RescanApplyResult | null;
+  }
+
   let folders = $state<SourceFolder[]>([]);
   let loading = $state(true);
   let editingId = $state<number | null>(null);
   let editLabel = $state('');
   let editInput = $state<HTMLInputElement | null>(null);
-  let scanningFolderId = $state<number | null>(null);
   let scanProgress = $state('');
   let unlisten: UnlistenFn | null = null;
+  let rescanUnlisten: UnlistenFn | null = null;
+
+  // Per-folder rescan state (only one at a time)
+  let rescanFolderId = $state<number | null>(null);
+  let rescanState = $state<RescanState | null>(null);
 
   onMount(async () => {
     await loadFolders();
@@ -38,6 +66,10 @@
     if (unlisten) {
       unlisten();
       unlisten = null;
+    }
+    if (rescanUnlisten) {
+      rescanUnlisten();
+      rescanUnlisten = null;
     }
   });
 
@@ -72,7 +104,6 @@
   function startRename(folder: SourceFolder) {
     editingId = folder.id;
     editLabel = folder.label || folderName(folder.path);
-    // Focus input after DOM update
     requestAnimationFrame(() => editInput?.select());
   }
 
@@ -114,7 +145,6 @@
       await invoke('remove_folder', { folderId: folder.id });
       folders = folders.filter((f) => f.id !== folder.id);
       showToast(`Removed "${name}"`, 'success');
-      // Refresh explore tree and assets
       exploreState.clearCache();
       await exploreState.loadRoots(true);
       const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
@@ -134,7 +164,6 @@
       });
       if (!selected || typeof selected !== 'string') return;
 
-      scanningFolderId = -1; // Indicate new folder scan
       scanProgress = 'Starting scan...';
       uiState.isScanning = true;
       uiState.resetScanDetails();
@@ -167,16 +196,125 @@
       exploreState.clearCache();
       await exploreState.loadRoots(true);
       await processingState.refreshPendingCount();
+      await emit('scan-complete');
     } catch (error) {
       showToast('Failed to add folder: ' + error, 'error');
     } finally {
       uiState.isScanning = false;
-      scanningFolderId = null;
       scanProgress = '';
       if (unlisten) {
         unlisten();
         unlisten = null;
       }
+    }
+  }
+
+  // Rescan - Preview phase
+  async function startRescan(folder: SourceFolder) {
+    if (rescanFolderId !== null) return; // One at a time
+
+    rescanFolderId = folder.id;
+    rescanState = { phase: 'scanning', progress: 'Scanning filesystem...', preview: null, applyResult: null };
+
+    if (rescanUnlisten) {
+      rescanUnlisten();
+      rescanUnlisten = null;
+    }
+
+    rescanUnlisten = await listen<ScanProgressEvent>('rescan-progress', (event) => {
+      const e = event.payload;
+      if (e.phase === 'scanning') {
+        const zipInfo = e.zips_scanned > 0 ? ` (${e.zips_scanned} zips)` : '';
+        rescanState = {
+          ...rescanState!,
+          progress: `Scanning... ${e.files_found} files found${zipInfo}`,
+        };
+      }
+    });
+
+    try {
+      const preview = await invoke<RescanPreviewResult>('preview_rescan', { folderId: folder.id });
+
+      if (rescanUnlisten) {
+        rescanUnlisten();
+        rescanUnlisten = null;
+      }
+
+      // If nothing changed, skip the preview step
+      if (preview.added_count === 0 && preview.removed_count === 0 && preview.modified_count === 0) {
+        rescanState = { phase: 'done', progress: '', preview, applyResult: null };
+        showToast('Folder is up to date — no changes found', 'info');
+        setTimeout(dismissRescan, 3000);
+        return;
+      }
+
+      rescanState = { phase: 'preview', progress: '', preview, applyResult: null };
+    } catch (error) {
+      showToast('Rescan failed: ' + error, 'error');
+      dismissRescan();
+    }
+  }
+
+  // Rescan - Apply phase
+  async function applyRescan(folder: SourceFolder) {
+    if (!rescanState || rescanState.phase !== 'preview') return;
+
+    rescanState = { ...rescanState, phase: 'applying', progress: 'Applying changes...' };
+
+    if (rescanUnlisten) {
+      rescanUnlisten();
+      rescanUnlisten = null;
+    }
+
+    rescanUnlisten = await listen<ScanProgressEvent>('rescan-progress', (event) => {
+      const e = event.payload;
+      if (e.phase === 'applying' && e.files_total > 0) {
+        const pct = Math.round((e.files_inserted / e.files_total) * 100);
+        rescanState = {
+          ...rescanState!,
+          progress: `Applying... ${e.files_inserted}/${e.files_total} (${pct}%)`,
+        };
+      }
+    });
+
+    try {
+      const result = await invoke<RescanApplyResult>('apply_rescan', { folderId: folder.id });
+
+      if (rescanUnlisten) {
+        rescanUnlisten();
+        rescanUnlisten = null;
+      }
+
+      rescanState = { phase: 'done', progress: '', preview: rescanState.preview, applyResult: result };
+
+      // Refresh everything
+      await loadFolders();
+      exploreState.clearCache();
+      await exploreState.loadRoots(true);
+      const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
+      await assetsState.loadAssets(currentType);
+      await processingState.refreshPendingCount();
+      await emit('scan-complete');
+
+      const parts = [];
+      if (result.inserted > 0) parts.push(`${result.inserted} added`);
+      if (result.deleted > 0) parts.push(`${result.deleted} removed`);
+      if (result.updated > 0) parts.push(`${result.updated} updated`);
+      showToast('Rescan applied: ' + parts.join(', '), 'success');
+
+      setTimeout(dismissRescan, 4000);
+    } catch (error) {
+      showToast('Apply failed: ' + error, 'error');
+      dismissRescan();
+    }
+  }
+
+  function dismissRescan() {
+    rescanFolderId = null;
+    rescanState = null;
+    if (rescanUnlisten) {
+      rescanUnlisten();
+      rescanUnlisten = null;
     }
   }
 
@@ -206,7 +344,7 @@
       </button>
     </div>
 
-    <!-- Scanning indicator -->
+    <!-- Scanning indicator (for add folder) -->
     {#if uiState.isScanning && scanProgress}
       <div class="mb-4 rounded-lg border border-default bg-secondary p-4 flex items-center gap-3">
         <Spinner size="sm" />
@@ -236,7 +374,7 @@
     {:else}
       <div class="space-y-2">
         {#each folders as folder (folder.id)}
-          <div class="rounded-lg border border-default bg-secondary hover:bg-tertiary/50 transition-colors">
+          <div class="rounded-lg border border-default bg-secondary transition-colors">
             <div class="p-4">
               <div class="flex items-start justify-between gap-4">
                 <!-- Folder info -->
@@ -277,6 +415,16 @@
                 <!-- Actions -->
                 <div class="flex items-center gap-1 flex-shrink-0">
                   <button
+                    onclick={() => startRescan(folder)}
+                    disabled={rescanFolderId !== null || uiState.isScanning}
+                    class="p-2 rounded-lg text-tertiary hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+                    title="Rescan for changes"
+                  >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </button>
+                  <button
                     onclick={() => startRename(folder)}
                     class="p-2 rounded-lg text-tertiary hover:text-primary hover:bg-tertiary transition-colors"
                     title="Rename"
@@ -297,6 +445,64 @@
                 </div>
               </div>
             </div>
+
+            <!-- Rescan panel (inline, below folder info) -->
+            {#if rescanFolderId === folder.id && rescanState}
+              <div class="border-t border-default px-4 py-3">
+                {#if rescanState.phase === 'scanning'}
+                  <div class="flex items-center gap-3">
+                    <Spinner size="sm" />
+                    <span class="text-sm text-secondary">{rescanState.progress}</span>
+                  </div>
+                {:else if rescanState.phase === 'preview' && rescanState.preview}
+                  {@const p = rescanState.preview}
+                  <div class="flex items-center justify-between gap-4">
+                    <div class="flex items-center gap-4 text-sm">
+                      {#if p.added_count > 0}
+                        <span class="text-success font-medium">+{p.added_count} new</span>
+                      {/if}
+                      {#if p.removed_count > 0}
+                        <span class="text-error font-medium">&minus;{p.removed_count} removed</span>
+                      {/if}
+                      {#if p.modified_count > 0}
+                        <span class="text-warning font-medium">{p.modified_count} modified</span>
+                      {/if}
+                      <span class="text-tertiary">{p.unchanged_count.toLocaleString()} unchanged</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <button
+                        onclick={dismissRescan}
+                        class="px-3 py-1.5 text-sm text-secondary hover:text-primary hover:bg-tertiary rounded-lg transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onclick={() => applyRescan(folder)}
+                        class="px-3 py-1.5 text-sm font-medium text-white bg-accent hover:bg-accent/90 rounded-lg transition-colors"
+                      >
+                        Apply Changes
+                      </button>
+                    </div>
+                  </div>
+                {:else if rescanState.phase === 'applying'}
+                  <div class="flex items-center gap-3">
+                    <Spinner size="sm" />
+                    <span class="text-sm text-secondary">{rescanState.progress}</span>
+                  </div>
+                {:else if rescanState.phase === 'done' && rescanState.preview}
+                  <div class="flex items-center gap-2 text-sm text-success">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                    </svg>
+                    {#if rescanState.applyResult}
+                      Changes applied
+                    {:else}
+                      Up to date
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/if}
           </div>
         {/each}
       </div>

@@ -11,14 +11,13 @@
   interface NavItem {
     href: string;
     label: string;
-    icon: 'library' | 'processing' | 'scan' | 'folders' | 'settings';
+    icon: 'library' | 'processing' | 'folders' | 'settings';
   }
 
   const navItems: NavItem[] = [
     { href: '/library', label: 'Library', icon: 'library' },
     { href: '/folders', label: 'Folders', icon: 'folders' },
     { href: '/processing', label: 'Processing', icon: 'processing' },
-    { href: '/scan', label: 'Scan', icon: 'scan' },
   ];
 
   const bottomNavItems: NavItem[] = [{ href: '/settings', label: 'Settings', icon: 'settings' }];
@@ -96,15 +95,6 @@
                 stroke-linejoin="round"
                 stroke-width="1.5"
                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-          {:else if item.icon === 'scan'}
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="1.5"
-                d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
               />
             </svg>
           {:else if item.icon === 'settings'}

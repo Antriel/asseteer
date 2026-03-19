@@ -168,10 +168,10 @@
       <p class="text-primary font-medium">All assets processed</p>
       <p class="text-sm text-secondary mt-1">Scan a folder to discover new assets</p>
       <a
-        href="/scan"
+        href="/folders"
         class="mt-4 px-4 py-2 text-sm font-medium text-white bg-accent hover:opacity-90 rounded-lg transition-default"
       >
-        Scan Folder
+        Add Folder
       </a>
     </div>
   {/if}
