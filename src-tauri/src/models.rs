@@ -5,15 +5,33 @@ use sqlx::FromRow;
 pub struct Asset {
     pub id: i64,
     pub filename: String,
-    pub path: String,
+    pub folder_id: i64,
+    pub rel_path: String,
+    pub zip_file: Option<String>,
     pub zip_entry: Option<String>,
     pub asset_type: String,
     pub format: String,
     pub file_size: i64,
+    pub fs_modified_at: Option<i64>,
 
     // Timestamps
     pub created_at: i64,
     pub modified_at: i64,
+
+    // Transient — populated by JOIN with source_folders, not a DB column
+    #[sqlx(default)]
+    pub folder_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct SourceFolder {
+    pub id: i64,
+    pub path: String,
+    pub label: String,
+    pub added_at: i64,
+    pub last_scanned_at: Option<i64>,
+    pub asset_count: i64,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -37,7 +55,7 @@ pub struct AudioMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanSession {
     pub id: i64,
-    pub root_path: String,
+    pub source_folder_id: Option<i64>,
     pub total_files: Option<i64>,
     pub processed_files: i64,
     pub status: String,
@@ -129,7 +147,8 @@ pub struct ProcessingErrorDetail {
     pub id: i64,
     pub asset_id: i64,
     pub filename: String,
-    pub path: String,
+    pub rel_path: String,
+    pub folder_path: String,
     pub error_message: String,
     pub occurred_at: i64,
     pub retry_count: i32,

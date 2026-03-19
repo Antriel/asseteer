@@ -1,11 +1,11 @@
 ---
 # asseteer-wxak
 title: 'Folder management: add, remove, and rescan source folders'
-status: todo
+status: in-progress
 type: feature
 priority: normal
 created_at: 2026-03-16T11:00:19Z
-updated_at: 2026-03-19T06:37:58Z
+updated_at: 2026-03-19T07:45:05Z
 ---
 
 Complete folder management system: persistent source folders, relative paths, add/remove/rescan, and management UI.
@@ -200,24 +200,24 @@ This is not just a query change — it touches state management, UI components, 
 ## Implementation Tasks
 
 ### Schema & core backend
-- [ ] Design and create new DB schema (source_folders, updated assets with `file_size`/`fs_modified_at`, folder_search_config, scan_sessions)
-- [ ] Update `start_scan` / `add_folder` to compute `rel_path` + `filename` + `zip_file` from discovered absolute paths (normalize to forward slashes)
-- [ ] Store actual filesystem mtime in `fs_modified_at` (not scan time) and `file_size` during scan
-- [ ] Implement `list_folders` command
+- [x] Design and create new DB schema (source_folders, updated assets with `file_size`/`fs_modified_at`, folder_search_config, scan_sessions)
+- [x] Update `start_scan` / `add_folder` to compute `rel_path` + `filename` + `zip_file` from discovered absolute paths (normalize to forward slashes)
+- [x] Store actual filesystem mtime in `fs_modified_at` (not scan time) and `file_size` during scan
+- [x] Implement `list_folders` command
 - [ ] Implement `preview_rescan` command (dry-run diff using `file_size` + `fs_modified_at` comparison)
 - [ ] Implement `apply_rescan` command (commit previewed changes)
-- [ ] Implement `remove_folder` command (just DELETE, cascade does the rest)
-- [ ] Implement `rename_folder` command
+- [x] Implement `remove_folder` command (just DELETE, cascade does the rest)
+- [x] Implement `rename_folder` command
 - [ ] Implement `update_search_config` command + FTS re-index logic
 
 ### Path-dependent surfaces to update (schema swap)
 All code that references `assets.path` or the `path::zip_prefix` convention must be updated:
-- [ ] `load_asset_bytes` / `get_asset_bytes` — reconstruct filesystem path from `source_folders.path + rel_path + filename/zip_file` (`utils.rs`, `commands/assets.rs`)
-- [ ] FTS triggers — currently index `assets.path`; must use `rel_path` + `filename` + `zip_entry` (`database/schema.rs`)
-- [ ] Semantic search commands — return `path` in payloads; must reconstruct or return new fields (`commands/search.rs`)
-- [ ] CLAP batching/sorting — groups by path for ZIP cache optimization; must use `folder_id + rel_path + zip_file` (`task_system/processor.rs`)
-- [ ] Thumbnail worker — ZIP grouping for batch extraction (`thumbnail_worker.rs`)
-- [ ] Processing error payloads — store/display `path` in error records (`commands/process.rs`)
+- [x] `load_asset_bytes` / `get_asset_bytes` — reconstruct filesystem path from `source_folders.path + rel_path + filename/zip_file` (`utils.rs`, `commands/assets.rs`)
+- [x] FTS triggers — currently index `assets.path`; must use `rel_path` + `filename` + `zip_entry` (`database/schema.rs`)
+- [x] Semantic search commands — return `path` in payloads; must reconstruct or return new fields (`commands/search.rs`)
+- [x] CLAP batching/sorting — groups by path for ZIP cache optimization; must use `folder_id + rel_path + zip_file` (`task_system/processor.rs`)
+- [x] Thumbnail worker — ZIP grouping for batch extraction (`thumbnail_worker.rs`)
+- [x] Processing error payloads — store/display `path` in error records (`commands/process.rs`)
 - [ ] Frontend queries — `searchAssets`, `countSearchResults`, `parseFolderFilter`, `addFolderFilterConditions` (`database/queries.ts`)
 - [ ] Frontend state — `folderPath` → `FolderLocation` type (`assets.svelte.ts`, `explore.svelte.ts`)
 - [ ] Folder tree building — `buildChildNodes`, `getZipDirectoryChildren` → new schema queries (`explore.svelte.ts`)

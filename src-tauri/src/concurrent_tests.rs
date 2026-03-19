@@ -13,16 +13,25 @@ use std::time::Duration;
 /// Seed the database with `n` image assets (plus image_metadata rows without
 /// thumbnails, mimicking post-processing state after lazy-load rework).
 async fn seed_images(pool: &SqlitePool, n: usize) {
+    // Create a source folder first
+    let folder_id: i64 = sqlx::query_scalar(
+        "INSERT INTO source_folders (path, label, added_at) VALUES ('/test', 'test', 1000000) RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
     for i in 0..n {
         let filename = format!("image_{:05}.png", i);
-        let path = format!("/test/images/{}", filename);
+        let rel_path = "images";
 
         let id = sqlx::query(
-            "INSERT INTO assets (filename, path, asset_type, format, file_size, created_at, modified_at)
-             VALUES (?, ?, 'image', 'png', 1024, 1000000, 1000000)",
+            "INSERT INTO assets (filename, folder_id, rel_path, asset_type, format, file_size, created_at, modified_at)
+             VALUES (?, ?, ?, 'image', 'png', 1024, 1000000, 1000000)",
         )
         .bind(&filename)
-        .bind(&path)
+        .bind(folder_id)
+        .bind(rel_path)
         .execute(pool)
         .await
         .unwrap()

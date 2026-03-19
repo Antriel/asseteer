@@ -62,33 +62,55 @@ pub async fn open_reader_pool(path: &str) -> SqlitePool {
         .expect("Failed to open reader pool")
 }
 
+/// Insert a source folder and return its ID.
+pub async fn insert_source_folder(pool: &SqlitePool, path: &str, label: &str) -> i64 {
+    let result = sqlx::query(
+        "INSERT INTO source_folders (path, label, added_at) VALUES (?, ?, 1000000)",
+    )
+    .bind(path)
+    .bind(label)
+    .execute(pool)
+    .await
+    .expect("Failed to insert test source folder");
+
+    result.last_insert_rowid()
+}
+
 /// Build an Asset struct. ID will be 0; call `insert_asset` to get a real ID.
-pub fn make_asset(filename: &str, path: &str, asset_type: &str, format: &str) -> Asset {
+/// `folder_id` must reference an existing source_folder row.
+pub fn make_asset(filename: &str, folder_id: i64, rel_path: &str, asset_type: &str, format: &str) -> Asset {
     Asset {
         id: 0,
         filename: filename.to_string(),
-        path: path.to_string(),
+        folder_id,
+        rel_path: rel_path.to_string(),
+        zip_file: None,
         zip_entry: None,
         asset_type: asset_type.to_string(),
         format: format.to_string(),
         file_size: 1024,
+        fs_modified_at: Some(1_000_000),
         created_at: 1_000_000,
         modified_at: 1_000_000,
+        folder_path: String::new(),
     }
 }
 
 /// Insert an asset into the database and return the auto-assigned ID.
 pub async fn insert_asset(pool: &SqlitePool, asset: &Asset) -> i64 {
     let result = sqlx::query(
-        "INSERT INTO assets (filename, path, zip_entry, asset_type, format, file_size, created_at, modified_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO assets (filename, folder_id, rel_path, zip_file, zip_entry, asset_type, format, file_size, fs_modified_at, created_at, modified_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&asset.filename)
-    .bind(&asset.path)
+    .bind(asset.folder_id)
+    .bind(&asset.rel_path)
+    .bind(&asset.zip_file)
     .bind(&asset.zip_entry)
     .bind(&asset.asset_type)
     .bind(&asset.format)
     .bind(asset.file_size)
+    .bind(asset.fs_modified_at)
     .bind(asset.created_at)
     .bind(asset.modified_at)
     .execute(pool)

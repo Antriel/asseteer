@@ -1,13 +1,39 @@
 /// SQL schema for the asset database
+
+pub const CREATE_SOURCE_FOLDERS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS source_folders (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    added_at INTEGER NOT NULL,
+    last_scanned_at INTEGER,
+    asset_count INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'active'
+)
+"#;
+
+pub const CREATE_FOLDER_SEARCH_CONFIG_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS folder_search_config (
+    id INTEGER PRIMARY KEY,
+    source_folder_id INTEGER NOT NULL REFERENCES source_folders(id) ON DELETE CASCADE,
+    subfolder_prefix TEXT NOT NULL DEFAULT '',
+    skip_depth INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(source_folder_id, subfolder_prefix)
+)
+"#;
+
 pub const CREATE_ASSETS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS assets (
     id INTEGER PRIMARY KEY,
     filename TEXT NOT NULL,
-    path TEXT NOT NULL,
+    folder_id INTEGER NOT NULL REFERENCES source_folders(id) ON DELETE CASCADE,
+    rel_path TEXT NOT NULL,
+    zip_file TEXT,
     zip_entry TEXT,
     asset_type TEXT NOT NULL,
     format TEXT NOT NULL,
     file_size INTEGER NOT NULL,
+    fs_modified_at INTEGER,
 
     -- Timestamps
     created_at INTEGER NOT NULL,
@@ -17,9 +43,9 @@ CREATE TABLE IF NOT EXISTS assets (
 
 pub const CREATE_ASSETS_INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(asset_type);
-CREATE INDEX IF NOT EXISTS idx_assets_path ON assets(path);
+CREATE INDEX IF NOT EXISTS idx_assets_folder ON assets(folder_id);
 CREATE INDEX IF NOT EXISTS idx_assets_modified ON assets(modified_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_unique ON assets(path, COALESCE(zip_entry, ''));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_unique ON assets(folder_id, rel_path, COALESCE(zip_file, ''), COALESCE(zip_entry, filename));
 "#;
 
 pub const CREATE_IMAGE_METADATA_TABLE: &str = r#"
@@ -53,13 +79,23 @@ CREATE VIRTUAL TABLE IF NOT EXISTS assets_fts USING fts5(
 pub const CREATE_FTS_TRIGGERS: &str = r#"
 CREATE TRIGGER IF NOT EXISTS assets_ai AFTER INSERT ON assets BEGIN
     INSERT INTO assets_fts(rowid, filename, path_segments)
-    VALUES (new.id, new.filename, REPLACE(REPLACE(new.path || COALESCE('/' || new.zip_entry, ''), '/', ' '), '\', ' '));
+    VALUES (new.id, new.filename,
+        REPLACE(REPLACE(
+            new.rel_path || ' ' ||
+            COALESCE(new.zip_file || ' ', '') ||
+            COALESCE(new.zip_entry, new.filename),
+            '/', ' '), '\', ' '));
 END;
 
 CREATE TRIGGER IF NOT EXISTS assets_au AFTER UPDATE ON assets BEGIN
     DELETE FROM assets_fts WHERE rowid = old.id;
     INSERT INTO assets_fts(rowid, filename, path_segments)
-    VALUES (new.id, new.filename, REPLACE(REPLACE(new.path || COALESCE('/' || new.zip_entry, ''), '/', ' '), '\', ' '));
+    VALUES (new.id, new.filename,
+        REPLACE(REPLACE(
+            new.rel_path || ' ' ||
+            COALESCE(new.zip_file || ' ', '') ||
+            COALESCE(new.zip_entry, new.filename),
+            '/', ' '), '\', ' '));
 END;
 
 CREATE TRIGGER IF NOT EXISTS assets_ad AFTER DELETE ON assets BEGIN
@@ -70,7 +106,7 @@ END;
 pub const CREATE_SCAN_SESSIONS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS scan_sessions (
     id INTEGER PRIMARY KEY,
-    root_path TEXT NOT NULL,
+    source_folder_id INTEGER REFERENCES source_folders(id),
     total_files INTEGER,
     processed_files INTEGER DEFAULT 0,
     status TEXT DEFAULT 'running',

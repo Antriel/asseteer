@@ -39,11 +39,14 @@ const EMIT_INTERVAL_MS: u128 = 100;
 #[derive(Debug)]
 struct DiscoveredAsset {
     filename: String,
-    path: PathBuf,
+    folder_id: i64,
+    rel_path: String,
+    zip_file: Option<String>,
     zip_entry: Option<String>,
     format: String,
     asset_type: AssetType,
     file_size: i64,
+    fs_modified_at: i64,
 }
 
 /// Shared progress counters between discovery and insertion tasks
@@ -54,23 +57,54 @@ struct ScanProgressState {
     discovery_complete: AtomicBool,
 }
 
-/// Start a new scan session
+/// Add a folder as a source folder and scan it for assets.
 ///
 /// Discovery runs on a blocking thread and streams asset chunks through a channel.
 /// Insertion runs concurrently on the async runtime, inserting chunks as they arrive.
 #[tauri::command]
-pub async fn start_scan(
+pub async fn add_folder(
     app: AppHandle,
     state: State<'_, AppState>,
-    root_path: String,
+    path: String,
 ) -> Result<i64, String> {
-    let root_path_buf = PathBuf::from(&root_path);
+    let root_path_buf = PathBuf::from(&path);
 
     if !root_path_buf.exists() {
-        return Err(format!("Path does not exist: {}", root_path));
+        return Err(format!("Path does not exist: {}", path));
     }
 
-    let session_id = create_scan_session(&state, &root_path).await?;
+    // Normalize path to forward slashes
+    let normalized_path = path.replace('\\', "/");
+
+    // Insert or get source folder
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs() as i64;
+
+    let label = root_path_buf
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    sqlx::query(
+        "INSERT OR IGNORE INTO source_folders (path, label, added_at) VALUES (?1, ?2, ?3)",
+    )
+    .bind(&normalized_path)
+    .bind(&label)
+    .bind(now)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let folder_id: i64 = sqlx::query_scalar("SELECT id FROM source_folders WHERE path = ?1")
+        .bind(&normalized_path)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let session_id = create_scan_session(&state, folder_id).await?;
 
     let (tx, mut rx) = mpsc::channel::<Vec<DiscoveredAsset>>(32);
 
@@ -85,7 +119,7 @@ pub async fn start_scan(
     let discover_app = app.clone();
     let discover_progress = progress.clone();
     let discovery_handle = tokio::task::spawn_blocking(move || {
-        discover_files_streaming(&discover_app, &root_path_buf, tx, &discover_progress)
+        discover_files_streaming(&discover_app, &root_path_buf, folder_id, tx, &discover_progress)
     });
 
     // Receive chunks and insert them as they arrive
@@ -146,20 +180,30 @@ pub async fn start_scan(
     update_session_total(&state, session_id, total_found).await?;
     update_session_status(&state, session_id, "complete").await?;
 
+    // Update source folder stats
+    sqlx::query(
+        "UPDATE source_folders SET last_scanned_at = ?1, asset_count = (SELECT COUNT(*) FROM assets WHERE folder_id = ?2) WHERE id = ?2",
+    )
+    .bind(now)
+    .bind(folder_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
     Ok(session_id)
 }
 
 /// Create a new scan session
-async fn create_scan_session(state: &State<'_, AppState>, root_path: &str) -> Result<i64, String> {
+async fn create_scan_session(state: &State<'_, AppState>, source_folder_id: i64) -> Result<i64, String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs() as i64;
 
     let result = sqlx::query(
-        "INSERT INTO scan_sessions (root_path, started_at) VALUES (?1, ?2)",
+        "INSERT INTO scan_sessions (source_folder_id, started_at) VALUES (?1, ?2)",
     )
-    .bind(root_path)
+    .bind(source_folder_id)
     .bind(now)
     .execute(&state.pool)
     .await
@@ -219,6 +263,7 @@ async fn update_session_status(
 fn discover_files_streaming(
     app: &AppHandle,
     root_path: &Path,
+    folder_id: i64,
     tx: mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
 ) -> Result<(), String> {
@@ -265,13 +310,25 @@ fn discover_files_streaming(
             if let Some(asset_type) = detect_asset_type(path) {
                 let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
 
+                // Compute rel_path: directory portion relative to root, forward slashes
+                let rel_path = compute_rel_path(root_path, path);
+
+                // Get actual filesystem mtime
+                let fs_modified_at = metadata
+                    .modified()
+                    .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+                    .unwrap_or(0);
+
                 chunk.push(DiscoveredAsset {
                     filename: filename.to_string(),
-                    path: path.to_path_buf(),
+                    folder_id,
+                    rel_path,
+                    zip_file: None,
                     zip_entry: None,
                     format: ext_str.to_string(),
                     asset_type,
                     file_size: metadata.len() as i64,
+                    fs_modified_at,
                 });
                 progress.files_found.fetch_add(1, Ordering::Relaxed);
 
@@ -281,7 +338,27 @@ fn discover_files_streaming(
                         .map_err(|_| "Insert task stopped".to_string())?;
                 }
             } else if ext_str == "zip" {
-                match discover_zip_streaming(path, &tx, progress, &mut chunk) {
+                // Compute rel_path and zip_file for ZIP entries
+                let zip_rel_path = compute_rel_path(root_path, path);
+                let zip_filename = filename.to_string();
+
+                // Get ZIP file mtime for all entries inside
+                let zip_mtime = std::fs::metadata(path)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+                    .unwrap_or(0);
+
+                match discover_zip_streaming(
+                    path,
+                    folder_id,
+                    &zip_rel_path,
+                    &zip_filename,
+                    zip_mtime,
+                    &tx,
+                    progress,
+                    &mut chunk,
+                ) {
                     Ok(()) => {
                         progress.zips_scanned.fetch_add(1, Ordering::Relaxed);
                         // Flush chunk after each zip so inserts aren't delayed
@@ -333,9 +410,27 @@ fn discover_files_streaming(
     Ok(())
 }
 
+/// Compute the relative directory path from root to the file's parent directory.
+/// Returns forward-slash-separated path with no leading/trailing slashes.
+/// Returns empty string if the file is directly in the root directory.
+fn compute_rel_path(root: &Path, file_path: &Path) -> String {
+    let relative = file_path
+        .parent()
+        .unwrap_or(file_path)
+        .strip_prefix(root)
+        .unwrap_or(Path::new(""));
+    let s = relative.to_string_lossy().replace('\\', "/");
+    // Trim trailing slash if any
+    s.trim_end_matches('/').to_string()
+}
+
 /// Discover assets inside a zip file, streaming chunks through the channel
 fn discover_zip_streaming(
     zip_path: &Path,
+    folder_id: i64,
+    rel_path: &str,
+    zip_filename: &str,
+    zip_mtime: i64,
     tx: &mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
     chunk: &mut Vec<DiscoveredAsset>,
@@ -346,13 +441,19 @@ fn discover_zip_streaming(
     let archive =
         ZipArchive::new(file).map_err(|e| format!("Failed to read zip archive: {}", e))?;
 
-    discover_zip_recursive_streaming(archive, zip_path, "", tx, progress, chunk)
+    discover_zip_recursive_streaming(
+        archive, folder_id, rel_path, zip_filename, zip_mtime,
+        "", tx, progress, chunk,
+    )
 }
 
 /// Recursively discover assets in a zip archive, streaming results
 fn discover_zip_recursive_streaming<R: Read + Seek>(
     mut archive: ZipArchive<R>,
-    zip_path: &Path,
+    folder_id: i64,
+    rel_path: &str,
+    zip_filename: &str,
+    zip_mtime: i64,
     prefix: &str,
     tx: &mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
@@ -406,7 +507,10 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
 
                         if let Err(e) = discover_zip_recursive_streaming(
                             nested_archive,
-                            zip_path,
+                            folder_id,
+                            rel_path,
+                            zip_filename,
+                            zip_mtime,
                             &nested_prefix,
                             tx,
                             progress,
@@ -430,11 +534,14 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
 
                 chunk.push(DiscoveredAsset {
                     filename: filename.to_string(),
-                    path: zip_path.to_path_buf(),
+                    folder_id,
+                    rel_path: rel_path.to_string(),
+                    zip_file: Some(zip_filename.to_string()),
                     zip_entry: Some(full_entry_path),
                     format: ext_str.to_string(),
                     asset_type,
                     file_size: entry_size as i64,
+                    fs_modified_at: zip_mtime,
                 });
                 progress.files_found.fetch_add(1, Ordering::Relaxed);
 
@@ -463,20 +570,22 @@ async fn insert_asset_chunk(
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
     for asset in assets {
-        let path_str = asset.path.to_string_lossy().to_string();
-
         sqlx::query(
             "INSERT OR IGNORE INTO assets (
-                filename, path, zip_entry, asset_type, format, file_size,
+                filename, folder_id, rel_path, zip_file, zip_entry,
+                asset_type, format, file_size, fs_modified_at,
                 created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .bind(&asset.filename)
-        .bind(&path_str)
+        .bind(asset.folder_id)
+        .bind(&asset.rel_path)
+        .bind(&asset.zip_file)
         .bind(&asset.zip_entry)
         .bind(asset.asset_type.as_str())
         .bind(&asset.format)
         .bind(asset.file_size)
+        .bind(asset.fs_modified_at)
         .bind(now)
         .bind(now)
         .execute(&mut *tx)

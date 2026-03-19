@@ -19,6 +19,16 @@ pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
+    // Create source_folders table BEFORE assets (FK dependency)
+    sqlx::query(CREATE_SOURCE_FOLDERS_TABLE)
+        .execute(pool)
+        .await?;
+
+    // Create folder_search_config table
+    sqlx::query(CREATE_FOLDER_SEARCH_CONFIG_TABLE)
+        .execute(pool)
+        .await?;
+
     // Create main assets table
     sqlx::query(CREATE_ASSETS_TABLE)
         .execute(pool)

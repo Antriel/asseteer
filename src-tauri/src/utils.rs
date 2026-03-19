@@ -3,17 +3,39 @@ use std::io::{Cursor, Read, Seek};
 use zip::ZipArchive;
 use crate::models::Asset;
 
-/// Load asset bytes from either filesystem or zip archive
+/// Resolve the absolute filesystem path for a regular (non-ZIP) asset.
+/// Returns: folder_path/rel_path/filename (or folder_path/filename if rel_path is empty)
+pub fn resolve_asset_fs_path(asset: &Asset) -> String {
+    if asset.rel_path.is_empty() {
+        format!("{}/{}", asset.folder_path, asset.filename)
+    } else {
+        format!("{}/{}/{}", asset.folder_path, asset.rel_path, asset.filename)
+    }
+}
+
+/// Resolve the absolute filesystem path to the ZIP archive containing this asset.
+/// Returns: folder_path/rel_path/zip_file (or folder_path/zip_file if rel_path is empty)
+pub fn resolve_zip_path(asset: &Asset) -> String {
+    let zip_file = asset.zip_file.as_deref().unwrap_or("");
+    if asset.rel_path.is_empty() {
+        format!("{}/{}", asset.folder_path, zip_file)
+    } else {
+        format!("{}/{}/{}", asset.folder_path, asset.rel_path, zip_file)
+    }
+}
+
+/// Load asset bytes from either filesystem or zip archive.
 ///
+/// The asset must have `folder_path` populated (via JOIN with source_folders).
 /// If the asset has a `zip_entry`, it will be extracted from the zip archive.
 /// Otherwise, it will be read directly from the filesystem.
 pub fn load_asset_bytes(asset: &Asset) -> Result<Vec<u8>, String> {
     if let Some(zip_entry_path) = &asset.zip_entry {
-        // Asset is inside a zip file (possibly nested)
-        load_from_zip(&asset.path, zip_entry_path)
+        let zip_path = resolve_zip_path(asset);
+        load_from_zip(&zip_path, zip_entry_path)
     } else {
-        // Asset is a regular file
-        load_from_filesystem(&asset.path)
+        let fs_path = resolve_asset_fs_path(asset);
+        load_from_filesystem(&fs_path)
     }
 }
 
@@ -134,23 +156,90 @@ mod tests {
         );
     }
 
+    // -- resolve paths ------------------------------------------------------
+
+    #[test]
+    fn test_resolve_asset_fs_path_with_rel_path() {
+        let asset = Asset {
+            id: 1,
+            filename: "grass.png".into(),
+            folder_id: 1,
+            rel_path: "Packs/textures".into(),
+            zip_file: None,
+            zip_entry: None,
+            asset_type: "image".into(),
+            format: "png".into(),
+            file_size: 0,
+            fs_modified_at: None,
+            created_at: 0,
+            modified_at: 0,
+            folder_path: "D:/Assets".into(),
+        };
+        assert_eq!(resolve_asset_fs_path(&asset), "D:/Assets/Packs/textures/grass.png");
+    }
+
+    #[test]
+    fn test_resolve_asset_fs_path_root() {
+        let asset = Asset {
+            id: 1,
+            filename: "grass.png".into(),
+            folder_id: 1,
+            rel_path: "".into(),
+            zip_file: None,
+            zip_entry: None,
+            asset_type: "image".into(),
+            format: "png".into(),
+            file_size: 0,
+            fs_modified_at: None,
+            created_at: 0,
+            modified_at: 0,
+            folder_path: "D:/Assets".into(),
+        };
+        assert_eq!(resolve_asset_fs_path(&asset), "D:/Assets/grass.png");
+    }
+
+    #[test]
+    fn test_resolve_zip_path() {
+        let asset = Asset {
+            id: 1,
+            filename: "forest_01.wav".into(),
+            folder_id: 1,
+            rel_path: "Packs".into(),
+            zip_file: Some("sounds.zip".into()),
+            zip_entry: Some("ambient/forest_01.wav".into()),
+            asset_type: "audio".into(),
+            format: "wav".into(),
+            file_size: 0,
+            fs_modified_at: None,
+            created_at: 0,
+            modified_at: 0,
+            folder_path: "D:/Assets".into(),
+        };
+        assert_eq!(resolve_zip_path(&asset), "D:/Assets/Packs/sounds.zip");
+    }
+
     // -- load_asset_bytes: filesystem ---------------------------------------
 
     #[test]
     fn test_load_asset_bytes_filesystem() {
         let dir = tempfile::tempdir().unwrap();
-        let img_path = create_test_png(dir.path(), "test.png");
+        create_test_png(dir.path(), "test.png");
+        let folder_path = dir.path().to_string_lossy().replace('\\', "/");
 
         let asset = Asset {
             id: 1,
             filename: "test.png".into(),
-            path: img_path.to_str().unwrap().into(),
+            folder_id: 1,
+            rel_path: "".into(),
+            zip_file: None,
             zip_entry: None,
             asset_type: "image".into(),
             format: "png".into(),
             file_size: 0,
+            fs_modified_at: None,
             created_at: 0,
             modified_at: 0,
+            folder_path,
         };
 
         let bytes = load_asset_bytes(&asset).unwrap();
@@ -164,13 +253,17 @@ mod tests {
         let asset = Asset {
             id: 1,
             filename: "nope.png".into(),
-            path: "/nonexistent/path/nope.png".into(),
+            folder_id: 1,
+            rel_path: "".into(),
+            zip_file: None,
             zip_entry: None,
             asset_type: "image".into(),
             format: "png".into(),
             file_size: 0,
+            fs_modified_at: None,
             created_at: 0,
             modified_at: 0,
+            folder_path: "/nonexistent/path".into(),
         };
 
         assert!(load_asset_bytes(&asset).is_err());
@@ -181,18 +274,23 @@ mod tests {
     #[test]
     fn test_load_asset_bytes_from_zip() {
         let dir = tempfile::tempdir().unwrap();
-        let (zip_path, entry_name) = create_test_zip_with_image(dir.path());
+        let (_zip_path, entry_name) = create_test_zip_with_image(dir.path());
+        let folder_path = dir.path().to_string_lossy().replace('\\', "/");
 
         let asset = Asset {
             id: 1,
             filename: "test.png".into(),
-            path: zip_path.to_str().unwrap().into(),
+            folder_id: 1,
+            rel_path: "".into(),
+            zip_file: Some("test_archive.zip".into()),
             zip_entry: Some(entry_name),
             asset_type: "image".into(),
             format: "png".into(),
             file_size: 0,
+            fs_modified_at: None,
             created_at: 0,
             modified_at: 0,
+            folder_path,
         };
 
         let bytes = load_asset_bytes(&asset).unwrap();
@@ -203,18 +301,23 @@ mod tests {
     #[test]
     fn test_load_asset_bytes_zip_bad_entry() {
         let dir = tempfile::tempdir().unwrap();
-        let (zip_path, _) = create_test_zip_with_image(dir.path());
+        let (_zip_path, _) = create_test_zip_with_image(dir.path());
+        let folder_path = dir.path().to_string_lossy().replace('\\', "/");
 
         let asset = Asset {
             id: 1,
             filename: "nope.png".into(),
-            path: zip_path.to_str().unwrap().into(),
+            folder_id: 1,
+            rel_path: "".into(),
+            zip_file: Some("test_archive.zip".into()),
             zip_entry: Some("nonexistent/entry.png".into()),
             asset_type: "image".into(),
             format: "png".into(),
             file_size: 0,
+            fs_modified_at: None,
             created_at: 0,
             modified_at: 0,
+            folder_path,
         };
 
         assert!(load_asset_bytes(&asset).is_err());

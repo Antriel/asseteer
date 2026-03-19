@@ -9,12 +9,17 @@ pub async fn get_asset_bytes(
     state: State<'_, AppState>,
     asset_id: i64,
 ) -> Result<Vec<u8>, String> {
-    // Load asset from database
-    let asset = sqlx::query_as::<_, Asset>("SELECT * FROM assets WHERE id = ?")
-        .bind(asset_id)
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| format!("Failed to load asset: {}", e))?;
+    // Load asset from database with folder_path from source_folders JOIN
+    let asset = sqlx::query_as::<_, Asset>(
+        "SELECT a.*, sf.path as folder_path
+         FROM assets a
+         JOIN source_folders sf ON a.folder_id = sf.id
+         WHERE a.id = ?"
+    )
+    .bind(asset_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| format!("Failed to load asset: {}", e))?;
 
     // Load bytes (handles both regular files and zip entries)
     load_asset_bytes(&asset)

@@ -7,6 +7,7 @@
 
 use crate::models::Asset;
 use crate::task_system::processor::generate_thumbnail_for_asset;
+use crate::utils::resolve_zip_path;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
@@ -240,16 +241,18 @@ async fn worker_loop(
             continue;
         }
 
-        // Load asset records
+        // Load asset records (with folder_path from JOIN)
         let assets = load_assets(&pool, &missing_ids).await;
 
         // Separate filesystem vs ZIP assets
+        // Group ZIP assets by resolved zip path (folder_path + rel_path + zip_file)
         let mut zip_groups: HashMap<String, Vec<Asset>> = HashMap::new();
         let mut fs_assets: Vec<Asset> = Vec::new();
 
         for asset in assets {
             if asset.zip_entry.is_some() {
-                zip_groups.entry(asset.path.clone()).or_default().push(asset);
+                let zip_key = resolve_zip_path(&asset);
+                zip_groups.entry(zip_key).or_default().push(asset);
             } else {
                 fs_assets.push(asset);
             }
@@ -397,7 +400,9 @@ async fn load_assets(pool: &SqlitePool, ids: &[i64]) -> Vec<Asset> {
     }
     let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
     let query = format!(
-        "SELECT * FROM assets WHERE id IN ({})",
+        "SELECT a.*, sf.path as folder_path FROM assets a
+         JOIN source_folders sf ON a.folder_id = sf.id
+         WHERE a.id IN ({})",
         placeholders.join(",")
     );
     let mut q = sqlx::query_as::<_, Asset>(&query);

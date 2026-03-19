@@ -18,11 +18,12 @@ pub async fn start_processing(
         return Err(format!("Processing for category '{}' is already running", category));
     }
 
-    // Get pending assets for this category
+    // Get pending assets for this category (with folder_path from JOIN)
     let assets: Vec<Asset> = match cat {
         ProcessingCategory::Image => {
             sqlx::query_as(
-                "SELECT a.* FROM assets a
+                "SELECT a.*, sf.path as folder_path FROM assets a
+                 JOIN source_folders sf ON a.folder_id = sf.id
                  LEFT JOIN image_metadata im ON a.id = im.asset_id
                  WHERE a.asset_type = 'image' AND im.asset_id IS NULL
                  ORDER BY a.id"
@@ -33,7 +34,8 @@ pub async fn start_processing(
         }
         ProcessingCategory::Audio => {
             sqlx::query_as(
-                "SELECT a.* FROM assets a
+                "SELECT a.*, sf.path as folder_path FROM assets a
+                 JOIN source_folders sf ON a.folder_id = sf.id
                  LEFT JOIN audio_metadata am ON a.id = am.asset_id
                  WHERE a.asset_type = 'audio' AND am.asset_id IS NULL
                  ORDER BY a.id"
@@ -44,13 +46,14 @@ pub async fn start_processing(
         }
         ProcessingCategory::Clap => {
             // CLAP embeddings - audio assets without embeddings
-            // Sort by path + zip_entry so files from the same ZIP/nested ZIP are consecutive,
-            // enabling inner ZIP caching in the batch processor
+            // Sort by folder_id + rel_path + zip_file so files from the same ZIP/nested ZIP
+            // are consecutive, enabling inner ZIP caching in the batch processor
             sqlx::query_as(
-                "SELECT a.* FROM assets a
+                "SELECT a.*, sf.path as folder_path FROM assets a
+                 JOIN source_folders sf ON a.folder_id = sf.id
                  LEFT JOIN audio_embeddings ae ON a.id = ae.asset_id
                  WHERE a.asset_type = 'audio' AND ae.asset_id IS NULL
-                 ORDER BY a.path, a.zip_entry"
+                 ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry"
             )
             .fetch_all(&state.pool)
             .await
@@ -181,10 +184,11 @@ pub async fn get_processing_errors(
     let errors = match &category {
         Some(cat) => {
             sqlx::query_as::<_, ProcessingErrorDetail>(
-                "SELECT e.id, e.asset_id, a.filename, a.path, e.error_message,
-                        e.occurred_at, e.retry_count
+                "SELECT e.id, e.asset_id, a.filename, a.rel_path, sf.path as folder_path,
+                        e.error_message, e.occurred_at, e.retry_count
                  FROM processing_errors e
                  JOIN assets a ON e.asset_id = a.id
+                 JOIN source_folders sf ON a.folder_id = sf.id
                  WHERE e.resolved_at IS NULL AND e.category = ?
                  ORDER BY e.occurred_at DESC"
             )
@@ -194,10 +198,11 @@ pub async fn get_processing_errors(
         }
         None => {
             sqlx::query_as::<_, ProcessingErrorDetail>(
-                "SELECT e.id, e.asset_id, a.filename, a.path, e.error_message,
-                        e.occurred_at, e.retry_count
+                "SELECT e.id, e.asset_id, a.filename, a.rel_path, sf.path as folder_path,
+                        e.error_message, e.occurred_at, e.retry_count
                  FROM processing_errors e
                  JOIN assets a ON e.asset_id = a.id
+                 JOIN source_folders sf ON a.folder_id = sf.id
                  WHERE e.resolved_at IS NULL
                  ORDER BY e.occurred_at DESC"
             )
@@ -226,9 +231,10 @@ pub async fn retry_failed_assets(
         ));
     }
 
-    // Get assets with unresolved errors for this category
+    // Get assets with unresolved errors for this category (with folder_path)
     let assets: Vec<Asset> = sqlx::query_as(
-        "SELECT DISTINCT a.* FROM assets a
+        "SELECT DISTINCT a.*, sf.path as folder_path FROM assets a
+         JOIN source_folders sf ON a.folder_id = sf.id
          JOIN processing_errors e ON a.id = e.asset_id
          WHERE e.category = ? AND e.resolved_at IS NULL
          ORDER BY a.id"
@@ -309,4 +315,3 @@ pub async fn clear_processing_errors(
         .map(|r| r.rows_affected())
         .map_err(|e| format!("Failed to clear errors: {}", e))
 }
-

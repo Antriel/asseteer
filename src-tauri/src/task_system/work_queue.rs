@@ -698,11 +698,14 @@ mod tests {
         db: &SqlitePool,
         count: usize,
     ) -> Vec<Asset> {
+        let folder_path = dir.to_string_lossy().replace('\\', "/");
+        let folder_id = insert_source_folder(db, &folder_path, "test").await;
         let mut assets = Vec::new();
         for i in 0..count {
             let name = format!("img_{}.png", i);
-            let img_path = create_test_png(dir, &name);
-            let mut asset = make_asset(&name, img_path.to_str().unwrap(), "image", "png");
+            create_test_png(dir, &name);
+            let mut asset = make_asset(&name, folder_id, "", "image", "png");
+            asset.folder_path = folder_path.clone();
             asset.id = insert_asset(db, &asset).await;
             assets.push(asset);
         }
@@ -714,11 +717,24 @@ mod tests {
         db: &SqlitePool,
         count: usize,
     ) -> Vec<Asset> {
+        let folder_path = dir.to_string_lossy().replace('\\', "/");
+        // Reuse existing folder or create new one (INSERT OR IGNORE + SELECT)
+        sqlx::query("INSERT OR IGNORE INTO source_folders (path, label, added_at) VALUES (?, 'test_audio', 1000000)")
+            .bind(&folder_path)
+            .execute(db)
+            .await
+            .unwrap();
+        let folder_id: i64 = sqlx::query_scalar("SELECT id FROM source_folders WHERE path = ?")
+            .bind(&folder_path)
+            .fetch_one(db)
+            .await
+            .unwrap();
         let mut assets = Vec::new();
         for i in 0..count {
             let name = format!("audio_{}.wav", i);
-            let wav_path = create_test_wav(dir, &name);
-            let mut asset = make_asset(&name, wav_path.to_str().unwrap(), "audio", "wav");
+            create_test_wav(dir, &name);
+            let mut asset = make_asset(&name, folder_id, "", "audio", "wav");
+            asset.folder_path = folder_path.clone();
             asset.id = insert_asset(db, &asset).await;
             assets.push(asset);
         }
@@ -962,13 +978,14 @@ mod tests {
     #[tokio::test]
     async fn test_queue_failed_assets_tracked() {
         let db = create_test_db().await;
+        let folder_id = insert_source_folder(&db, "/nonexistent/path", "missing").await;
 
         // Assets pointing to non-existent files
         let mut assets = Vec::new();
         for i in 0..3 {
             let name = format!("missing_{}.png", i);
-            let path = format!("/nonexistent/path/missing_{}.png", i);
-            let mut asset = make_asset(&name, &path, "image", "png");
+            let mut asset = make_asset(&name, folder_id, "", "image", "png");
+            asset.folder_path = "/nonexistent/path".to_string();
             asset.id = insert_asset(&db, &asset).await;
             assets.push(asset);
         }

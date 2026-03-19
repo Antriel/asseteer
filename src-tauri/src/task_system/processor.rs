@@ -1,7 +1,7 @@
 /// Unified asset processor - handles both thumbnail generation and metadata extraction
 use crate::clap::{embedding_to_blob, ensure_server_running, get_clap_client};
 use crate::models::Asset;
-use crate::utils::load_asset_bytes;
+use crate::utils::{load_asset_bytes, resolve_asset_fs_path, resolve_zip_path};
 use image::{DynamicImage, GenericImageView};
 use sqlx::SqlitePool;
 use std::time::Duration;
@@ -314,7 +314,8 @@ pub async fn process_clap_embedding_batch(assets: &[Asset], db: &SqlitePool) -> 
             }
         } else {
             fs_indices.push(i);
-            fs_paths.push(asset.path.clone());
+            // Resolve absolute filesystem path from folder_path + rel_path + filename
+            fs_paths.push(resolve_asset_fs_path(asset));
         }
     }
 
@@ -422,34 +423,37 @@ fn load_asset_bytes_cached(
         let inner_zip_name = &zip_entry_path[..boundary];
         let inner_entry = &zip_entry_path[boundary + 1..]; // skip the '/'
 
+        // Cache key: resolved zip path on filesystem
+        let outer_zip_path = resolve_zip_path(asset);
+
         // Check cache: same outer ZIP path + same inner ZIP name
         let cache_hit = cache
             .as_ref()
             .map(|(cached_path, cached_inner, _)| {
-                cached_path == &asset.path && cached_inner == inner_zip_name
+                cached_path == &outer_zip_path && cached_inner == inner_zip_name
             })
             .unwrap_or(false);
 
         if !cache_hit {
             // Cache miss - read inner ZIP from outer
-            let zip_file = std::fs::File::open(&asset.path)
-                .map_err(|e| format!("Failed to open zip {}: {}", asset.path, e))?;
+            let zip_file = std::fs::File::open(&outer_zip_path)
+                .map_err(|e| format!("Failed to open zip {}: {}", outer_zip_path, e))?;
             let mut outer = zip::ZipArchive::new(zip_file)
-                .map_err(|e| format!("Failed to read zip {}: {}", asset.path, e))?;
+                .map_err(|e| format!("Failed to read zip {}: {}", outer_zip_path, e))?;
 
             let mut inner_bytes = Vec::new();
             {
                 let mut entry = outer.by_name(inner_zip_name)
-                    .map_err(|e| format!("Failed to find {} in {}: {}", inner_zip_name, asset.path, e))?;
+                    .map_err(|e| format!("Failed to find {} in {}: {}", inner_zip_name, outer_zip_path, e))?;
                 std::io::Read::read_to_end(&mut entry, &mut inner_bytes)
-                    .map_err(|e| format!("Failed to read {} from {}: {}", inner_zip_name, asset.path, e))?;
+                    .map_err(|e| format!("Failed to read {} from {}: {}", inner_zip_name, outer_zip_path, e))?;
             }
 
             let cursor = std::io::Cursor::new(inner_bytes);
             let inner_archive = zip::ZipArchive::new(cursor)
                 .map_err(|e| format!("Failed to open inner zip {}: {}", inner_zip_name, e))?;
 
-            *cache = Some((asset.path.clone(), inner_zip_name.to_string(), inner_archive));
+            *cache = Some((outer_zip_path, inner_zip_name.to_string(), inner_archive));
         }
 
         // Extract from cached inner ZIP
@@ -580,6 +584,13 @@ mod tests {
     use super::*;
     use crate::test_helpers::*;
 
+    /// Helper: create an asset with folder_path populated for test use
+    fn make_test_asset_with_path(filename: &str, folder_path: &str, folder_id: i64, asset_type: &str, format: &str) -> Asset {
+        let mut asset = make_asset(filename, folder_id, "", asset_type, format);
+        asset.folder_path = folder_path.to_string();
+        asset
+    }
+
     // -----------------------------------------------------------------------
     // process_asset – images
     // -----------------------------------------------------------------------
@@ -588,9 +599,11 @@ mod tests {
     async fn test_process_image_extracts_dimensions() {
         let dir = tempfile::tempdir().unwrap();
         let db = create_test_db().await;
-        let img_path = create_test_png(dir.path(), "test.png");
+        let folder_path = dir.path().to_string_lossy().replace('\\', "/");
+        let folder_id = insert_source_folder(&db, &folder_path, "test").await;
+        create_test_png(dir.path(), "test.png");
 
-        let mut asset = make_asset("test.png", img_path.to_str().unwrap(), "image", "png");
+        let mut asset = make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
         asset.id = insert_asset(&db, &asset).await;
 
         let result = process_asset(&asset, &db).await;
@@ -611,9 +624,11 @@ mod tests {
     async fn test_process_image_stores_null_thumbnail() {
         let dir = tempfile::tempdir().unwrap();
         let db = create_test_db().await;
-        let img_path = create_test_png(dir.path(), "test.png");
+        let folder_path = dir.path().to_string_lossy().replace('\\', "/");
+        let folder_id = insert_source_folder(&db, &folder_path, "test").await;
+        create_test_png(dir.path(), "test.png");
 
-        let mut asset = make_asset("test.png", img_path.to_str().unwrap(), "image", "png");
+        let mut asset = make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
         asset.id = insert_asset(&db, &asset).await;
 
         process_asset(&asset, &db).await;
@@ -635,9 +650,11 @@ mod tests {
     async fn test_process_image_does_not_overwrite_existing_thumbnail() {
         let dir = tempfile::tempdir().unwrap();
         let db = create_test_db().await;
-        let img_path = create_test_png(dir.path(), "test.png");
+        let folder_path = dir.path().to_string_lossy().replace('\\', "/");
+        let folder_id = insert_source_folder(&db, &folder_path, "test").await;
+        create_test_png(dir.path(), "test.png");
 
-        let mut asset = make_asset("test.png", img_path.to_str().unwrap(), "image", "png");
+        let mut asset = make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
         asset.id = insert_asset(&db, &asset).await;
 
         // Pre-populate with a fake thumbnail
@@ -653,7 +670,6 @@ mod tests {
         .unwrap();
 
         // Process again – ON CONFLICT should update dimensions but keep thumbnail
-        // because the INSERT sets thumbnail_data = NULL which should not overwrite
         process_asset(&asset, &db).await;
 
         let row: (i32, i32, Option<Vec<u8>>) = sqlx::query_as(
@@ -678,8 +694,23 @@ mod tests {
     #[tokio::test]
     async fn test_generate_thumbnail_produces_webp() {
         let dir = tempfile::tempdir().unwrap();
-        let img_path = create_test_png(dir.path(), "test.png");
-        let asset = make_asset("test.png", img_path.to_str().unwrap(), "image", "png");
+        let folder_path = dir.path().to_string_lossy().replace('\\', "/");
+        create_test_png(dir.path(), "test.png");
+        let asset = Asset {
+            id: 1,
+            filename: "test.png".into(),
+            folder_id: 1,
+            rel_path: "".into(),
+            zip_file: None,
+            zip_entry: None,
+            asset_type: "image".into(),
+            format: "png".into(),
+            file_size: 0,
+            fs_modified_at: None,
+            created_at: 0,
+            modified_at: 0,
+            folder_path,
+        };
 
         let (w, h, data) = generate_thumbnail_for_asset(&asset).await.unwrap();
         assert_eq!(w, 64);
@@ -715,9 +746,11 @@ mod tests {
     async fn test_process_audio_extracts_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let db = create_test_db().await;
-        let wav_path = create_test_wav(dir.path(), "test.wav");
+        let folder_path = dir.path().to_string_lossy().replace('\\', "/");
+        let folder_id = insert_source_folder(&db, &folder_path, "test").await;
+        create_test_wav(dir.path(), "test.wav");
 
-        let mut asset = make_asset("test.wav", wav_path.to_str().unwrap(), "audio", "wav");
+        let mut asset = make_test_asset_with_path("test.wav", &folder_path, folder_id, "audio", "wav");
         asset.id = insert_asset(&db, &asset).await;
 
         let result = process_asset(&asset, &db).await;
@@ -749,7 +782,8 @@ mod tests {
     #[tokio::test]
     async fn test_process_unsupported_asset_type() {
         let db = create_test_db().await;
-        let mut asset = make_asset("test.mp4", "/fake/path.mp4", "video", "mp4");
+        let folder_id = insert_source_folder(&db, "/fake", "fake").await;
+        let mut asset = make_asset("test.mp4", folder_id, "", "video", "mp4");
         asset.id = 999; // not in DB, but we won't reach the DB write
 
         let result = process_asset(&asset, &db).await;
@@ -764,7 +798,9 @@ mod tests {
     #[tokio::test]
     async fn test_process_image_missing_file_returns_error() {
         let db = create_test_db().await;
-        let mut asset = make_asset("gone.png", "/no/such/file.png", "image", "png");
+        let folder_id = insert_source_folder(&db, "/no/such", "missing").await;
+        let mut asset = make_asset("gone.png", folder_id, "path", "image", "png");
+        asset.folder_path = "/no/such".to_string();
         asset.id = insert_asset(&db, &asset).await;
 
         let result = process_asset(&asset, &db).await;

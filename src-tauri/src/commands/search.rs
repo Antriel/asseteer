@@ -13,8 +13,11 @@ pub struct SemanticSearchResult {
     // Asset fields
     pub id: i64,
     pub filename: String,
-    pub path: String,
+    pub folder_id: i64,
+    pub rel_path: String,
+    pub zip_file: Option<String>,
     pub zip_entry: Option<String>,
+    pub folder_path: String,
     pub asset_type: String,
     pub format: String,
     pub file_size: i64,
@@ -33,8 +36,11 @@ pub struct SemanticSearchResult {
 struct AssetMetadataRow {
     id: i64,
     filename: String,
-    path: String,
+    folder_id: i64,
+    rel_path: String,
+    zip_file: Option<String>,
     zip_entry: Option<String>,
+    folder_path: String,
     asset_type: String,
     format: String,
     file_size: i64,
@@ -61,10 +67,12 @@ async fn fetch_asset_metadata(
         let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
             r#"
-            SELECT a.id, a.filename, a.path, a.zip_entry, a.asset_type, a.format,
-                   a.file_size, a.created_at, a.modified_at,
+            SELECT a.id, a.filename, a.folder_id, a.rel_path, a.zip_file, a.zip_entry,
+                   sf.path as folder_path,
+                   a.asset_type, a.format, a.file_size, a.created_at, a.modified_at,
                    am.duration_ms, am.sample_rate, am.channels
             FROM assets a
+            JOIN source_folders sf ON a.folder_id = sf.id
             LEFT JOIN audio_metadata am ON a.id = am.asset_id
             WHERE a.id IN ({})
             "#,
@@ -122,8 +130,11 @@ pub async fn search_audio_semantic(
             metadata.get(&r.asset_id).map(|m| SemanticSearchResult {
                 id: m.id,
                 filename: m.filename.clone(),
-                path: m.path.clone(),
+                folder_id: m.folder_id,
+                rel_path: m.rel_path.clone(),
+                zip_file: m.zip_file.clone(),
                 zip_entry: m.zip_entry.clone(),
+                folder_path: m.folder_path.clone(),
                 asset_type: m.asset_type.clone(),
                 format: m.format.clone(),
                 file_size: m.file_size,
@@ -185,8 +196,11 @@ pub async fn search_audio_by_similarity(
             metadata.get(&r.asset_id).map(|m| SemanticSearchResult {
                 id: m.id,
                 filename: m.filename.clone(),
-                path: m.path.clone(),
+                folder_id: m.folder_id,
+                rel_path: m.rel_path.clone(),
+                zip_file: m.zip_file.clone(),
                 zip_entry: m.zip_entry.clone(),
+                folder_path: m.folder_path.clone(),
                 asset_type: m.asset_type.clone(),
                 format: m.format.clone(),
                 file_size: m.file_size,
