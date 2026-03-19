@@ -1,11 +1,11 @@
 ---
 # asseteer-zmc8
 title: Store relative paths with folder_id instead of absolute paths
-status: todo
+status: scrapped
 type: task
 priority: normal
 created_at: 2026-03-17T08:44:22Z
-updated_at: 2026-03-18T10:01:14Z
+updated_at: 2026-03-19T06:38:04Z
 parent: asseteer-i459
 blocked_by:
     - asseteer-wxak
@@ -57,3 +57,8 @@ The FTS trigger should index only the directory components of `rel_path` (strip 
 The current folder tree implementation (`buildChildNodes`, `getZipDirectoryChildren`) has persistent bugs because `assets.path` stores the full file path including filename. The tree code must distinguish files from directories by path depth heuristics, which breaks with ZIP files (they sit at the same depth as regular files but are browsable). Multiple fix attempts have been fragile.
 
 With `folder_id + rel_path` (where `rel_path` is the directory path without filename), tree queries would naturally `GROUP BY rel_path` and only produce directory nodes. ZIP files would need their own handling via `zip_entry`, but the filesystem tree would be correct by construction. This schema change would eliminate an entire class of tree-browsing bugs.
+
+
+## Reasons for Scrapping
+
+Absorbed into asseteer-wxak. With the decision to not require DB migration (schema designed from scratch), there's no reason to phase the source_folders table and the rel_path migration separately. wxak now includes the full `folder_id + rel_path + filename` schema from day one.

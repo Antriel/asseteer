@@ -31,5 +31,5 @@ Increase CLAP concurrency and spawn multiple server processes for parallel infer
 
 ## Implementation Notes
 - **Only spawn 2nd server during processing** — search only converts a single text string to an embedding vector, no benefit from a second server
-- **Check free memory before spawning 2nd server** — each server process uses ~2GB RAM. Only start the second if there's enough headroom
+- **Check free memory before spawning 2nd server** — each server process uses ~2GB RAM (or VRAM if GPU mode). Only start the second if there's enough headroom
 - Keep single-server as the default; 2nd server is an optimization for batch processing only

@@ -5,8 +5,10 @@ status: draft
 type: task
 priority: normal
 created_at: 2026-03-17T08:44:22Z
-updated_at: 2026-03-18T09:56:14Z
+updated_at: 2026-03-19T05:55:28Z
 parent: asseteer-i459
+blocked_by:
+    - asseteer-1vw2
 ---
 
 Current indexes are single-column and miss the most common query patterns.

@@ -1,11 +1,11 @@
 ---
 # asseteer-1r6b
 title: Normalize paths to forward slashes at write time
-status: todo
+status: scrapped
 type: task
 priority: low
 created_at: 2026-03-17T08:44:22Z
-updated_at: 2026-03-18T10:01:20Z
+updated_at: 2026-03-19T06:44:47Z
 parent: asseteer-i459
 blocked_by:
     - asseteer-zmc8
@@ -37,3 +37,8 @@ If switching to relative paths (folder_id + rel_path), the same principle applie
 ## Note: also needed for folder tree
 
 The folder tree code currently uses `pathSep()` and `splitPath()` to handle both `/` and `\` separators. Normalizing to forward slashes at write time would simplify all tree-building logic significantly, since `splitPath` wouldn't need to detect the separator style.
+
+
+## Reasons for Scrapping
+
+Absorbed into asseteer-wxak. With the schema redesign (no migration), paths will be normalized to forward slashes from day one as part of the `rel_path` computation. No separate task needed.
