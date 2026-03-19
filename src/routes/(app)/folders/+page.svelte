@@ -325,8 +325,7 @@
   }
 </script>
 
-<div class="h-full overflow-y-auto p-8">
-  <div class="max-w-3xl">
+<div class="flex flex-col h-full overflow-auto p-6">
     <!-- Header -->
     <div class="flex items-center justify-between mb-6">
       <div>
@@ -511,5 +510,4 @@
         {/each}
       </div>
     {/if}
-  </div>
 </div>
