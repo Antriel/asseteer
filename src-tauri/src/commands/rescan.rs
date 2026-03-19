@@ -1,5 +1,6 @@
 use crate::commands::scan::{
-    discover_files_streaming, DiscoveredAsset, ScanProgress, ScanProgressState,
+    discover_files_streaming, load_search_config, DiscoveredAsset, ScanProgress,
+    ScanProgressState,
 };
 use crate::AppState;
 use serde::Serialize;
@@ -107,7 +108,10 @@ pub async fn preview_rescan(
         ));
     }
 
-    // 2. Discover files on disk (reuse streaming discovery, collect results)
+    // 2. Load search config for this folder
+    let search_config = load_search_config(&state.pool, folder_id).await?;
+
+    // 3. Discover files on disk (reuse streaming discovery, collect results)
     let (tx, mut rx) = mpsc::channel::<Vec<DiscoveredAsset>>(32);
 
     let progress = Arc::new(ScanProgressState {
@@ -127,6 +131,7 @@ pub async fn preview_rescan(
             tx,
             &discover_progress,
             "rescan-progress",
+            &search_config,
         )
     });
 
@@ -326,13 +331,14 @@ pub async fn apply_rescan(
 
     // Update modified assets: update file stats, delete derived metadata
     for (asset_id, disc) in &preview.modified {
-        // Update the asset row
+        // Update the asset row (including searchable_path to refresh FTS triggers)
         sqlx::query(
-            "UPDATE assets SET file_size = ?1, fs_modified_at = ?2, modified_at = ?3 WHERE id = ?4",
+            "UPDATE assets SET file_size = ?1, fs_modified_at = ?2, modified_at = ?3, searchable_path = ?4 WHERE id = ?5",
         )
         .bind(disc.file_size)
         .bind(disc.fs_modified_at)
         .bind(now)
+        .bind(&disc.searchable_path)
         .bind(asset_id)
         .execute(&mut *tx)
         .await
@@ -382,15 +388,16 @@ pub async fn apply_rescan(
         sqlx::query(
             "INSERT OR IGNORE INTO assets (
                 filename, folder_id, rel_path, zip_file, zip_entry,
-                asset_type, format, file_size, fs_modified_at,
+                searchable_path, asset_type, format, file_size, fs_modified_at,
                 created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )
         .bind(&asset.filename)
         .bind(asset.folder_id)
         .bind(&asset.rel_path)
         .bind(&asset.zip_file)
         .bind(&asset.zip_entry)
+        .bind(&asset.searchable_path)
         .bind(asset.asset_type.as_str())
         .bind(&asset.format)
         .bind(asset.file_size)

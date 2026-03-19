@@ -1,11 +1,11 @@
 ---
 # asseteer-wxak
 title: 'Folder management: add, remove, and rescan source folders'
-status: in-progress
+status: completed
 type: feature
 priority: normal
 created_at: 2026-03-16T11:00:19Z
-updated_at: 2026-03-19T10:21:29Z
+updated_at: 2026-03-19T10:39:45Z
 ---
 
 Complete folder management system: persistent source folders, relative paths, add/remove/rescan, and management UI.
@@ -208,7 +208,7 @@ This is not just a query change — it touches state management, UI components, 
 - [x] Implement `apply_rescan` command (commit previewed changes)
 - [x] Implement `remove_folder` command (just DELETE, cascade does the rest)
 - [x] Implement `rename_folder` command
-- [ ] Implement `update_search_config` command + FTS re-index logic
+- [x] Implement `update_search_config` command + FTS re-index logic
 
 ### Path-dependent surfaces to update (schema swap)
 All code that references `assets.path` or the `path::zip_prefix` convention must be updated:
@@ -251,3 +251,7 @@ All code that references `assets.path` or the `path::zip_prefix` convention must
 
 - **asseteer-zmc8** (relative paths) — full schema included here
 - **asseteer-1r6b** (path normalization) — forward-slash normalization at write time included here
+
+## Summary of Changes
+
+All tasks complete. The `update_search_config` command was implemented as part of the dual FTS5 tables work — it replaces folder config entries and re-indexes all affected assets' `searchable_path` values.

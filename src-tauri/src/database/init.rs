@@ -41,8 +41,12 @@ pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // Create FTS5 virtual table
-    sqlx::query(CREATE_ASSETS_FTS)
+    // Create FTS5 virtual tables (dual: trigram for substring, unicode61 for words)
+    sqlx::query(CREATE_ASSETS_FTS_SUB)
+        .execute(pool)
+        .await?;
+
+    sqlx::query(CREATE_ASSETS_FTS_WORD)
         .execute(pool)
         .await?;
 

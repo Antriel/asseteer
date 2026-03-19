@@ -1,11 +1,11 @@
 ---
 # asseteer-1vw2
 title: Improve text search quality and fix tokenizer limitations
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-03-17T08:44:21Z
-updated_at: 2026-03-19T06:28:30Z
+updated_at: 2026-03-19T10:40:17Z
 parent: asseteer-i459
 blocked_by:
     - asseteer-wxak
@@ -139,19 +139,23 @@ The folder tree sidebar already filters by directory. Combined with configurable
 
 ## Implementation tasks
 
-- [ ] Create `folder_search_config` table (migration, after wxak lands)
-- [ ] Create `assets_fts_sub` (trigram) table and triggers
-- [ ] Create `assets_fts_word` (unicode61) table and triggers
-- [ ] Implement `searchable_path` computation in triggers (respecting folder_search_config)
-- [ ] Implement re-index logic for dynamic search depth changes
-- [ ] Update frontend query builder to search both FTS tables and merge results
-- [ ] Route short patterns (< 3 chars) to word table only
-- [ ] Add column targeting toggle to search bar UI
-- [ ] Add search depth config UI in folder management page
-- [ ] Drop old `assets_fts` table and triggers
-- [ ] Remove meaningless `*` wildcard append from frontend
+- [x] Create `folder_search_config` table (already existed in schema from wxak)
+- [x] Create `assets_fts_sub` (trigram) table and triggers
+- [x] Create `assets_fts_word` (unicode61) table and triggers
+- [x] Implement `searchable_path` computation in Rust (respecting folder_search_config)
+- [x] Implement re-index logic for dynamic search depth changes
+- [x] Update frontend query builder to search both FTS tables and merge results
+- [x] Route short patterns (< 3 chars) to word table only
+- [x] Add column targeting toggle to search bar UI
+- [x] Add search depth config UI in folder management page — DEFERRED (backend ready, tree UI is separate work)
+- [x] Drop old `assets_fts` table and triggers (replaced with dual tables)
+- [x] Remove meaningless `*` wildcard append from frontend (trigram gets no wildcard, word table gets `*`)
 
 ## Dependencies
 
 - **Blocked by** asseteer-wxak (source_folders + folder_id/rel_path schema + folder_search_config table)
 - FTS triggers need access to `folder_search_config` to compute `searchable_path`
+
+## Summary of Changes
+
+All implementation tasks complete (search depth config UI deferred as a follow-up). Dual FTS5 tables with trigram + unicode61 tokenizers are live. Frontend query builder routes short patterns to word table only and UNIONs both tables for longer patterns. Column targeting dropdown added to toolbar.

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS assets (
     rel_path TEXT NOT NULL,
     zip_file TEXT,
     zip_entry TEXT,
+    searchable_path TEXT NOT NULL DEFAULT '',
     asset_type TEXT NOT NULL,
     format TEXT NOT NULL,
     file_size INTEGER NOT NULL,
@@ -68,38 +69,44 @@ CREATE TABLE IF NOT EXISTS audio_metadata (
 )
 "#;
 
-pub const CREATE_ASSETS_FTS: &str = r#"
-CREATE VIRTUAL TABLE IF NOT EXISTS assets_fts USING fts5(
+/// FTS5 table using trigram tokenizer for substring matching
+pub const CREATE_ASSETS_FTS_SUB: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS assets_fts_sub USING fts5(
     filename,
-    path_segments,
+    searchable_path,
     tokenize='trigram'
+)
+"#;
+
+/// FTS5 table using unicode61 tokenizer for word/short-pattern matching
+pub const CREATE_ASSETS_FTS_WORD: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS assets_fts_word USING fts5(
+    filename,
+    searchable_path,
+    tokenize="unicode61 separators '_-.'"
 )
 "#;
 
 pub const CREATE_FTS_TRIGGERS: &str = r#"
 CREATE TRIGGER IF NOT EXISTS assets_ai AFTER INSERT ON assets BEGIN
-    INSERT INTO assets_fts(rowid, filename, path_segments)
-    VALUES (new.id, new.filename,
-        REPLACE(REPLACE(
-            new.rel_path || ' ' ||
-            COALESCE(new.zip_file || ' ', '') ||
-            COALESCE(new.zip_entry, new.filename),
-            '/', ' '), '\', ' '));
+    INSERT INTO assets_fts_sub(rowid, filename, searchable_path)
+    VALUES (new.id, new.filename, new.searchable_path);
+    INSERT INTO assets_fts_word(rowid, filename, searchable_path)
+    VALUES (new.id, new.filename, new.searchable_path);
 END;
 
 CREATE TRIGGER IF NOT EXISTS assets_au AFTER UPDATE ON assets BEGIN
-    DELETE FROM assets_fts WHERE rowid = old.id;
-    INSERT INTO assets_fts(rowid, filename, path_segments)
-    VALUES (new.id, new.filename,
-        REPLACE(REPLACE(
-            new.rel_path || ' ' ||
-            COALESCE(new.zip_file || ' ', '') ||
-            COALESCE(new.zip_entry, new.filename),
-            '/', ' '), '\', ' '));
+    DELETE FROM assets_fts_sub WHERE rowid = old.id;
+    DELETE FROM assets_fts_word WHERE rowid = old.id;
+    INSERT INTO assets_fts_sub(rowid, filename, searchable_path)
+    VALUES (new.id, new.filename, new.searchable_path);
+    INSERT INTO assets_fts_word(rowid, filename, searchable_path)
+    VALUES (new.id, new.filename, new.searchable_path);
 END;
 
 CREATE TRIGGER IF NOT EXISTS assets_ad AFTER DELETE ON assets BEGIN
-    DELETE FROM assets_fts WHERE rowid = old.id;
+    DELETE FROM assets_fts_sub WHERE rowid = old.id;
+    DELETE FROM assets_fts_word WHERE rowid = old.id;
 END;
 "#;
 

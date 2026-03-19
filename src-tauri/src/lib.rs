@@ -82,6 +82,7 @@ pub fn run() {
             commands::folders::list_folders,
             commands::folders::remove_folder,
             commands::folders::rename_folder,
+            commands::folders::update_search_config,
             commands::rescan::preview_rescan,
             commands::rescan::apply_rescan,
             commands::process::start_processing,

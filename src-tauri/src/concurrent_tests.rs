@@ -70,7 +70,7 @@ async fn test_search_query_returns_results() {
 
     // FTS search — filenames contain "image" so "image*" should match all
     let results: Vec<(i64, String)> =
-        sqlx::query_as("SELECT assets.id, assets.filename FROM assets INNER JOIN assets_fts ON assets.id = assets_fts.rowid WHERE assets_fts MATCH 'image*' LIMIT 50")
+        sqlx::query_as("SELECT assets.id, assets.filename FROM assets INNER JOIN assets_fts_word ON assets.id = assets_fts_word.rowid WHERE assets_fts_word MATCH 'image*' LIMIT 50")
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -119,10 +119,10 @@ async fn test_search_not_blocked_by_thumbnail_writes() {
         sqlx::query_as::<_, (i64, String)>(
             "SELECT assets.id, assets.filename
              FROM assets
-             INNER JOIN assets_fts ON assets.id = assets_fts.rowid
+             INNER JOIN assets_fts_word ON assets.id = assets_fts_word.rowid
              LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
              LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
-             WHERE assets_fts MATCH 'image*' AND assets.asset_type = 'image'
+             WHERE assets_fts_word MATCH 'image*' AND assets.asset_type = 'image'
              ORDER BY assets.filename COLLATE NOCASE ASC
              LIMIT 5001 OFFSET 0",
         )
@@ -192,8 +192,8 @@ async fn test_search_not_blocked_without_busy_timeout() {
         for attempt in 0..3 {
             match sqlx::query_as::<_, (i64,)>(
                 "SELECT assets.id FROM assets
-                 INNER JOIN assets_fts ON assets.id = assets_fts.rowid
-                 WHERE assets_fts MATCH 'image*' AND assets.asset_type = 'image'
+                 INNER JOIN assets_fts_word ON assets.id = assets_fts_word.rowid
+                 WHERE assets_fts_word MATCH 'image*' AND assets.asset_type = 'image'
                  LIMIT 50",
             )
             .fetch_all(&reader)
@@ -214,8 +214,8 @@ async fn test_search_not_blocked_without_busy_timeout() {
         // Last attempt
         sqlx::query_as::<_, (i64,)>(
             "SELECT assets.id FROM assets
-             INNER JOIN assets_fts ON assets.id = assets_fts.rowid
-             WHERE assets_fts MATCH 'image*' AND assets.asset_type = 'image'
+             INNER JOIN assets_fts_word ON assets.id = assets_fts_word.rowid
+             WHERE assets_fts_word MATCH 'image*' AND assets.asset_type = 'image'
              LIMIT 50",
         )
         .fetch_all(&reader)
@@ -259,10 +259,10 @@ async fn test_fts_search_performance() {
     let results: Vec<(i64,)> = sqlx::query_as(
         "SELECT assets.id
          FROM assets
-         INNER JOIN assets_fts ON assets.id = assets_fts.rowid
+         INNER JOIN assets_fts_word ON assets.id = assets_fts_word.rowid
          LEFT JOIN image_metadata ON assets.id = image_metadata.asset_id
          LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
-         WHERE assets_fts MATCH 'image*' AND assets.asset_type = 'image'
+         WHERE assets_fts_word MATCH 'image*' AND assets.asset_type = 'image'
          ORDER BY assets.filename COLLATE NOCASE ASC
          LIMIT 5001 OFFSET 0",
     )

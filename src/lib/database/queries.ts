@@ -22,6 +22,48 @@ const ASSET_JOINS = `
 	LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
 `;
 
+/** Search column targeting type */
+export type SearchColumn = 'anywhere' | 'filename' | 'path';
+
+/**
+ * Build FTS condition for dual-table search.
+ * Short patterns (< 3 chars) use word table only with wildcard.
+ * Longer patterns use UNION of both tables.
+ */
+function buildFtsCondition(
+  searchText: string,
+  searchColumn: SearchColumn,
+  conditions: string[],
+  params: unknown[],
+): void {
+  const trimmed = searchText.trim();
+  if (!trimmed) return;
+
+  // Column prefix for FTS5 column targeting
+  const colPrefix = searchColumn === 'filename' ? 'filename:' : searchColumn === 'path' ? 'searchable_path:' : '';
+
+  if (trimmed.length < 3) {
+    // Short patterns: word table only with wildcard (trigram needs >= 3 chars)
+    const wordQuery = `${colPrefix}${trimmed}*`;
+    conditions.push('assets.id IN (SELECT rowid FROM assets_fts_word WHERE assets_fts_word MATCH ?)');
+    params.push(wordQuery);
+  } else {
+    // Longer patterns: UNION both tables
+    // Trigram: exact substring match (no wildcard needed)
+    // Word: prefix match with wildcard
+    const subQuery = `${colPrefix}${trimmed}`;
+    const wordQuery = `${colPrefix}${trimmed}*`;
+    conditions.push(
+      `assets.id IN (
+        SELECT rowid FROM assets_fts_sub WHERE assets_fts_sub MATCH ?
+        UNION
+        SELECT rowid FROM assets_fts_word WHERE assets_fts_word MATCH ?
+      )`,
+    );
+    params.push(subQuery, wordQuery);
+  }
+}
+
 /**
  * Search for assets with optional full-text search and filtering
  */
@@ -33,16 +75,14 @@ export async function searchAssets(
   offset: number = 0,
   durationFilter?: DurationFilter,
   folderLocation?: FolderLocation | null,
+  searchColumn: SearchColumn = 'anywhere',
 ): Promise<Asset[]> {
-  const ftsQuery = searchText?.trim() ? `${searchText.trim()}*` : null;
   const conditions: string[] = [];
   const params: unknown[] = [];
 
-  // Use a subquery for FTS matching to force SQLite's query planner to
-  // evaluate the FTS index first (see countSearchResults for details).
-  if (ftsQuery) {
-    conditions.push('assets.id IN (SELECT rowid FROM assets_fts WHERE assets_fts MATCH ?)');
-    params.push(ftsQuery);
+  // Use dual FTS tables for search
+  if (searchText?.trim()) {
+    buildFtsCondition(searchText, searchColumn, conditions, params);
   }
 
   if (assetType) {
@@ -89,18 +129,14 @@ export async function countSearchResults(
   assetType?: string,
   durationFilter?: DurationFilter,
   folderLocation?: FolderLocation | null,
+  searchColumn: SearchColumn = 'anywhere',
 ): Promise<number> {
-  const ftsQuery = searchText?.trim() ? `${searchText.trim()}*` : null;
   const conditions: string[] = [];
   const params: unknown[] = [];
 
-  // Use a subquery for FTS matching to force SQLite's query planner to
-  // evaluate the FTS index first. A direct JOIN with additional WHERE
-  // conditions (e.g. asset_type) can cause the planner to scan the assets
-  // table first and probe FTS per-row, which effectively hangs on large datasets.
-  if (ftsQuery) {
-    conditions.push('assets.id IN (SELECT rowid FROM assets_fts WHERE assets_fts MATCH ?)');
-    params.push(ftsQuery);
+  // Use dual FTS tables for search
+  if (searchText?.trim()) {
+    buildFtsCondition(searchText, searchColumn, conditions, params);
   }
 
   if (assetType) {

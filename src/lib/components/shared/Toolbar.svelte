@@ -1,5 +1,6 @@
 <script lang="ts">
   import { assetsState } from '$lib/state/assets.svelte';
+  import type { SearchColumn } from '$lib/database/queries';
   import { viewState } from '$lib/state/view.svelte';
   import { exploreState } from '$lib/state/explore.svelte';
   import { clapState } from '$lib/state/clap.svelte';
@@ -172,6 +173,24 @@
     isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults,
   );
 
+  const searchColumnOptions: { value: SearchColumn; label: string }[] = [
+    { value: 'anywhere', label: 'Anywhere' },
+    { value: 'filename', label: 'Filename' },
+    { value: 'path', label: 'Path' },
+  ];
+
+  function handleSearchColumnChange(e: Event) {
+    const value = (e.target as HTMLSelectElement).value as SearchColumn;
+    assetsState.searchColumn = value;
+    // Re-run search if there's active text
+    if (searchInput.trim() && !isSimilarityMode) {
+      const isSemanticMode = isAudioTab && clapState.semanticSearchEnabled;
+      if (!isSemanticMode) {
+        assetsState.searchAssets(searchInput, viewState.activeTab === 'images' ? 'image' : 'audio');
+      }
+    }
+  }
+
   // Placeholder text based on search mode
   let placeholderText = $derived(
     isSimilarityMode
@@ -225,6 +244,19 @@
         </button>
       {/if}
     </div>
+
+    <!-- Search column targeting -->
+    {#if !isSimilarityMode && !isSemanticModeEnabled}
+      <select
+        value={assetsState.searchColumn}
+        onchange={handleSearchColumnChange}
+        class="py-2 px-2 text-sm border border-default rounded-md bg-primary text-primary focus:outline-none focus:ring-2 focus:ring-accent"
+      >
+        {#each searchColumnOptions as opt}
+          <option value={opt.value}>{opt.label}</option>
+        {/each}
+      </select>
+    {/if}
 
     <!-- Audio-specific filters (semantic search + duration filter) -->
     {#if isAudioTab}

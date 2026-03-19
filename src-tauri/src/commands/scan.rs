@@ -43,6 +43,7 @@ pub(crate) struct DiscoveredAsset {
     pub rel_path: String,
     pub zip_file: Option<String>,
     pub zip_entry: Option<String>,
+    pub searchable_path: String,
     pub format: String,
     pub asset_type: AssetType,
     pub file_size: i64,
@@ -106,6 +107,9 @@ pub async fn add_folder(
 
     let session_id = create_scan_session(&state, folder_id).await?;
 
+    // Load folder search config (sorted by prefix length desc for longest-match-first)
+    let search_config = load_search_config(&state.pool, folder_id).await?;
+
     let (tx, mut rx) = mpsc::channel::<Vec<DiscoveredAsset>>(32);
 
     let progress = Arc::new(ScanProgressState {
@@ -119,7 +123,7 @@ pub async fn add_folder(
     let discover_app = app.clone();
     let discover_progress = progress.clone();
     let discovery_handle = tokio::task::spawn_blocking(move || {
-        discover_files_streaming(&discover_app, &root_path_buf, folder_id, tx, &discover_progress, "scan-progress")
+        discover_files_streaming(&discover_app, &root_path_buf, folder_id, tx, &discover_progress, "scan-progress", &search_config)
     });
 
     // Receive chunks and insert them as they arrive
@@ -267,6 +271,7 @@ pub(crate) fn discover_files_streaming(
     tx: mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
     event_name: &str,
+    search_config: &[(String, i32)],
 ) -> Result<(), String> {
     let mut chunk = Vec::with_capacity(CHUNK_SIZE);
     let mut last_emit = Instant::now();
@@ -320,12 +325,14 @@ pub(crate) fn discover_files_streaming(
                     .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
                     .unwrap_or(0);
 
+                let searchable_path = compute_searchable_path(&rel_path, None, search_config);
                 chunk.push(DiscoveredAsset {
                     filename: filename.to_string(),
                     folder_id,
                     rel_path,
                     zip_file: None,
                     zip_entry: None,
+                    searchable_path,
                     format: ext_str.to_string(),
                     asset_type,
                     file_size: metadata.len() as i64,
@@ -359,6 +366,7 @@ pub(crate) fn discover_files_streaming(
                     &tx,
                     progress,
                     &mut chunk,
+                    search_config,
                 ) {
                     Ok(()) => {
                         progress.zips_scanned.fetch_add(1, Ordering::Relaxed);
@@ -425,6 +433,65 @@ pub(crate) fn compute_rel_path(root: &Path, file_path: &Path) -> String {
     s.trim_end_matches('/').to_string()
 }
 
+/// Compute the searchable path for FTS indexing.
+///
+/// Takes `rel_path`, optional `zip_entry`, and a config slice of
+/// `(subfolder_prefix, skip_depth)` pairs sorted by prefix length descending.
+/// Finds the longest matching prefix, strips that prefix plus `skip_depth`
+/// additional segments from the rel_path, appends the directory portion of
+/// zip_entry (if present), and replaces path separators with spaces.
+pub(crate) fn compute_searchable_path(
+    rel_path: &str,
+    zip_entry: Option<&str>,
+    config: &[(String, i32)],
+) -> String {
+    let mut path_to_use = rel_path.to_string();
+
+    // Find longest matching prefix from config
+    for (prefix, skip_depth) in config {
+        let matches = if prefix.is_empty() {
+            true
+        } else {
+            path_to_use == *prefix || path_to_use.starts_with(&format!("{}/", prefix))
+        };
+        if matches {
+            // Strip the prefix
+            let remainder = if prefix.is_empty() {
+                path_to_use.clone()
+            } else if path_to_use.len() == prefix.len() {
+                String::new()
+            } else {
+                path_to_use[prefix.len() + 1..].to_string()
+            };
+            // Skip additional depth segments
+            let segments: Vec<&str> = remainder.split('/').filter(|s| !s.is_empty()).collect();
+            let skip = *skip_depth as usize;
+            if skip >= segments.len() {
+                path_to_use = String::new();
+            } else {
+                path_to_use = segments[skip..].join("/");
+            }
+            break;
+        }
+    }
+
+    // Append directory portion of zip_entry (everything before the last `/`)
+    if let Some(entry) = zip_entry {
+        if let Some(last_slash) = entry.rfind('/') {
+            let dir_part = &entry[..last_slash];
+            if !dir_part.is_empty() {
+                if !path_to_use.is_empty() {
+                    path_to_use.push(' ');
+                }
+                path_to_use.push_str(dir_part);
+            }
+        }
+    }
+
+    // Replace path separators with spaces
+    path_to_use.replace('/', " ").replace('\\', " ")
+}
+
 /// Discover assets inside a zip file, streaming chunks through the channel
 fn discover_zip_streaming(
     zip_path: &Path,
@@ -435,6 +502,7 @@ fn discover_zip_streaming(
     tx: &mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
     chunk: &mut Vec<DiscoveredAsset>,
+    search_config: &[(String, i32)],
 ) -> Result<(), String> {
     let file =
         File::open(zip_path).map_err(|e| format!("Failed to open zip: {}", e))?;
@@ -444,7 +512,7 @@ fn discover_zip_streaming(
 
     discover_zip_recursive_streaming(
         archive, folder_id, rel_path, zip_filename, zip_mtime,
-        "", tx, progress, chunk,
+        "", tx, progress, chunk, search_config,
     )
 }
 
@@ -459,6 +527,7 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
     tx: &mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
     chunk: &mut Vec<DiscoveredAsset>,
+    search_config: &[(String, i32)],
 ) -> Result<(), String> {
     // First pass: collect entry info (indices needed to avoid borrow conflicts)
     let mut entries_info: Vec<(usize, String, u64)> = Vec::new();
@@ -516,6 +585,7 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
                             tx,
                             progress,
                             chunk,
+                            search_config,
                         ) {
                             eprintln!(
                                 "Warning: Failed to process nested zip {}{}: {}",
@@ -532,6 +602,7 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
                 }
             } else if let Some(asset_type) = detect_asset_type_from_ext(&ext_str) {
                 let full_entry_path = format!("{}{}", prefix, entry_name);
+                let searchable_path = compute_searchable_path(rel_path, Some(&full_entry_path), search_config);
 
                 chunk.push(DiscoveredAsset {
                     filename: filename.to_string(),
@@ -539,6 +610,7 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
                     rel_path: rel_path.to_string(),
                     zip_file: Some(zip_filename.to_string()),
                     zip_entry: Some(full_entry_path),
+                    searchable_path,
                     format: ext_str.to_string(),
                     asset_type,
                     file_size: entry_size as i64,
@@ -574,15 +646,16 @@ pub(crate) async fn insert_asset_chunk(
         sqlx::query(
             "INSERT OR IGNORE INTO assets (
                 filename, folder_id, rel_path, zip_file, zip_entry,
-                asset_type, format, file_size, fs_modified_at,
+                searchable_path, asset_type, format, file_size, fs_modified_at,
                 created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )
         .bind(&asset.filename)
         .bind(asset.folder_id)
         .bind(&asset.rel_path)
         .bind(&asset.zip_file)
         .bind(&asset.zip_entry)
+        .bind(&asset.searchable_path)
         .bind(asset.asset_type.as_str())
         .bind(&asset.format)
         .bind(asset.file_size)
@@ -596,6 +669,23 @@ pub(crate) async fn insert_asset_chunk(
 
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Load folder search config sorted by prefix length descending (longest match first)
+pub(crate) async fn load_search_config(
+    pool: &sqlx::SqlitePool,
+    folder_id: i64,
+) -> Result<Vec<(String, i32)>, String> {
+    let rows: Vec<(String, i32)> = sqlx::query_as(
+        "SELECT subfolder_prefix, skip_depth FROM folder_search_config
+         WHERE source_folder_id = ?1
+         ORDER BY LENGTH(subfolder_prefix) DESC",
+    )
+    .bind(folder_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(rows)
 }
 
 /// Detect asset type from file extension

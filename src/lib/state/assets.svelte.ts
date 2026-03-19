@@ -5,6 +5,7 @@ import {
   countSearchResults,
   getAssetCount,
   getAssetCountByType,
+  type SearchColumn,
 } from '$lib/database/queries';
 import { clearThumbnailCache } from '$lib/state/thumbnails.svelte';
 
@@ -31,6 +32,8 @@ class AssetsState {
   durationFilter = $state<DurationFilter>({ minMs: null, maxMs: null });
   // Folder location filter (null = all folders)
   folderLocation = $state<FolderLocation | null>(null);
+  // Search column targeting
+  searchColumn = $state<SearchColumn>('anywhere');
 
   // Search cancellation tracking
   private searchVersion = 0;
@@ -77,6 +80,7 @@ class AssetsState {
         0,
         durationFilter,
         this.folderLocation,
+        this.searchColumn,
       );
 
       // Only update if this search is still current
@@ -93,6 +97,7 @@ class AssetsState {
           assetType,
           durationFilter,
           this.folderLocation,
+          this.searchColumn,
         );
         // Re-check cancellation after the count query
         if (currentVersion !== this.searchVersion) return;

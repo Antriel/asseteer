@@ -1,11 +1,11 @@
 ---
 # asseteer-64oi
 title: 'UI redesign: sidebar, folder panel, and search improvements'
-status: in-progress
+status: completed
 type: feature
 priority: normal
 created_at: 2026-03-18T09:12:45Z
-updated_at: 2026-03-18T10:01:29Z
+updated_at: 2026-03-19T10:39:50Z
 ---
 
 Redesign the left panel area for better UX:
@@ -33,3 +33,7 @@ Redesign the left panel area for better UX:
 ## Known issue: folder tree still broken for ZIPs
 
 The `buildChildNodes` function cannot reliably distinguish files from directories because `assets.path` stores the full file path (including filename). ZIP files look identical to regular files at the same path depth, so heuristics to skip files also skip ZIPs. The proper fix is the schema redesign in asseteer-zmc8 (folder_id + rel_path), which would make directory structure explicit rather than inferred from file paths.
+
+## Summary of Changes
+
+All tasks were already complete. The known ZIP folder tree issue was resolved by the schema redesign in asseteer-wxak (folder_id + rel_path + zip_file separation).
