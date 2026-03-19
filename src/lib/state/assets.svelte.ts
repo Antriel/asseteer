@@ -1,4 +1,4 @@
-import type { Asset } from '$lib/types';
+import type { Asset, FolderLocation } from '$lib/types';
 import { getDatabase } from '$lib/database/connection';
 import {
   searchAssets as dbSearchAssets,
@@ -29,8 +29,8 @@ class AssetsState {
   totalMatchingCount = $state(0);
   // Duration filter for audio assets
   durationFilter = $state<DurationFilter>({ minMs: null, maxMs: null });
-  // Folder path filter (null = all folders)
-  folderPath = $state<string | null>(null);
+  // Folder location filter (null = all folders)
+  folderLocation = $state<FolderLocation | null>(null);
 
   // Search cancellation tracking
   private searchVersion = 0;
@@ -52,7 +52,7 @@ class AssetsState {
 
       // If no search text AND no folder filter, show empty state instead of loading all assets
       // This prevents loading 1M+ items which causes performance issues
-      if (!this.searchText?.trim() && !this.folderPath) {
+      if (!this.searchText?.trim() && !this.folderLocation) {
         if (currentVersion !== this.searchVersion) return;
 
         clearThumbnailCache();
@@ -76,7 +76,7 @@ class AssetsState {
         MAX_DISPLAY_LIMIT + 1,
         0,
         durationFilter,
-        this.folderPath,
+        this.folderLocation,
       );
 
       // Only update if this search is still current
@@ -92,7 +92,7 @@ class AssetsState {
           this.searchText,
           assetType,
           durationFilter,
-          this.folderPath,
+          this.folderLocation,
         );
         // Re-check cancellation after the count query
         if (currentVersion !== this.searchVersion) return;
@@ -140,10 +140,10 @@ class AssetsState {
   }
 
   /**
-   * Set folder path filter and reload assets
+   * Set folder location filter and reload assets
    */
-  setFolderFilter(path: string | null, assetType?: 'image' | 'audio') {
-    this.folderPath = path;
+  setFolderFilter(location: FolderLocation | null, assetType?: 'image' | 'audio') {
+    this.folderLocation = location;
     this.loadAssets(assetType);
   }
 

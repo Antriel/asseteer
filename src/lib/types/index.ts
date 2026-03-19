@@ -1,8 +1,11 @@
 export interface Asset {
   id: number;
   filename: string;
-  path: string;
+  folder_id: number;
+  rel_path: string;
+  zip_file: string | null;
   zip_entry: string | null;
+  folder_path: string; // transient, from JOIN with source_folders
   asset_type: string;
   format: string;
   file_size: number;
@@ -21,9 +24,24 @@ export interface Asset {
   modified_at: number;
 }
 
+export interface SourceFolder {
+  id: number;
+  path: string;
+  label: string;
+  added_at: number;
+  last_scanned_at: number | null;
+  asset_count: number;
+  status: string;
+}
+
+/** Structured folder location for filtering/navigation (replaces the old path::zipPrefix string) */
+export type FolderLocation =
+  | { type: 'folder'; folderId: number; relPath: string }
+  | { type: 'zip'; folderId: number; relPath: string; zipFile: string; zipPrefix: string };
+
 export interface ScanSession {
   id: number;
-  root_path: string;
+  source_folder_id: number | null;
   total_files: number | null;
   processed_files: number;
   status: string;
@@ -61,8 +79,48 @@ export interface ProcessingErrorDetail {
   id: number;
   asset_id: number;
   filename: string;
-  path: string;
+  rel_path: string;
+  folder_path: string;
   error_message: string;
   occurred_at: number;
   retry_count: number;
+}
+
+// ============================================================================
+// Path reconstruction helpers
+// ============================================================================
+
+/** Get the full filesystem path for a regular (non-ZIP) asset */
+export function getAssetFilePath(asset: Asset): string {
+  return asset.rel_path
+    ? `${asset.folder_path}/${asset.rel_path}/${asset.filename}`
+    : `${asset.folder_path}/${asset.filename}`;
+}
+
+/** Get the full filesystem path to the ZIP file containing a ZIP asset */
+export function getAssetZipPath(asset: Asset): string {
+  return asset.rel_path
+    ? `${asset.folder_path}/${asset.rel_path}/${asset.zip_file}`
+    : `${asset.folder_path}/${asset.zip_file}`;
+}
+
+/** Get a display-friendly location string for an asset */
+export function getAssetDisplayPath(asset: Asset): string {
+  if (asset.zip_entry) {
+    return `${getAssetZipPath(asset)}/${asset.zip_entry}`;
+  }
+  return getAssetFilePath(asset);
+}
+
+/** Get the directory portion of the asset's display path (no filename) */
+export function getAssetDirectoryPath(asset: Asset): string {
+  if (asset.zip_entry) {
+    const zipPath = getAssetZipPath(asset);
+    const entryParts = asset.zip_entry.split('/');
+    const internalDir = entryParts.slice(0, -1).join('/');
+    return internalDir ? `${zipPath}/${internalDir}` : zipPath;
+  }
+  return asset.rel_path
+    ? `${asset.folder_path}/${asset.rel_path}`
+    : asset.folder_path;
 }

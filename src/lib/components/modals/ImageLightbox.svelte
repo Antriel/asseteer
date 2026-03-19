@@ -2,11 +2,11 @@
   import { onMount, untrack } from 'svelte';
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { invoke } from '@tauri-apps/api/core';
-  import type { Asset } from '$lib/types';
+  import { getAssetFilePath, getAssetDisplayPath } from '$lib/types';
+  import type { Asset, FolderLocation } from '$lib/types';
   import { viewState } from '$lib/state/view.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
   import { exploreState } from '$lib/state/explore.svelte';
-  import { ZIP_SEP } from '$lib/database/queries';
 
   interface Props {
     asset: Asset;
@@ -20,16 +20,18 @@
   async function showInFolder() {
     viewState.openFolderSidebar();
     await exploreState.loadRoots();
-    await exploreState.navigateToAssetPath(asset.path, asset.zip_entry ?? undefined);
+    await exploreState.navigateToAsset(asset);
     const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
-    if (asset.zip_entry) {
-      const zipParts = asset.zip_entry.split('/').filter(Boolean);
+    let location: FolderLocation;
+    if (asset.zip_file) {
+      const zipParts = (asset.zip_entry ?? '').split('/').filter(Boolean);
       const zipDirParts = zipParts.slice(0, -1);
       const zipPrefix = zipDirParts.length > 0 ? zipDirParts.join('/') + '/' : '';
-      assetsState.setFolderFilter(asset.path + ZIP_SEP + zipPrefix, assetType);
+      location = { type: 'zip', folderId: asset.folder_id, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix };
     } else {
-      assetsState.setFolderFilter(asset.path, assetType);
+      location = { type: 'folder', folderId: asset.folder_id, relPath: asset.rel_path };
     }
+    assetsState.setFolderFilter(location, assetType);
     onClose();
   }
 
@@ -44,7 +46,7 @@
     // Track the asset.id (this is what triggers the effect)
     const assetId = asset.id;
     const zipEntry = asset.zip_entry;
-    const assetPath = asset.path;
+    const assetPath = getAssetFilePath(asset);
     const assetFormat = asset.format;
 
     // Use untrack to prevent state updates from re-triggering the effect
@@ -236,7 +238,7 @@
 
           <div>
             <dt class="text-sm text-gray-400">Path:</dt>
-            <dd class="text-sm break-all">{asset.path}</dd>
+            <dd class="text-sm break-all">{getAssetDisplayPath(asset)}</dd>
           </div>
 
           {#if asset.width && asset.height}

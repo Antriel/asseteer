@@ -5,7 +5,7 @@ status: in-progress
 type: feature
 priority: normal
 created_at: 2026-03-16T11:00:19Z
-updated_at: 2026-03-19T07:45:05Z
+updated_at: 2026-03-19T08:02:57Z
 ---
 
 Complete folder management system: persistent source folders, relative paths, add/remove/rescan, and management UI.
@@ -218,14 +218,14 @@ All code that references `assets.path` or the `path::zip_prefix` convention must
 - [x] CLAP batching/sorting — groups by path for ZIP cache optimization; must use `folder_id + rel_path + zip_file` (`task_system/processor.rs`)
 - [x] Thumbnail worker — ZIP grouping for batch extraction (`thumbnail_worker.rs`)
 - [x] Processing error payloads — store/display `path` in error records (`commands/process.rs`)
-- [ ] Frontend queries — `searchAssets`, `countSearchResults`, `parseFolderFilter`, `addFolderFilterConditions` (`database/queries.ts`)
-- [ ] Frontend state — `folderPath` → `FolderLocation` type (`assets.svelte.ts`, `explore.svelte.ts`)
-- [ ] Folder tree building — `buildChildNodes`, `getZipDirectoryChildren` → new schema queries (`explore.svelte.ts`)
-- [ ] UI displays — anywhere that shows file path/location to the user (AudioList, ImageGrid, context menus, lightbox)
-- [ ] "Show in folder" / "Open in explorer" actions — reconstruct full filesystem path
+- [x] Frontend queries — `searchAssets`, `countSearchResults`, `parseFolderFilter`, `addFolderFilterConditions` (`database/queries.ts`)
+- [x] Frontend state — `folderPath` → `FolderLocation` type (`assets.svelte.ts`, `explore.svelte.ts`)
+- [x] Folder tree building — `buildChildNodes`, `getZipDirectoryChildren` → new schema queries (`explore.svelte.ts`)
+- [x] UI displays — anywhere that shows file path/location to the user (AudioList, ImageGrid, context menus, lightbox)
+- [x] "Show in folder" / "Open in explorer" actions — reconstruct full filesystem path
 
 ### Frontend — folder management UI
-- [ ] Define `FolderLocation` type and replace `folderPath: string | null` throughout
+- [x] Define `FolderLocation` type and replace `folderPath: string | null` throughout
 - [ ] Build folder list UI (sidebar section)
 - [ ] Build folder management page (`/folders` route)
 - [ ] Build rescan UX (two-phase: preview → confirm → apply)

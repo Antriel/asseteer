@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { Asset } from '$lib/types';
+  import type { Asset, FolderLocation } from '$lib/types';
+  import { getAssetDisplayPath, getAssetDirectoryPath, getAssetZipPath } from '$lib/types';
   import AudioPlayer from './AudioPlayer.svelte';
   import VirtualList from './shared/VirtualList.svelte';
   import { AudioIcon, FolderIcon, SearchIcon } from './icons';
@@ -10,7 +11,6 @@
   import { exploreState } from '$lib/state/explore.svelte';
   import { clapState } from '$lib/state/clap.svelte';
   import { showToast } from '$lib/state/ui.svelte';
-  import { ZIP_SEP } from '$lib/database/queries';
 
   // Extended asset type with optional similarity score
   type AudioAsset = Asset & { similarity?: number };
@@ -56,22 +56,11 @@
   }
 
   function formatLocation(asset: Asset): string {
-    if (asset.zip_entry) {
-      return `${asset.path}/${asset.zip_entry}`;
-    }
-    return asset.path;
+    return getAssetDisplayPath(asset);
   }
 
   function formatDirectoryPath(asset: Asset): string {
-    if (asset.zip_entry) {
-      // For zip entries, show full zip path + internal path (without filename)
-      const zipEntryParts = asset.zip_entry.split('/');
-      const internalDir = zipEntryParts.slice(0, -1).join('/');
-      return internalDir ? `${asset.path}/${internalDir}` : asset.path;
-    }
-    // For regular files, show directory path only
-    const parts = asset.path.split(/[\\/]/);
-    return parts.slice(0, -1).join('/') || '/';
+    return getAssetDirectoryPath(asset);
   }
 
   function playAsset(asset: Asset) {
@@ -92,30 +81,32 @@
   async function showInFolder(asset: Asset) {
     viewState.openFolderSidebar();
     await exploreState.loadRoots();
-    await exploreState.navigateToAssetPath(asset.path, asset.zip_entry ?? undefined);
+    await exploreState.navigateToAsset(asset);
     const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
-    if (asset.zip_entry) {
-      // Build the correct ZIP folder filter including the internal directory
-      const zipParts = asset.zip_entry.split('/').filter(Boolean);
+    let location: FolderLocation;
+    if (asset.zip_file) {
+      const zipParts = (asset.zip_entry ?? '').split('/').filter(Boolean);
       const zipDirParts = zipParts.slice(0, -1);
       const zipPrefix = zipDirParts.length > 0 ? zipDirParts.join('/') + '/' : '';
-      assetsState.setFolderFilter(asset.path + ZIP_SEP + zipPrefix, assetType);
+      location = { type: 'zip', folderId: asset.folder_id, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix };
     } else {
-      assetsState.setFolderFilter(asset.path, assetType);
+      location = { type: 'folder', folderId: asset.folder_id, relPath: asset.rel_path };
     }
+    assetsState.setFolderFilter(location, assetType);
   }
 
   async function openDirectory(asset: Asset) {
     try {
       let dirPath: string;
 
-      if (asset.zip_entry) {
-        // For zip entries, combine zip path with the directory inside the zip
-        const entryDir = asset.zip_entry.replace(/[^/]+$/, ''); // Remove filename, keep directory
-        dirPath = `${asset.path}\\${entryDir.replace(/\//g, '\\')}`;
+      if (asset.zip_file) {
+        // For zip entries, open the directory containing the ZIP file
+        dirPath = asset.rel_path
+          ? asset.folder_path + '\\' + asset.rel_path.replace(/\//g, '\\')
+          : asset.folder_path;
       } else {
         // For regular files, get the directory containing the file
-        dirPath = asset.path.replace(/[^\\]+$/, '');
+        dirPath = getAssetDirectoryPath(asset).replace(/\//g, '\\');
       }
 
       await openPath(dirPath);

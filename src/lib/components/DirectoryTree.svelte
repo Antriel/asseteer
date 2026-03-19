@@ -12,12 +12,12 @@
   let { nodes, depth = 0, onSelect }: Props = $props();
 </script>
 
-{#each nodes as node (node.path)}
-  {@const isExpanded = exploreState.isExpanded(node.path)}
-  {@const isSelected = exploreState.selectedPath === node.path}
-  {@const children = exploreState.getChildren(node.path)}
+{#each nodes as node (node.key)}
+  {@const isExpanded = exploreState.isExpanded(node.key)}
+  {@const isSelected = exploreState.selectedKey === node.key}
+  {@const children = exploreState.getChildren(node.key)}
   {@const hasChildren = node.childCount > 0}
-  {@const isZip = node.zipPrefix !== undefined}
+  {@const isZip = node.location.type === 'zip'}
 
   <div>
     <div
@@ -25,7 +25,7 @@
         ? 'bg-accent-muted text-accent'
         : 'text-primary'}"
       style="padding-left: {depth * 16 + 8}px"
-      data-tree-path={node.path}
+      data-tree-key={node.key}
       data-selected={isSelected ? 'true' : undefined}
     >
       <!-- Chevron: only this toggles expand/collapse -->
@@ -36,7 +36,7 @@
         onclick={(e) => {
           e.stopPropagation();
           if (hasChildren) {
-            exploreState.toggleExpanded(node.path);
+            exploreState.toggleExpanded(node.key, node.location);
           }
         }}
         tabindex={hasChildren ? 0 : -1}

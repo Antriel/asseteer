@@ -1,26 +1,27 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { getDatabase } from '$lib/database/connection';
 import {
-  getDirectoryChildren,
-  getDirectoryRoots,
-  getDirectoryRootCounts,
+  getSourceFolderRoots,
+  getFolderChildren,
   getZipDirectoryChildren,
-  ZIP_SEP,
 } from '$lib/database/queries';
+import type { FolderLocation, Asset } from '$lib/types';
 
 export type { DirectoryNode } from '$lib/database/queries';
 
 class ExploreState {
-  // Currently selected directory path
-  selectedPath = $state<string | null>(null);
-  // Expanded directory paths
-  expandedPaths = $state(new SvelteMap<string, boolean>());
-  // Cached children per directory path (null key = root level)
+  // Currently selected node key
+  selectedKey = $state<string | null>(null);
+  // Currently selected location (for filtering)
+  selectedLocation = $state<FolderLocation | null>(null);
+  // Expanded node keys
+  expandedKeys = $state(new SvelteMap<string, boolean>());
+  // Cached children per node key
   childrenCache = $state(new SvelteMap<string, import('$lib/database/queries').DirectoryNode[]>());
-  // Root directories (top-level scan roots)
+  // Root directories (source folders)
   roots = $state<import('$lib/database/queries').DirectoryNode[]>([]);
   isLoadingRoots = $state(false);
-  // True while navigateToAssetPath is expanding ancestors
+  // True while navigateToAsset is expanding ancestors
   isNavigating = $state(false);
 
   async loadRoots(force = false) {
@@ -29,13 +30,7 @@ class ExploreState {
     this.isLoadingRoots = true;
     try {
       const db = await getDatabase();
-      // Phase 1: Show roots immediately without counts
-      this.roots = await getDirectoryRoots(db);
-      this.isLoadingRoots = false;
-
-      // Phase 2: Load counts in background and update
-      const counts = await getDirectoryRootCounts(db, this.roots);
-      this.roots = counts;
+      this.roots = await getSourceFolderRoots(db);
     } catch (error) {
       console.error('[Explore] Failed to load roots:', error);
     } finally {
@@ -43,96 +38,117 @@ class ExploreState {
     }
   }
 
-  async loadChildren(path: string) {
-    if (this.childrenCache.has(path)) return;
+  async loadChildren(key: string, location: FolderLocation) {
+    if (this.childrenCache.has(key)) return;
     try {
       const db = await getDatabase();
-      const sepIdx = path.indexOf(ZIP_SEP);
       let children: import('$lib/database/queries').DirectoryNode[];
-      if (sepIdx !== -1) {
-        // ZIP-internal path: browse inside the zip
-        const zipPath = path.substring(0, sepIdx);
-        const prefix = path.substring(sepIdx + ZIP_SEP.length);
-        children = await getZipDirectoryChildren(db, zipPath, prefix);
-      } else if (path.toLowerCase().endsWith('.zip')) {
-        // ZIP file node: browse its root
-        children = await getZipDirectoryChildren(db, path, '');
+
+      if (location.type === 'zip') {
+        children = await getZipDirectoryChildren(
+          db,
+          location.folderId,
+          location.relPath,
+          location.zipFile,
+          location.zipPrefix,
+        );
       } else {
-        // Regular filesystem directory
-        children = await getDirectoryChildren(db, path);
+        children = await getFolderChildren(db, location.folderId, location.relPath);
       }
-      this.childrenCache.set(path, children);
+      this.childrenCache.set(key, children);
     } catch (error) {
-      console.error('[Explore] Failed to load children for', path, error);
+      console.error('[Explore] Failed to load children for', key, error);
     }
   }
 
-  async toggleExpanded(path: string) {
-    const isExpanded = this.expandedPaths.get(path);
+  async toggleExpanded(key: string, location: FolderLocation) {
+    const isExpanded = this.expandedKeys.get(key);
     if (isExpanded) {
-      this.expandedPaths.set(path, false);
+      this.expandedKeys.set(key, false);
     } else {
-      this.expandedPaths.set(path, true);
-      await this.loadChildren(path);
+      this.expandedKeys.set(key, true);
+      await this.loadChildren(key, location);
     }
   }
 
-  async navigateToAssetPath(assetPath: string, zipEntry?: string) {
+  /**
+   * Navigate the tree to reveal and select the node containing a given asset.
+   */
+  async navigateToAsset(asset: Asset) {
     this.isNavigating = true;
     try {
-      // Expand all ancestor directories and select the directory containing this asset
-      const sep = assetPath.includes('\\') ? '\\' : '/';
-      const parts = assetPath.split(sep);
+      const db = await getDatabase();
+      const folderId = asset.folder_id;
 
-      // Expand each ancestor on the filesystem
-      let current = '';
-      for (let i = 0; i < parts.length; i++) {
-        current = i === 0 ? parts[i] : current + sep + parts[i];
-        if (i === 0 && current.endsWith(':')) {
-          continue;
-        }
-        if (!this.expandedPaths.get(current)) {
-          this.expandedPaths.set(current, true);
-          await this.loadChildren(current);
+      // Find and expand the root node for this folder
+      const rootKey = `folder:${folderId}`;
+      if (!this.expandedKeys.get(rootKey)) {
+        this.expandedKeys.set(rootKey, true);
+        await this.loadChildren(rootKey, { type: 'folder', folderId, relPath: '' });
+      }
+
+      // Expand each segment of rel_path
+      if (asset.rel_path) {
+        const segments = asset.rel_path.split('/');
+        let currentRelPath = '';
+        for (const segment of segments) {
+          currentRelPath = currentRelPath ? `${currentRelPath}/${segment}` : segment;
+          const nodeKey = `folder:${folderId}:${currentRelPath}`;
+          if (!this.expandedKeys.get(nodeKey)) {
+            this.expandedKeys.set(nodeKey, true);
+            await this.loadChildren(nodeKey, { type: 'folder', folderId, relPath: currentRelPath });
+          }
         }
       }
 
-      // If there's a zip entry, navigate into the ZIP tree
-      let targetPath = assetPath;
-      if (zipEntry) {
-        // Expand the ZIP file itself (uses ZIP_SEP encoding)
-        const zipRootPath = assetPath; // The filesystem path to the .zip
-        if (!this.expandedPaths.get(zipRootPath)) {
-          this.expandedPaths.set(zipRootPath, true);
-          await this.loadChildren(zipRootPath);
+      // If it's a ZIP asset, expand the ZIP node and its internal directories
+      if (asset.zip_file && asset.zip_entry) {
+        const zipKey = `zip:${folderId}:${asset.rel_path}:${asset.zip_file}`;
+        if (!this.expandedKeys.get(zipKey)) {
+          this.expandedKeys.set(zipKey, true);
+          await this.loadChildren(zipKey, {
+            type: 'zip', folderId, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix: '',
+          });
         }
 
-        // Navigate through ZIP-internal directories
-        // zip_entry is like "sounds/ambient/rain.wav" — we need to expand each directory segment
-        const zipParts = zipEntry.split('/').filter(Boolean);
-        // Remove the filename (last segment) — we want the containing directory
-        const zipDirParts = zipParts.slice(0, -1);
-
+        // Expand zip-internal directories
+        const zipParts = asset.zip_entry.split('/').filter(Boolean);
+        const zipDirParts = zipParts.slice(0, -1); // remove filename
         let zipPrefix = '';
         for (const part of zipDirParts) {
           zipPrefix += part + '/';
-          const zipNodePath = assetPath + ZIP_SEP + zipPrefix;
-          if (!this.expandedPaths.get(zipNodePath)) {
-            this.expandedPaths.set(zipNodePath, true);
-            await this.loadChildren(zipNodePath);
+          const zipNodeKey = `zip:${folderId}:${asset.rel_path}:${asset.zip_file}:${zipPrefix}`;
+          if (!this.expandedKeys.get(zipNodeKey)) {
+            this.expandedKeys.set(zipNodeKey, true);
+            await this.loadChildren(zipNodeKey, {
+              type: 'zip', folderId, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix,
+            });
           }
         }
 
         // Select the deepest ZIP directory (or ZIP root if file is at root)
-        targetPath = zipDirParts.length > 0 ? assetPath + ZIP_SEP + zipPrefix : assetPath;
+        if (zipDirParts.length > 0) {
+          this.selectedKey = `zip:${folderId}:${asset.rel_path}:${asset.zip_file}:${zipPrefix}`;
+          this.selectedLocation = {
+            type: 'zip', folderId, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix,
+          };
+        } else {
+          this.selectedKey = zipKey;
+          this.selectedLocation = {
+            type: 'zip', folderId, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix: '',
+          };
+        }
+      } else {
+        // Regular file — select the directory
+        const targetRelPath = asset.rel_path || '';
+        const targetKey = targetRelPath ? `folder:${folderId}:${targetRelPath}` : rootKey;
+        this.selectedKey = targetKey;
+        this.selectedLocation = { type: 'folder', folderId, relPath: targetRelPath };
       }
-
-      // Select the target path
-      this.selectedPath = targetPath;
 
       // Scroll into view after DOM updates
       requestAnimationFrame(() => {
-        const el = document.querySelector('[data-tree-path][data-selected="true"]');
+        const el = document.querySelector('[data-tree-key][data-selected="true"]');
         el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       });
     } finally {
@@ -140,12 +156,12 @@ class ExploreState {
     }
   }
 
-  getChildren(path: string): import('$lib/database/queries').DirectoryNode[] {
-    return this.childrenCache.get(path) ?? [];
+  getChildren(key: string): import('$lib/database/queries').DirectoryNode[] {
+    return this.childrenCache.get(key) ?? [];
   }
 
-  isExpanded(path: string): boolean {
-    return this.expandedPaths.get(path) ?? false;
+  isExpanded(key: string): boolean {
+    return this.expandedKeys.get(key) ?? false;
   }
 
   clearCache() {

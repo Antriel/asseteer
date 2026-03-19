@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { invoke } from '@tauri-apps/api/core';
-  import type { Asset } from '$lib/types';
+  import { type Asset, getAssetFilePath } from '$lib/types';
   import {
     getThumbnailUrl,
     hasThumbnailFailed,
@@ -56,7 +56,7 @@
     if (isSmallImage) {
       if (!asset.zip_entry) {
         // Regular file — use convertFileSrc for zero-IPC direct access
-        smallImageUrl = convertFileSrc(asset.path);
+        smallImageUrl = convertFileSrc(getAssetFilePath(asset));
       } else {
         // Zip entry — need IPC to extract bytes
         invoke<number[]>('get_asset_bytes', { assetId: asset.id })

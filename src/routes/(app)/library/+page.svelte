@@ -102,7 +102,7 @@
   );
 
   // Whether any filter is active (search, folder, or similarity)
-  let hasAnyFilter = $derived(hasActiveSearch || !!assetsState.folderPath || !!clapState.similarToAssetId);
+  let hasAnyFilter = $derived(hasActiveSearch || !!assetsState.folderLocation || !!clapState.similarToAssetId);
 
   // Unified "is loading" - whether a search is in progress
   let isLoading = $derived(isSemanticModeEnabled ? clapState.isSearching : assetsState.isLoading);
@@ -182,7 +182,7 @@
               d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
             />
           </svg>
-          {#if assetsState.folderPath && hasActiveSearch}
+          {#if assetsState.folderLocation && hasActiveSearch}
             <p class="text-primary font-medium">No results found</p>
             <p class="text-sm text-secondary text-center">
               No {viewState.activeTab} matching your search in this folder
@@ -202,7 +202,8 @@
               <button
                 class="px-3 py-1.5 text-sm rounded-md bg-tertiary text-primary hover:bg-elevated transition-colors"
                 onclick={() => {
-                  exploreState.selectedPath = null;
+                  exploreState.selectedKey = null;
+                  exploreState.selectedLocation = null;
                   assetsState.setFolderFilter(
                     null,
                     viewState.activeTab === 'images' ? 'image' : 'audio',
@@ -212,7 +213,7 @@
                 Clear folder
               </button>
             </div>
-          {:else if assetsState.folderPath}
+          {:else if assetsState.folderLocation}
             <p class="text-primary font-medium">No {viewState.activeTab} in this folder</p>
             <p class="text-sm text-secondary">
               This folder doesn't contain any {viewState.activeTab}

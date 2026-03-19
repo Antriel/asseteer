@@ -141,7 +141,7 @@
             <ul class="space-y-2">
               {#each errors as error}
                 <li class="text-xs">
-                  <div class="font-medium text-primary truncate" title={error.path}>
+                  <div class="font-medium text-primary truncate" title={error.rel_path ? error.folder_path + '/' + error.rel_path : error.folder_path}>
                     {error.filename}
                   </div>
                   <div class="text-red-600 dark:text-red-400 truncate" title={error.error_message}>

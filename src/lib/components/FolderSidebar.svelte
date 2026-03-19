@@ -3,7 +3,6 @@
   import { exploreState, type DirectoryNode } from '$lib/state/explore.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
   import { viewState } from '$lib/state/view.svelte';
-  import { ZIP_SEP } from '$lib/database/queries';
   import DirectoryTree from './DirectoryTree.svelte';
   import Spinner from '$lib/components/shared/Spinner.svelte';
   import { FolderIcon } from '$lib/components/icons';
@@ -15,27 +14,15 @@
   });
 
   function selectFolder(node: DirectoryNode) {
-    exploreState.selectedPath = node.path;
-    // Build the folder filter string — ZIP nodes use the :: encoding
-    let filterPath: string;
-    if (node.zipPrefix !== undefined) {
-      // ZIP node: encode as "zipFilePath::prefix"
-      // For ZIP root nodes, path is the .zip file and zipPrefix is ''
-      // For ZIP subdirectory nodes, path already contains the :: encoding
-      if (node.path.includes(ZIP_SEP)) {
-        filterPath = node.path;
-      } else {
-        filterPath = node.path + ZIP_SEP + node.zipPrefix;
-      }
-    } else {
-      filterPath = node.path;
-    }
     const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
-    assetsState.setFolderFilter(filterPath, assetType);
+    assetsState.setFolderFilter(node.location, assetType);
+    exploreState.selectedKey = node.key;
+    exploreState.selectedLocation = node.location;
   }
 
   function clearFolder() {
-    exploreState.selectedPath = null;
+    exploreState.selectedKey = null;
+    exploreState.selectedLocation = null;
     const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
     assetsState.setFolderFilter(null, assetType);
   }
@@ -49,7 +36,7 @@
         <Spinner size="sm" />
       {/if}
     </div>
-    {#if assetsState.folderPath}
+    {#if assetsState.folderLocation}
       <button
         class="text-xs text-secondary hover:text-primary transition-colors"
         onclick={clearFolder}

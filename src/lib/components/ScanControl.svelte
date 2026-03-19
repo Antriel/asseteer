@@ -68,7 +68,7 @@
     });
 
     try {
-      const sessionId = await invoke<number>('start_scan', { rootPath: path });
+      const sessionId = await invoke<number>('add_folder', { path });
       uiState.currentSessionId = sessionId;
 
       // Reload assets for current tab and refresh pending count

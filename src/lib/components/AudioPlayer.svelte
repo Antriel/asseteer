@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-  import type { Asset } from '$lib/types';
+  import { type Asset, getAssetFilePath } from '$lib/types';
   import { PlayIcon, PauseIcon } from './icons';
 
   interface Props {
@@ -77,7 +77,7 @@
     // Track the asset properties (this is what triggers the effect)
     const assetId = asset.id;
     const zipEntry = asset.zip_entry;
-    const assetPath = asset.path;
+    const assetPath = getAssetFilePath(asset);
     const assetFormat = asset.format;
 
     // Use untrack to prevent state updates from re-triggering the effect

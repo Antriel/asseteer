@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Asset } from '$lib/types';
+  import { getAssetDisplayPath } from '$lib/types';
   import { formatFileSize } from '$lib/state/assets.svelte';
   import AssetThumbnail from './AssetThumbnail.svelte';
   import Badge from './shared/Badge.svelte';
@@ -42,12 +43,7 @@
   }
 
   function formatLocation(asset: Asset): string {
-    if (asset.zip_entry) {
-      // Extract zip filename from path
-      const zipName = asset.path.split(/[\\/]/).pop() || asset.path;
-      return `${zipName}/${asset.zip_entry}`;
-    }
-    return asset.path;
+    return getAssetDisplayPath(asset);
   }
 
   function handleScroll(event: Event) {

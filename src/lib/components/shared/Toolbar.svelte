@@ -8,7 +8,6 @@
   import DurationFilter from './DurationFilter.svelte';
   import Spinner from './Spinner.svelte';
   import { SearchIcon, FolderIcon, CloseIcon } from '$lib/components/icons';
-  import { ZIP_SEP } from '$lib/database/queries';
 
   let searchInput = $state(assetsState.searchText);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -90,25 +89,29 @@
   }
 
   function clearFolderFilter() {
-    exploreState.selectedPath = null;
+    exploreState.selectedKey = null;
+    exploreState.selectedLocation = null;
     const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
     assetsState.setFolderFilter(null, assetType);
   }
 
-  // Folder display name: handles both filesystem and ZIP-internal paths
+  // Folder display name from the selected explore node
   let folderDisplayName = $derived(() => {
-    if (!assetsState.folderPath) return '';
-    const sepIdx = assetsState.folderPath.indexOf(ZIP_SEP);
-    if (sepIdx !== -1) {
-      const zipFile = assetsState.folderPath.substring(0, sepIdx);
-      const prefix = assetsState.folderPath.substring(sepIdx + ZIP_SEP.length);
-      const zipName = zipFile.split(/[\\/]/).pop() || zipFile;
-      if (!prefix) return zipName;
-      const prefixName = prefix.replace(/\/$/, '').split('/').pop();
+    const loc = assetsState.folderLocation;
+    if (!loc) return '';
+    if (loc.type === 'zip') {
+      const zipName = loc.zipFile;
+      if (!loc.zipPrefix) return zipName;
+      const prefixName = loc.zipPrefix.replace(/\/$/, '').split('/').pop();
       return `${zipName} / ${prefixName}`;
     }
-    const segments = assetsState.folderPath.split(/[\\/]/);
-    return segments[segments.length - 1] || assetsState.folderPath;
+    // Filesystem folder: show last segment of relPath, or the root name from the tree
+    if (loc.relPath) {
+      return loc.relPath.split('/').pop() || loc.relPath;
+    }
+    // Root folder — find name from explore roots
+    const root = exploreState.roots.find((r) => r.location.type === 'folder' && r.location.folderId === loc.folderId);
+    return root?.name || 'Folder';
   });
 
   // Check if semantic mode is active
@@ -306,7 +309,7 @@
   {/if}
 
   <!-- Folder breadcrumb (when a folder filter is active) -->
-  {#if assetsState.folderPath}
+  {#if assetsState.folderLocation}
     <div class="flex items-center gap-2 px-4 py-1.5 bg-tertiary border-b border-default">
       <FolderIcon size="sm" class="text-secondary flex-shrink-0" />
       <span class="text-sm text-primary truncate">{folderDisplayName()}</span>
