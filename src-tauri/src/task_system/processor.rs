@@ -1,7 +1,8 @@
 /// Unified asset processor - handles both thumbnail generation and metadata extraction
 use crate::clap::{embedding_to_blob, ensure_server_running, get_clap_client};
 use crate::models::Asset;
-use crate::utils::{load_asset_bytes, resolve_asset_fs_path, resolve_zip_path};
+use crate::utils::resolve_asset_fs_path;
+use crate::zip_cache;
 use image::{DynamicImage, GenericImageView};
 use sqlx::SqlitePool;
 use std::time::Duration;
@@ -48,8 +49,8 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     let result = tokio::time::timeout(
         PROCESSING_TIMEOUT,
         tokio::task::spawn_blocking(move || {
-            // Load image bytes (from filesystem or zip)
-            let bytes = load_asset_bytes(&asset_clone)?;
+            // Load image bytes (cached for nested ZIPs)
+            let bytes = zip_cache::load_asset_bytes_cached(&asset_clone)?;
 
             // Load image from memory
             let img = image::load_from_memory(&bytes)
@@ -133,7 +134,7 @@ pub async fn generate_thumbnail_for_asset(
     tokio::time::timeout(
         PROCESSING_TIMEOUT,
         tokio::task::spawn_blocking(move || {
-            let bytes = load_asset_bytes(&asset_clone)?;
+            let bytes = zip_cache::load_asset_bytes_cached(&asset_clone)?;
             let img = image::load_from_memory(&bytes)
                 .map_err(|e| format!("Failed to decode image: {}", e))?;
             let (width, height) = img.dimensions();
@@ -161,8 +162,8 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     let result = tokio::time::timeout(
         PROCESSING_TIMEOUT,
         tokio::task::spawn_blocking(move || {
-            // Load audio bytes (from filesystem or zip)
-            let bytes = load_asset_bytes(&asset_clone)?;
+            // Load audio bytes (cached for nested ZIPs)
+            let bytes = zip_cache::load_asset_bytes_cached(&asset_clone)?;
 
             // Create a cursor from the bytes for reading
             let cursor = std::io::Cursor::new(bytes);
@@ -298,12 +299,9 @@ pub async fn process_clap_embedding_batch(assets: &[Asset], db: &SqlitePool) -> 
     let mut zip_items: Vec<(Vec<u8>, String)> = Vec::new();
     let mut load_errors: Vec<(usize, String)> = Vec::new();
 
-    // Use inner ZIP cache for efficient nested ZIP extraction
-    let mut inner_zip_cache: Option<(String, String, zip::ZipArchive<std::io::Cursor<Vec<u8>>>)> = None;
-
     for (i, asset) in assets.iter().enumerate() {
         if asset.zip_entry.is_some() {
-            match load_asset_bytes_cached(asset, &mut inner_zip_cache) {
+            match zip_cache::load_asset_bytes_cached(asset) {
                 Ok(bytes) => {
                     zip_indices.push(i);
                     zip_items.push((bytes, asset.filename.clone()));
@@ -400,74 +398,6 @@ pub async fn process_clap_embedding_batch(assets: &[Asset], db: &SqlitePool) -> 
             })
         })
         .collect()
-}
-
-/// Load asset bytes with caching for nested ZIP archives.
-///
-/// When processing consecutive files from the same nested ZIP (e.g., inner.zip inside outer.zip),
-/// this keeps the decompressed inner ZIP in memory to avoid re-reading ~700MB+ per file.
-fn load_asset_bytes_cached(
-    asset: &Asset,
-    cache: &mut Option<(String, String, zip::ZipArchive<std::io::Cursor<Vec<u8>>>)>,
-) -> Result<Vec<u8>, String> {
-    let zip_entry_path = match &asset.zip_entry {
-        Some(p) => p,
-        None => return load_asset_bytes(asset),
-    };
-
-    // Check if this is a nested ZIP (has .zip/ in the entry path)
-    let path_lower = zip_entry_path.to_lowercase();
-    let nested_boundary = path_lower.find(".zip/").map(|pos| pos + 4);
-
-    if let Some(boundary) = nested_boundary {
-        let inner_zip_name = &zip_entry_path[..boundary];
-        let inner_entry = &zip_entry_path[boundary + 1..]; // skip the '/'
-
-        // Cache key: resolved zip path on filesystem
-        let outer_zip_path = resolve_zip_path(asset);
-
-        // Check cache: same outer ZIP path + same inner ZIP name
-        let cache_hit = cache
-            .as_ref()
-            .map(|(cached_path, cached_inner, _)| {
-                cached_path == &outer_zip_path && cached_inner == inner_zip_name
-            })
-            .unwrap_or(false);
-
-        if !cache_hit {
-            // Cache miss - read inner ZIP from outer
-            let zip_file = std::fs::File::open(&outer_zip_path)
-                .map_err(|e| format!("Failed to open zip {}: {}", outer_zip_path, e))?;
-            let mut outer = zip::ZipArchive::new(zip_file)
-                .map_err(|e| format!("Failed to read zip {}: {}", outer_zip_path, e))?;
-
-            let mut inner_bytes = Vec::new();
-            {
-                let mut entry = outer.by_name(inner_zip_name)
-                    .map_err(|e| format!("Failed to find {} in {}: {}", inner_zip_name, outer_zip_path, e))?;
-                std::io::Read::read_to_end(&mut entry, &mut inner_bytes)
-                    .map_err(|e| format!("Failed to read {} from {}: {}", inner_zip_name, outer_zip_path, e))?;
-            }
-
-            let cursor = std::io::Cursor::new(inner_bytes);
-            let inner_archive = zip::ZipArchive::new(cursor)
-                .map_err(|e| format!("Failed to open inner zip {}: {}", inner_zip_name, e))?;
-
-            *cache = Some((outer_zip_path, inner_zip_name.to_string(), inner_archive));
-        }
-
-        // Extract from cached inner ZIP
-        let (_, _, ref mut archive) = cache.as_mut().unwrap();
-        let mut entry = archive.by_name(inner_entry)
-            .map_err(|e| format!("Failed to find {} in inner zip: {}", inner_entry, e))?;
-        let mut buffer = Vec::new();
-        std::io::Read::read_to_end(&mut entry, &mut buffer)
-            .map_err(|e| format!("Failed to read {} from inner zip: {}", inner_entry, e))?;
-        Ok(buffer)
-    } else {
-        // Not nested - use regular loading
-        load_asset_bytes(asset)
-    }
 }
 
 /// Store an embedding in the database and resolve errors

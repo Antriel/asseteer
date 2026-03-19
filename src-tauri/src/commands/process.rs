@@ -26,7 +26,7 @@ pub async fn start_processing(
                  JOIN source_folders sf ON a.folder_id = sf.id
                  LEFT JOIN image_metadata im ON a.id = im.asset_id
                  WHERE a.asset_type = 'image' AND im.asset_id IS NULL
-                 ORDER BY a.id"
+                 ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry"
             )
             .fetch_all(&state.pool)
             .await
@@ -38,7 +38,7 @@ pub async fn start_processing(
                  JOIN source_folders sf ON a.folder_id = sf.id
                  LEFT JOIN audio_metadata am ON a.id = am.asset_id
                  WHERE a.asset_type = 'audio' AND am.asset_id IS NULL
-                 ORDER BY a.id"
+                 ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry"
             )
             .fetch_all(&state.pool)
             .await

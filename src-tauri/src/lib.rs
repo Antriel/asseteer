@@ -5,6 +5,7 @@ mod models;
 mod task_system;
 pub mod thumbnail_worker;
 mod utils;
+mod zip_cache;
 
 #[cfg(test)]
 mod test_helpers;

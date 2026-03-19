@@ -1,6 +1,7 @@
 /// Work queue with worker pool for processing assets
 use crate::models::{Asset, ProcessingCategory};
 use crate::task_system::processor::{process_asset, process_clap_embedding_batch};
+use crate::zip_cache;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -411,6 +412,9 @@ impl WorkQueue {
                         crate::clap::cache::invalidate();
                     }
 
+                    // Free cached nested ZIP memory
+                    zip_cache::clear();
+
                     // Mark as not running
                     state.is_running.store(false, Ordering::SeqCst);
 
@@ -460,6 +464,9 @@ impl WorkQueue {
             if category == ProcessingCategory::Clap {
                 crate::clap::cache::invalidate();
             }
+
+            // Free cached nested ZIP memory
+            zip_cache::clear();
         }
 
         // Check if all categories are stopped
