@@ -11,6 +11,7 @@
   import type { SourceFolder } from '$lib/types';
   import Spinner from '$lib/components/shared/Spinner.svelte';
   import FolderIcon from '$lib/components/icons/FolderIcon.svelte';
+  import SearchConfigPanel from '$lib/components/folders/SearchConfigPanel.svelte';
 
   interface ScanProgressEvent {
     phase: string;
@@ -503,6 +504,9 @@
                 {/if}
               </div>
             {/if}
+
+            <!-- Search depth settings -->
+            <SearchConfigPanel folderId={folder.id} folderPath={folder.path} />
           </div>
         {/each}
       </div>

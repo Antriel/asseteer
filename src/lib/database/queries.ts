@@ -1,5 +1,5 @@
 import type Database from '@tauri-apps/plugin-sql';
-import type { Asset, FolderLocation, SourceFolder } from '$lib/types';
+import type { Asset, FolderLocation, SearchConfigEntry, SourceFolder } from '$lib/types';
 import type { DurationFilter } from '$lib/state/assets.svelte';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -506,6 +506,75 @@ export async function getZipDirectoryChildren(
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ============================================================================
+// Search config (per-folder search depth settings)
+// ============================================================================
+
+/**
+ * Get search config entries for a source folder
+ */
+export async function getSearchConfig(
+  db: Database,
+  folderId: number,
+): Promise<SearchConfigEntry[]> {
+  return db.select<SearchConfigEntry[]>(
+    `SELECT subfolder_prefix, skip_depth
+     FROM folder_search_config
+     WHERE source_folder_id = ?
+     ORDER BY subfolder_prefix COLLATE NOCASE`,
+    [folderId],
+  );
+}
+
+/**
+ * Get distinct top-level subfolder names for a source folder (depth 1 only).
+ * Used to show available prefixes when adding search config rules.
+ */
+export async function getTopLevelSubfolders(
+  db: Database,
+  folderId: number,
+): Promise<string[]> {
+  // Extract the first path segment from rel_path
+  const rows = await db.select<Array<{ segment: string }>>(
+    `SELECT DISTINCT
+       CASE
+         WHEN INSTR(rel_path, '/') > 0 THEN SUBSTR(rel_path, 1, INSTR(rel_path, '/') - 1)
+         ELSE rel_path
+       END as segment
+     FROM assets
+     WHERE folder_id = ? AND rel_path != ''
+     ORDER BY segment COLLATE NOCASE`,
+    [folderId],
+  );
+  return rows.map((r) => r.segment).filter(Boolean);
+}
+
+/**
+ * Get a sample asset path for a folder to use as search depth preview
+ */
+export async function getSampleAssetPath(
+  db: Database,
+  folderId: number,
+  prefix?: string,
+): Promise<{ rel_path: string; filename: string; zip_entry: string | null } | null> {
+  const condition = prefix
+    ? 'AND (rel_path = ? OR rel_path LIKE ?)'
+    : '';
+  const params: unknown[] = [folderId];
+  if (prefix) {
+    params.push(prefix, prefix + '/%');
+  }
+
+  const rows = await db.select<Array<{ rel_path: string; filename: string; zip_entry: string | null }>>(
+    `SELECT rel_path, filename, zip_entry FROM assets
+     WHERE folder_id = ? ${condition} AND rel_path != ''
+     ORDER BY LENGTH(rel_path) DESC
+     LIMIT 1`,
+    params,
+  );
+  return rows[0] ?? null;
 }
 
 // ============================================================================
