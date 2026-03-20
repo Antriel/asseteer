@@ -20,6 +20,8 @@ class ExploreState {
   childrenCache = $state(new SvelteMap<string, import('$lib/database/queries').DirectoryNode[]>());
   // Root directories (source folders)
   roots = $state<import('$lib/database/queries').DirectoryNode[]>([]);
+  // Maps folderId -> absolute folder path (populated alongside roots)
+  folderPaths = $state(new Map<number, string>());
   isLoadingRoots = $state(false);
   // True while navigateToAsset is expanding ancestors
   isNavigating = $state(false);
@@ -31,6 +33,10 @@ class ExploreState {
     try {
       const db = await getDatabase();
       this.roots = await getSourceFolderRoots(db);
+      const folderRows = await db.select<{ id: number; path: string }[]>(
+        `SELECT id, path FROM source_folders WHERE status = 'active'`,
+      );
+      this.folderPaths = new Map(folderRows.map((f) => [f.id, f.path]));
     } catch (error) {
       console.error('[Explore] Failed to load roots:', error);
     } finally {
@@ -167,6 +173,7 @@ class ExploreState {
   clearCache() {
     this.childrenCache.clear();
     this.roots = [];
+    this.folderPaths = new Map();
   }
 }
 

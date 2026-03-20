@@ -8,6 +8,7 @@ import {
   type SearchColumn,
 } from '$lib/database/queries';
 import { clearThumbnailCache } from '$lib/state/thumbnails.svelte';
+import { listen } from '@tauri-apps/api/event';
 
 // Maximum number of assets to display in the UI
 // Even with virtual scrolling, tracking millions of items causes performance issues
@@ -162,6 +163,32 @@ class AssetsState {
 
 // Export singleton instance
 export const assetsState = new AssetsState();
+
+// When a thumbnail is generated, the backend also writes image dimensions to image_metadata.
+// Listen for these events and patch width/height on any asset currently in the list
+// so the UI updates without requiring a full reload.
+listen<{ asset_id: number; success: boolean }>('thumbnail-ready', async (event) => {
+  const { asset_id, success } = event.payload;
+  if (!success) return;
+
+  const idx = assetsState.assets.findIndex((a) => a.id === asset_id);
+  if (idx === -1) return;
+  if (assetsState.assets[idx].width != null) return; // already populated
+
+  try {
+    const db = await getDatabase();
+    const rows = await db.select<{ width: number | null; height: number | null }[]>(
+      'SELECT width, height FROM image_metadata WHERE asset_id = ?',
+      [asset_id],
+    );
+    if (rows[0]?.width != null && rows[0]?.height != null) {
+      assetsState.assets[idx].width = rows[0].width;
+      assetsState.assets[idx].height = rows[0].height;
+    }
+  } catch {
+    // ignore — dimensions will appear on next full reload
+  }
+}).catch(console.error);
 
 /**
  * Get formatted file size

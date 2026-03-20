@@ -1,6 +1,7 @@
 <script lang="ts">
   import { exploreState, type DirectoryNode } from '$lib/state/explore.svelte';
   import { ChevronIcon, FolderIcon } from '$lib/components/icons';
+  import { openPath } from '@tauri-apps/plugin-opener';
   import DirectoryTree from './DirectoryTree.svelte';
 
   interface Props {
@@ -10,7 +11,65 @@
   }
 
   let { nodes, depth = 0, onSelect }: Props = $props();
+
+  let contextMenu = $state<{ x: number; y: number; node: DirectoryNode } | null>(null);
+
+  function handleContextMenu(e: MouseEvent, node: DirectoryNode) {
+    e.preventDefault();
+    contextMenu = { x: e.clientX, y: e.clientY, node };
+  }
+
+  function closeContextMenu() {
+    contextMenu = null;
+  }
+
+  async function openInExplorer(node: DirectoryNode) {
+    const folderBase = exploreState.folderPaths.get(node.location.folderId);
+    if (!folderBase) return;
+
+    let dirPath: string;
+    if (node.location.type === 'zip') {
+      // Open the directory containing the ZIP file
+      dirPath = node.location.relPath
+        ? folderBase + '\\' + node.location.relPath.replace(/\//g, '\\')
+        : folderBase;
+    } else {
+      dirPath = node.location.relPath
+        ? folderBase + '\\' + node.location.relPath.replace(/\//g, '\\')
+        : folderBase;
+    }
+
+    try {
+      await openPath(dirPath);
+    } catch (error) {
+      console.error('Failed to open in explorer:', error);
+    }
+  }
 </script>
+
+<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+{#if contextMenu}
+  <div
+    class="fixed inset-0 z-50"
+    onclick={closeContextMenu}
+    oncontextmenu={(e) => { e.preventDefault(); closeContextMenu(); }}
+  >
+    <div
+      class="absolute bg-elevated border border-default rounded-lg shadow-lg py-1 min-w-[160px]"
+      style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+    >
+      <button
+        class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
+        onclick={() => { const n = contextMenu!.node; closeContextMenu(); openInExplorer(n); }}
+      >
+        <svg class="w-4 h-4 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+        </svg>
+        Open in File Explorer
+      </button>
+    </div>
+  </div>
+{/if}
 
 {#each nodes as node (node.key)}
   {@const isExpanded = exploreState.isExpanded(node.key)}
@@ -20,6 +79,7 @@
   {@const isZip = node.location.type === 'zip'}
 
   <div>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="flex items-center w-full gap-1 px-2 py-1 text-sm rounded hover:bg-tertiary transition-colors group {isSelected
         ? 'bg-accent-muted text-accent'
@@ -27,6 +87,7 @@
       style="padding-left: {depth * 16 + 8}px"
       data-tree-key={node.key}
       data-selected={isSelected ? 'true' : undefined}
+      oncontextmenu={(e) => handleContextMenu(e, node)}
     >
       <!-- Chevron: only this toggles expand/collapse -->
       <button

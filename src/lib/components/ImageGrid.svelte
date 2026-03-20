@@ -1,7 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { Asset } from '$lib/types';
+  import type { Asset, FolderLocation } from '$lib/types';
+  import { getAssetDirectoryPath } from '$lib/types';
+  import { openPath } from '@tauri-apps/plugin-opener';
   import { viewState } from '$lib/state/view.svelte';
+  import { assetsState } from '$lib/state/assets.svelte';
+  import { exploreState } from '$lib/state/explore.svelte';
+  import { FolderIcon } from '$lib/components/icons';
   import ImageThumbnail from './ImageThumbnail.svelte';
 
   interface Props {
@@ -68,6 +73,51 @@
   const visibleAssets = $derived(assets.slice(startIndex, endIndex));
   const offsetY = $derived(startRow * rowHeight);
 
+  // Context menu
+  let contextMenu = $state<{ x: number; y: number; asset: Asset } | null>(null);
+
+  function handleContextMenu(e: MouseEvent, asset: Asset) {
+    e.preventDefault();
+    contextMenu = { x: e.clientX, y: e.clientY, asset };
+  }
+
+  function closeContextMenu() {
+    contextMenu = null;
+  }
+
+  async function showInFolder(asset: Asset) {
+    viewState.openFolderSidebar();
+    await exploreState.loadRoots();
+    await exploreState.navigateToAsset(asset);
+    const assetType = 'image';
+    let location: FolderLocation;
+    if (asset.zip_file) {
+      const zipParts = (asset.zip_entry ?? '').split('/').filter(Boolean);
+      const zipDirParts = zipParts.slice(0, -1);
+      const zipPrefix = zipDirParts.length > 0 ? zipDirParts.join('/') + '/' : '';
+      location = { type: 'zip', folderId: asset.folder_id, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix };
+    } else {
+      location = { type: 'folder', folderId: asset.folder_id, relPath: asset.rel_path };
+    }
+    assetsState.setFolderFilter(location, assetType);
+  }
+
+  async function openDirectory(asset: Asset) {
+    try {
+      let dirPath: string;
+      if (asset.zip_file) {
+        dirPath = asset.rel_path
+          ? asset.folder_path + '\\' + asset.rel_path.replace(/\//g, '\\')
+          : asset.folder_path;
+      } else {
+        dirPath = getAssetDirectoryPath(asset).replace(/\//g, '\\');
+      }
+      await openPath(dirPath);
+    } catch (error) {
+      console.error('Failed to open directory:', error);
+    }
+  }
+
   function handleImageClick(asset: Asset) {
     viewState.openLightbox(asset);
   }
@@ -107,6 +157,37 @@
   });
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+{#if contextMenu}
+  <div
+    class="fixed inset-0 z-50"
+    onclick={closeContextMenu}
+    oncontextmenu={(e) => { e.preventDefault(); closeContextMenu(); }}
+  >
+    <div
+      class="absolute bg-elevated border border-default rounded-lg shadow-lg py-1 min-w-[180px]"
+      style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+    >
+      <button
+        class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
+        onclick={() => { const a = contextMenu!.asset; closeContextMenu(); showInFolder(a); }}
+      >
+        <FolderIcon size="sm" class="text-secondary" />
+        Show in Folder
+      </button>
+      <button
+        class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
+        onclick={() => { const a = contextMenu!.asset; closeContextMenu(); openDirectory(a); }}
+      >
+        <svg class="w-4 h-4 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+        </svg>
+        Open in File Explorer
+      </button>
+    </div>
+  </div>
+{/if}
+
 <div bind:this={containerElement} class="relative overflow-y-auto h-full" onscroll={handleScroll}>
   <div style="height: {totalHeight}px; position: relative;">
     <div
@@ -117,6 +198,7 @@
         <button
           class="relative bg-secondary border border-default rounded-lg overflow-hidden cursor-pointer hover:border-accent hover:shadow-md hover:-translate-y-0.5"
           onclick={() => handleImageClick(asset)}
+          oncontextmenu={(e) => handleContextMenu(e, asset)}
         >
           <ImageThumbnail {asset} size={viewState.thumbnailSize} />
           {#if asset.format === 'gif'}

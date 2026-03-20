@@ -3,6 +3,7 @@
   import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { onMount, onDestroy } from 'svelte';
   import { open } from '@tauri-apps/plugin-dialog';
+  import { openPath } from '@tauri-apps/plugin-opener';
   import { showToast, showConfirm, uiState } from '$lib/state/ui.svelte';
   import { exploreState } from '$lib/state/explore.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
@@ -429,6 +430,15 @@
 
                 <!-- Actions -->
                 <div class="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    onclick={() => openPath(folder.path)}
+                    class="p-2 rounded-lg text-tertiary hover:text-primary hover:bg-tertiary transition-colors"
+                    title="Open in file explorer"
+                  >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </button>
                   <button
                     onclick={() => startRescan(folder)}
                     disabled={rescanFolderId !== null || uiState.isScanning}
