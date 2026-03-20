@@ -22,13 +22,20 @@ pub async fn start_processing(
     // Get pending assets for this category (with folder_path from JOIN)
     let assets: Vec<Asset> = match cat {
         ProcessingCategory::Image => {
-            sqlx::query_as(
+            let query = if pre_generate_thumbnails {
+                "SELECT a.*, sf.path as folder_path FROM assets a
+                 JOIN source_folders sf ON a.folder_id = sf.id
+                 LEFT JOIN image_metadata im ON a.id = im.asset_id
+                 WHERE a.asset_type = 'image' AND (im.asset_id IS NULL OR im.thumbnail_data IS NULL)
+                 ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry"
+            } else {
                 "SELECT a.*, sf.path as folder_path FROM assets a
                  JOIN source_folders sf ON a.folder_id = sf.id
                  LEFT JOIN image_metadata im ON a.id = im.asset_id
                  WHERE a.asset_type = 'image' AND im.asset_id IS NULL
                  ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry"
-            )
+            };
+            sqlx::query_as(query)
             .fetch_all(&state.pool)
             .await
             .map_err(|e| format!("Failed to query pending images: {}", e))?

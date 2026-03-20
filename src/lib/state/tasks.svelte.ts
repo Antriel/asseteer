@@ -264,7 +264,7 @@ class ProcessingState {
       const db = await getDatabase();
       console.time('[Processing] getPendingCounts queries');
       const [assetCounts, clapCount] = await Promise.all([
-        getPendingAssetCounts(db),
+        getPendingAssetCounts(db, settings.preGenerateThumbnails),
         getPendingClapCount(),
       ]);
       console.timeEnd('[Processing] getPendingCounts queries');

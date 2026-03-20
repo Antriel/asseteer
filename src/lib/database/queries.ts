@@ -241,10 +241,17 @@ export interface AssetPendingCounts {
 /**
  * Get count of pending assets that need processing (images and audio metadata)
  */
-export async function getPendingAssetCounts(db: Database): Promise<AssetPendingCounts> {
-  // Count images without metadata
+export async function getPendingAssetCounts(
+  db: Database,
+  preGenerateThumbnails = false,
+): Promise<AssetPendingCounts> {
+  // Count images without metadata, or missing thumbnail when thumbnails are enabled
   const imagesResult = await db.select<Array<{ 'COUNT(*)': number }>>(
-    `SELECT COUNT(*) FROM assets a
+    preGenerateThumbnails
+      ? `SELECT COUNT(*) FROM assets a
+		 LEFT JOIN image_metadata im ON a.id = im.asset_id
+		 WHERE a.asset_type = 'image' AND (im.asset_id IS NULL OR im.thumbnail_data IS NULL)`
+      : `SELECT COUNT(*) FROM assets a
 		 LEFT JOIN image_metadata im ON a.id = im.asset_id
 		 WHERE a.asset_type = 'image' AND im.asset_id IS NULL`,
   );
