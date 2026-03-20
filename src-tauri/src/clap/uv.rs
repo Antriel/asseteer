@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use once_cell::sync::OnceCell;
 
-/// Pinned uv version (0.6.x range)
-const UV_VERSION: &str = "0.6.14";
+/// Pinned uv version
+const UV_VERSION: &str = "0.10.12";
 
 /// Global app data directory, set once at startup
 static APP_DATA_DIR: OnceCell<PathBuf> = OnceCell::new();
@@ -30,7 +30,7 @@ pub(super) fn app_data_dir() -> PathBuf {
 
 /// Get the expected path to the uv binary.
 pub fn uv_bin_path() -> PathBuf {
-    let uv_dir = app_data_dir().join("uv");
+    let uv_dir = app_data_dir().join("uv").join(UV_VERSION);
     if cfg!(windows) {
         uv_dir.join("uv.exe")
     } else {
@@ -79,11 +79,13 @@ pub async fn get_or_download_uv() -> Result<PathBuf, String> {
 
     println!("[UV] Downloaded {} bytes, extracting...", bytes.len());
 
-    let uv_dir = app_data_dir().join("uv");
-    std::fs::create_dir_all(&uv_dir)
+    let uv_dir = uv_path
+        .parent()
+        .ok_or_else(|| "uv path has no parent directory".to_string())?;
+    std::fs::create_dir_all(uv_dir)
         .map_err(|e| format!("Failed to create uv directory: {}", e))?;
 
-    extract_uv_binary(&bytes, &uv_dir)?;
+    extract_uv_binary(&bytes, uv_dir)?;
 
     if !uv_path.exists() {
         return Err(format!(
