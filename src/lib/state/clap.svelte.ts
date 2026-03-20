@@ -53,6 +53,8 @@ class ClapState {
   setupStatus = $state<ClapSetupStatus>('not-configured');
   setupError = $state<string | null>(null);
   cacheSize = $state(0);
+  /** True once initialize() has finished its first check — avoids false "not-configured" flash */
+  setupKnown = $state(false);
 
   // Startup progress (from backend events)
   startupPhase = $state<ClapStartupPhase | null>(null);
@@ -413,6 +415,7 @@ class ClapState {
       }
     }
     await this.refreshCacheSize();
+    this.setupKnown = true;
   }
 }
 
