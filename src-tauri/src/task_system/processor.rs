@@ -5,7 +5,7 @@ use crate::utils::resolve_asset_fs_path;
 use crate::zip_cache;
 use image::{DynamicImage, GenericImageView};
 use sqlx::SqlitePool;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Timeout for processing a single asset (30 seconds)
 const PROCESSING_TIMEOUT: Duration = Duration::from_secs(30);
@@ -155,60 +155,115 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     use symphonia::core::probe::Hint;
 
     let asset_id = asset.id;
-
+    let nested_zip_key = zip_cache::nested_zip_group_key(asset);
+    let uses_nested_zip = nested_zip_key.is_some();
     let asset_clone = asset.clone();
 
-    // Run CPU-intensive work in blocking thread with timeout
-    let result = tokio::time::timeout(
-        PROCESSING_TIMEOUT,
-        tokio::task::spawn_blocking(move || {
-            // Load audio bytes (cached for nested ZIPs)
-            let bytes = zip_cache::load_asset_bytes_cached(&asset_clone)?;
+    let blocking_task = tokio::task::spawn_blocking(move || {
+        let total_started = Instant::now();
+        let load_started = Instant::now();
 
-            // Create a cursor from the bytes for reading
-            let cursor = std::io::Cursor::new(bytes);
-            let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+        // Load audio bytes (cached for nested ZIPs)
+        let bytes = zip_cache::load_asset_bytes_cached(&asset_clone)?;
 
-            // Set up hint from file extension
-            let mut hint = Hint::new();
-            hint.with_extension(&asset_clone.format);
+        let load_elapsed = load_started.elapsed();
+        println!(
+            "[AudioProcess] LOAD asset_id={} file='{}' nested={} bytes_mb={:.2} load_ms={}",
+            asset_clone.id,
+            asset_clone.filename,
+            zip_cache::is_nested_zip_asset(&asset_clone),
+            bytes.len() as f64 / (1024.0 * 1024.0),
+            load_elapsed.as_millis()
+        );
 
-            // Probe the media format
-            let probed = symphonia::default::get_probe()
-                .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
-                .map_err(|e| format!("Failed to probe audio format: {}", e))?;
+        // Create a cursor from the bytes for reading
+        let cursor = std::io::Cursor::new(bytes);
+        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
-            let format = probed.format;
-            let track = format
-                .default_track()
-                .ok_or_else(|| "No audio track found".to_string())?;
+        // Set up hint from file extension
+        let mut hint = Hint::new();
+        hint.with_extension(&asset_clone.format);
 
-            // Extract codec parameters
-            let codec_params = &track.codec_params;
-            let sample_rate = codec_params.sample_rate.unwrap_or(0) as i32;
-            let channels = codec_params
-                .channels
-                .map(|c| c.count() as i32)
-                .unwrap_or(0);
+        let probe_started = Instant::now();
 
-            // Calculate duration in milliseconds
-            let duration_ms = if let Some(n_frames) = codec_params.n_frames {
-                if sample_rate > 0 {
-                    (n_frames as f64 / sample_rate as f64 * 1000.0) as i64
-                } else {
-                    0
-                }
+        // Probe the media format
+        let probed = symphonia::default::get_probe()
+            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+            .map_err(|e| format!("Failed to probe audio format: {}", e))?;
+
+        let probe_elapsed = probe_started.elapsed();
+        let format = probed.format;
+        let track = format
+            .default_track()
+            .ok_or_else(|| "No audio track found".to_string())?;
+
+        // Extract codec parameters
+        let codec_params = &track.codec_params;
+        let sample_rate = codec_params.sample_rate.unwrap_or(0) as i32;
+        let channels = codec_params
+            .channels
+            .map(|c| c.count() as i32)
+            .unwrap_or(0);
+
+        // Calculate duration in milliseconds
+        let duration_ms = if let Some(n_frames) = codec_params.n_frames {
+            if sample_rate > 0 {
+                (n_frames as f64 / sample_rate as f64 * 1000.0) as i64
             } else {
                 0
-            };
+            }
+        } else {
+            0
+        };
 
-            Ok::<_, String>((duration_ms, sample_rate, channels))
-        }),
-    )
-    .await;
+        println!(
+            "[AudioProcess] DONE asset_id={} file='{}' nested={} load_ms={} probe_ms={} total_ms={} duration_ms={} sample_rate={} channels={}",
+            asset_clone.id,
+            asset_clone.filename,
+            zip_cache::is_nested_zip_asset(&asset_clone),
+            load_elapsed.as_millis(),
+            probe_elapsed.as_millis(),
+            total_started.elapsed().as_millis(),
+            duration_ms,
+            sample_rate,
+            channels
+        );
+
+        Ok::<_, String>((duration_ms, sample_rate, channels))
+    });
+
+    // Nested ZIP audio loads can spend tens of seconds filling the shared cache.
+    // Don't report these as timeouts while debugging; the blocking task would keep
+    // running anyway, which obscures the real bottleneck.
+    let result: Result<(i64, i32, i32), String> = if uses_nested_zip {
+        println!(
+            "[AudioProcess] START asset_id={} file='{}' nested_key='{}' timeout=disabled",
+            asset.id,
+            asset.filename,
+            nested_zip_key.as_deref().unwrap_or("<none>")
+        );
+        match blocking_task.await {
+            Ok(inner) => inner,
+            Err(e) => Err(format!("Task join error: {}", e)),
+        }
+    } else {
+        println!(
+            "[AudioProcess] START asset_id={} file='{}' nested=false timeout_ms={}",
+            asset.id,
+            asset.filename,
+            PROCESSING_TIMEOUT.as_millis()
+        );
+        match tokio::time::timeout(PROCESSING_TIMEOUT, blocking_task).await {
+            Ok(join_result) => match join_result {
+                Ok(inner) => inner,
+                Err(e) => Err(format!("Task join error: {}", e)),
+            },
+            Err(_) => Err("Processing timed out".to_string()),
+        }
+    };
 
     match result {
-        Ok(Ok(Ok((duration_ms, sample_rate, channels)))) => {
+        Ok((duration_ms, sample_rate, channels)) => {
             // Insert into audio_metadata table
             let now = unix_now();
 
@@ -247,20 +302,10 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
                 },
             }
         }
-        Ok(Ok(Err(e))) => ProcessingResult {
+        Err(e) => ProcessingResult {
             asset_id,
             success: false,
             error: Some(e),
-        },
-        Ok(Err(e)) => ProcessingResult {
-            asset_id,
-            success: false,
-            error: Some(format!("Task join error: {}", e)),
-        },
-        Err(_) => ProcessingResult {
-            asset_id,
-            success: false,
-            error: Some("Processing timed out".to_string()),
         },
     }
 }

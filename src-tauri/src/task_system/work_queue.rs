@@ -13,6 +13,8 @@ use tokio::sync::{RwLock, Semaphore};
 use tokio::time::{interval, Duration};
 
 const BATCH_UPDATE_INTERVAL_SEC: u64 = 2;
+const CLAP_BATCH_SIZE: usize = 8;
+const NESTED_ZIP_BATCH_SIZE: usize = 8;
 
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
@@ -71,13 +73,17 @@ impl CategoryState {
     }
 }
 
-/// Work item containing category, generation, and asset
-type WorkItem = (ProcessingCategory, u64, Asset);
+#[derive(Debug, Clone)]
+struct WorkBatch {
+    category: ProcessingCategory,
+    generation: u64,
+    assets: Vec<Asset>,
+}
 
 /// Work queue manages asset processing with a worker pool
 pub struct WorkQueue {
-    work_tx: Sender<WorkItem>,
-    work_rx: Receiver<WorkItem>,
+    work_tx: Sender<WorkBatch>,
+    work_rx: Receiver<WorkBatch>,
     category_states: Arc<RwLock<HashMap<ProcessingCategory, CategoryState>>>,
     worker_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
 }
@@ -108,6 +114,86 @@ impl WorkQueue {
         }).clone()
     }
 
+    fn build_work_batches(
+        category: ProcessingCategory,
+        generation: u64,
+        assets: Vec<Asset>,
+    ) -> Vec<WorkBatch> {
+        match category {
+            ProcessingCategory::Clap => assets
+                .chunks(CLAP_BATCH_SIZE)
+                .map(|chunk| WorkBatch {
+                    category,
+                    generation,
+                    assets: chunk.to_vec(),
+                })
+                .collect(),
+            ProcessingCategory::Image | ProcessingCategory::Audio => {
+                let mut batches = Vec::new();
+                let mut current_key: Option<String> = None;
+                let mut current_assets = Vec::new();
+
+                let flush_current = |batches: &mut Vec<WorkBatch>,
+                                     current_key: &mut Option<String>,
+                                     current_assets: &mut Vec<Asset>| {
+                    if current_assets.is_empty() {
+                        return;
+                    }
+
+                    batches.push(WorkBatch {
+                        category,
+                        generation,
+                        assets: std::mem::take(current_assets),
+                    });
+                    *current_key = None;
+                };
+
+                for asset in assets {
+                    let asset_key = zip_cache::nested_zip_group_key(&asset);
+
+                    match asset_key {
+                        Some(key)
+                            if current_key.as_ref() == Some(&key)
+                                && current_assets.len() < NESTED_ZIP_BATCH_SIZE =>
+                        {
+                            current_assets.push(asset);
+                        }
+                        Some(key) => {
+                            flush_current(&mut batches, &mut current_key, &mut current_assets);
+                            current_key = Some(key);
+                            current_assets.push(asset);
+                        }
+                        None => {
+                            flush_current(&mut batches, &mut current_key, &mut current_assets);
+                            batches.push(WorkBatch {
+                                category,
+                                generation,
+                                assets: vec![asset],
+                            });
+                        }
+                    }
+                }
+
+                flush_current(&mut batches, &mut current_key, &mut current_assets);
+                for batch in &batches {
+                    if let Some(key) = batch
+                        .assets
+                        .first()
+                        .and_then(zip_cache::nested_zip_group_key)
+                    {
+                        println!(
+                            "[WorkQueue] Prepared {:?} nested batch key='{}' size={}",
+                            category,
+                            key,
+                            batch.assets.len()
+                        );
+                    }
+                }
+                batches
+            }
+        }
+    }
+
     /// Start processing assets from the work queue for a specific category
     pub async fn start(
         &self,
@@ -136,11 +222,18 @@ impl WorkQueue {
         state.completed_assets.store(0, Ordering::SeqCst);
         state.failed_assets.store(0, Ordering::SeqCst);
 
-        // Queue all assets with their category and generation
-        for asset in assets {
+        // Queue work batches with locality-aware grouping for nested ZIP assets
+        let batches = Self::build_work_batches(category, generation, assets);
+        println!(
+            "[WorkQueue] Queueing {} batches for category '{}' ({} assets)",
+            batches.len(),
+            category.as_str(),
+            state.total_assets.load(Ordering::SeqCst)
+        );
+        for batch in batches {
             self.work_tx
-                .send((category, generation, asset))
-                .map_err(|e| format!("Failed to queue asset: {}", e))?;
+                .send(batch)
+                .map_err(|e| format!("Failed to queue asset batch: {}", e))?;
         }
 
         // Check if we need to spawn workers (clean up completed workers first)
@@ -178,7 +271,14 @@ impl WorkQueue {
             loop {
                 // Try to get work from queue (non-blocking)
                 match work_rx.try_recv() {
-                    Ok((category, generation, asset)) => {
+                    Ok(work_batch) => {
+                        let category = work_batch.category;
+                        let generation = work_batch.generation;
+                        let batch_assets = work_batch.assets;
+                        let batch_nested_key = batch_assets
+                            .first()
+                            .and_then(zip_cache::nested_zip_group_key);
+
                         // Get category state
                         let state = {
                             let states = category_states.read().await;
@@ -221,36 +321,25 @@ impl WorkQueue {
                             break;
                         };
 
+                        if let Some(key) = &batch_nested_key {
+                            println!(
+                                "[Worker {}] Starting {:?} nested batch key='{}' size={}",
+                                worker_id,
+                                category,
+                                key,
+                                batch_assets.len()
+                            );
+                        }
+
                         // For CLAP, collect a batch before processing
                         if category == ProcessingCategory::Clap {
-                            let mut batch = vec![asset];
-                            const CLAP_BATCH_SIZE: usize = 8;
-
-                            // Try to collect more items for the batch
-                            while batch.len() < CLAP_BATCH_SIZE {
-                                match work_rx.try_recv() {
-                                    Ok((cat, gen, next_asset)) => {
-                                        if cat == ProcessingCategory::Clap
-                                            && gen == state.generation.load(Ordering::SeqCst)
-                                            && !state.stop_signal.load(Ordering::SeqCst)
-                                        {
-                                            batch.push(next_asset);
-                                        }
-                                        // If different category/generation, we can't put it back
-                                        // in a crossbeam channel easily, so just skip
-                                        // (this is fine since CLAP runs with concurrency=1)
-                                    }
-                                    Err(_) => break,
-                                }
-                            }
-
-                            let batch_len = batch.len();
+                            let batch_len = batch_assets.len();
                             {
                                 let mut current = state.current_file.write().await;
                                 *current = Some(format!("batch of {} files", batch_len));
                             }
 
-                            let results = process_clap_embedding_batch(&batch, &db).await;
+                            let results = process_clap_embedding_batch(&batch_assets, &db).await;
 
                             {
                                 let mut current = state.current_file.write().await;
@@ -278,42 +367,62 @@ impl WorkQueue {
                                 }
                             }
                         } else {
-                            // Non-CLAP: process one at a time as before
-                            {
-                                let mut current = state.current_file.write().await;
-                                *current = Some(asset.filename.clone());
-                            }
+                            for asset in batch_assets {
+                                while state.pause_signal.load(Ordering::SeqCst)
+                                    && !state.stop_signal.load(Ordering::SeqCst)
+                                {
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                }
 
-                            let result = process_asset(&asset, &db).await;
+                                if state.stop_signal.load(Ordering::SeqCst) {
+                                    break;
+                                }
 
-                            {
-                                let mut current = state.current_file.write().await;
-                                *current = None;
-                            }
+                                {
+                                    let mut current = state.current_file.write().await;
+                                    *current = Some(asset.filename.clone());
+                                }
 
-                            if result.success {
-                                state.completed_assets.fetch_add(1, Ordering::SeqCst);
-                            } else {
-                                state.failed_assets.fetch_add(1, Ordering::SeqCst);
-                                println!(
-                                    "[Worker {}] Failed to process asset {}: {:?}",
-                                    worker_id, asset.filename, result.error
-                                );
+                                let result = process_asset(&asset, &db).await;
 
-                                if let Some(error_msg) = &result.error {
-                                    let now = unix_now();
-                                    let _ = sqlx::query(
-                                        "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
-                                         VALUES (?, ?, ?, ?, 0)"
-                                    )
-                                    .bind(asset.id)
-                                    .bind(category.as_str())
-                                    .bind(error_msg)
-                                    .bind(now)
-                                    .execute(&db)
-                                    .await;
+                                {
+                                    let mut current = state.current_file.write().await;
+                                    *current = None;
+                                }
+
+                                if result.success {
+                                    state.completed_assets.fetch_add(1, Ordering::SeqCst);
+                                } else {
+                                    state.failed_assets.fetch_add(1, Ordering::SeqCst);
+                                    println!(
+                                        "[Worker {}] Failed to process asset {}: {:?}",
+                                        worker_id, asset.filename, result.error
+                                    );
+
+                                    if let Some(error_msg) = &result.error {
+                                        let now = unix_now();
+                                        let _ = sqlx::query(
+                                            "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
+                                             VALUES (?, ?, ?, ?, 0)"
+                                        )
+                                        .bind(asset.id)
+                                        .bind(category.as_str())
+                                        .bind(error_msg)
+                                        .bind(now)
+                                        .execute(&db)
+                                        .await;
+                                    }
                                 }
                             }
+                        }
+
+                        if let Some(key) = &batch_nested_key {
+                            println!(
+                                "[Worker {}] Finished {:?} nested batch key='{}'",
+                                worker_id,
+                                category,
+                                key
+                            );
                         }
                     }
                     Err(crossbeam::channel::TryRecvError::Empty) => {
@@ -589,9 +698,9 @@ impl WorkQueue {
         state.completed_assets.store(0, Ordering::SeqCst);
         state.failed_assets.store(0, Ordering::SeqCst);
 
-        for asset in assets {
+        for batch in Self::build_work_batches(category, generation, assets) {
             self.work_tx
-                .send((category, generation, asset))
+                .send(batch)
                 .map_err(|e| format!("Failed to queue: {}", e))?;
         }
 
@@ -748,6 +857,14 @@ mod tests {
         assets
     }
 
+    fn make_nested_batch_asset(zip_file: &str, zip_entry: &str, name: &str) -> Asset {
+        let mut asset = make_asset(name, 1, "", "audio", "wav");
+        asset.folder_path = "D:/Assets".to_string();
+        asset.zip_file = Some(zip_file.to_string());
+        asset.zip_entry = Some(zip_entry.to_string());
+        asset
+    }
+
     // -----------------------------------------------------------------------
     // calculate_eta (pure function)
     // -----------------------------------------------------------------------
@@ -771,6 +888,43 @@ mod tests {
         let (rate, eta) = calculate_eta(None, 50, 100, false);
         assert_eq!(rate, 0.0);
         assert!(eta.is_none());
+    }
+
+    #[test]
+    fn test_build_work_batches_groups_consecutive_nested_zip_assets() {
+        let assets = vec![
+            make_nested_batch_asset("pack_a.zip", "inner_a.zip/one.wav", "one.wav"),
+            make_nested_batch_asset("pack_a.zip", "inner_a.zip/two.wav", "two.wav"),
+            make_nested_batch_asset("pack_a.zip", "inner_a.zip/three.wav", "three.wav"),
+            make_asset("plain.wav", 1, "", "audio", "wav"),
+            make_nested_batch_asset("pack_b.zip", "inner_b.zip/four.wav", "four.wav"),
+            make_nested_batch_asset("pack_b.zip", "inner_b.zip/five.wav", "five.wav"),
+        ];
+
+        let batches = WorkQueue::build_work_batches(ProcessingCategory::Audio, 7, assets);
+        let batch_sizes: Vec<usize> = batches.iter().map(|batch| batch.assets.len()).collect();
+
+        assert_eq!(batch_sizes, vec![3, 1, 2]);
+        assert!(batches.iter().all(|batch| batch.generation == 7));
+        assert!(batches.iter().all(|batch| batch.category == ProcessingCategory::Audio));
+    }
+
+    #[test]
+    fn test_build_work_batches_splits_large_nested_zip_runs() {
+        let assets: Vec<Asset> = (0..10)
+            .map(|i| {
+                make_nested_batch_asset(
+                    "pack_a.zip",
+                    &format!("inner_a.zip/{}.wav", i),
+                    &format!("{}.wav", i),
+                )
+            })
+            .collect();
+
+        let batches = WorkQueue::build_work_batches(ProcessingCategory::Audio, 3, assets);
+        let batch_sizes: Vec<usize> = batches.iter().map(|batch| batch.assets.len()).collect();
+
+        assert_eq!(batch_sizes, vec![NESTED_ZIP_BATCH_SIZE, 2]);
     }
 
     // -----------------------------------------------------------------------

@@ -237,7 +237,7 @@ pub async fn retry_failed_assets(
          JOIN source_folders sf ON a.folder_id = sf.id
          JOIN processing_errors e ON a.id = e.asset_id
          WHERE e.category = ? AND e.resolved_at IS NULL
-         ORDER BY a.id"
+         ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry"
     )
     .bind(&category)
     .fetch_all(&state.pool)
