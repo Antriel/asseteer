@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 /// Timeout for processing a single asset (30 seconds)
 const PROCESSING_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Timeout for nested ZIP assets (2 minutes — cache fills can take tens of seconds)
+const NESTED_ZIP_PROCESSING_TIMEOUT: Duration = Duration::from_secs(120);
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -155,26 +158,31 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     use symphonia::core::probe::Hint;
 
     let asset_id = asset.id;
-    let nested_zip_key = zip_cache::nested_zip_group_key(asset);
-    let uses_nested_zip = nested_zip_key.is_some();
+    let uses_nested_zip = zip_cache::is_nested_zip_asset(asset);
     let asset_clone = asset.clone();
 
+    /// Warn threshold: log if audio asset load takes longer than this
+    const AUDIO_LOAD_WARN_MS: u128 = 10000;
+    /// Warn threshold: log if audio probe takes longer than this
+    const AUDIO_PROBE_WARN_MS: u128 = 5000;
+
     let blocking_task = tokio::task::spawn_blocking(move || {
-        let total_started = Instant::now();
         let load_started = Instant::now();
 
         // Load audio bytes (cached for nested ZIPs)
         let bytes = zip_cache::load_asset_bytes_cached(&asset_clone)?;
 
-        let load_elapsed = load_started.elapsed();
-        println!(
-            "[AudioProcess] LOAD asset_id={} file='{}' nested={} bytes_mb={:.2} load_ms={}",
-            asset_clone.id,
-            asset_clone.filename,
-            zip_cache::is_nested_zip_asset(&asset_clone),
-            bytes.len() as f64 / (1024.0 * 1024.0),
-            load_elapsed.as_millis()
-        );
+        let load_ms = load_started.elapsed().as_millis();
+        if load_ms > AUDIO_LOAD_WARN_MS {
+            eprintln!(
+                "[AudioProcess] WARN slow load asset_id={} file='{}' nested={} bytes_mb={:.2} load_ms={}",
+                asset_clone.id,
+                asset_clone.filename,
+                zip_cache::is_nested_zip_asset(&asset_clone),
+                bytes.len() as f64 / (1024.0 * 1024.0),
+                load_ms
+            );
+        }
 
         // Create a cursor from the bytes for reading
         let cursor = std::io::Cursor::new(bytes);
@@ -191,7 +199,14 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
             .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
             .map_err(|e| format!("Failed to probe audio format: {}", e))?;
 
-        let probe_elapsed = probe_started.elapsed();
+        let probe_ms = probe_started.elapsed().as_millis();
+        if probe_ms > AUDIO_PROBE_WARN_MS {
+            eprintln!(
+                "[AudioProcess] WARN slow probe asset_id={} file='{}' probe_ms={}",
+                asset_clone.id, asset_clone.filename, probe_ms
+            );
+        }
+
         let format = probed.format;
         let track = format
             .default_track()
@@ -216,50 +231,16 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
             0
         };
 
-        println!(
-            "[AudioProcess] DONE asset_id={} file='{}' nested={} load_ms={} probe_ms={} total_ms={} duration_ms={} sample_rate={} channels={}",
-            asset_clone.id,
-            asset_clone.filename,
-            zip_cache::is_nested_zip_asset(&asset_clone),
-            load_elapsed.as_millis(),
-            probe_elapsed.as_millis(),
-            total_started.elapsed().as_millis(),
-            duration_ms,
-            sample_rate,
-            channels
-        );
-
         Ok::<_, String>((duration_ms, sample_rate, channels))
     });
 
-    // Nested ZIP audio loads can spend tens of seconds filling the shared cache.
-    // Don't report these as timeouts while debugging; the blocking task would keep
-    // running anyway, which obscures the real bottleneck.
-    let result: Result<(i64, i32, i32), String> = if uses_nested_zip {
-        println!(
-            "[AudioProcess] START asset_id={} file='{}' nested_key='{}' timeout=disabled",
-            asset.id,
-            asset.filename,
-            nested_zip_key.as_deref().unwrap_or("<none>")
-        );
-        match blocking_task.await {
+    let timeout = if uses_nested_zip { NESTED_ZIP_PROCESSING_TIMEOUT } else { PROCESSING_TIMEOUT };
+    let result: Result<(i64, i32, i32), String> = match tokio::time::timeout(timeout, blocking_task).await {
+        Ok(join_result) => match join_result {
             Ok(inner) => inner,
             Err(e) => Err(format!("Task join error: {}", e)),
-        }
-    } else {
-        println!(
-            "[AudioProcess] START asset_id={} file='{}' nested=false timeout_ms={}",
-            asset.id,
-            asset.filename,
-            PROCESSING_TIMEOUT.as_millis()
-        );
-        match tokio::time::timeout(PROCESSING_TIMEOUT, blocking_task).await {
-            Ok(join_result) => match join_result {
-                Ok(inner) => inner,
-                Err(e) => Err(format!("Task join error: {}", e)),
-            },
-            Err(_) => Err("Processing timed out".to_string()),
-        }
+        },
+        Err(_) => Err(format!("Processing timed out after {}s", timeout.as_secs())),
     };
 
     match result {

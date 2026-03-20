@@ -77,6 +77,9 @@ pub fn is_nested_zip_asset(asset: &Asset) -> bool {
     nested_zip_group_key(asset).is_some()
 }
 
+/// Warn threshold: log if waiting longer than this for active key
+const GATE_WAIT_WARN_MS: u128 = 5000;
+
 fn acquire_active_nested_zip_key(key: &str) -> Result<ActiveKeyGuard, String> {
     let wait_started = Instant::now();
     let mut guard = ACTIVE_KEY
@@ -87,23 +90,18 @@ fn acquire_active_nested_zip_key(key: &str) -> Result<ActiveKeyGuard, String> {
         match &guard.active_key {
             Some(active_key) if active_key == key => {
                 guard.active_users += 1;
-                println!(
-                    "[ZipGate] JOIN key='{}' waited_ms={} active_users={}",
-                    key,
-                    wait_started.elapsed().as_millis(),
-                    guard.active_users
-                );
+                let waited = wait_started.elapsed().as_millis();
+                if waited > GATE_WAIT_WARN_MS {
+                    eprintln!(
+                        "[ZipGate] WARN slow JOIN key='{}' waited_ms={} active_users={}",
+                        key, waited, guard.active_users
+                    );
+                }
                 return Ok(ActiveKeyGuard {
                     key: key.to_string(),
                 });
             }
-            Some(active_key) => {
-                println!(
-                    "[ZipGate] WAIT key='{}' active='{}' waited_ms={}",
-                    key,
-                    active_key,
-                    wait_started.elapsed().as_millis()
-                );
+            Some(_active_key) => {
                 guard = ACTIVE_KEY_READY
                     .wait(guard)
                     .map_err(|e| format!("Active-key lock poisoned: {}", e))?;
@@ -111,11 +109,13 @@ fn acquire_active_nested_zip_key(key: &str) -> Result<ActiveKeyGuard, String> {
             None => {
                 guard.active_key = Some(key.to_string());
                 guard.active_users = 1;
-                println!(
-                    "[ZipGate] ACTIVATE key='{}' waited_ms={}",
-                    key,
-                    wait_started.elapsed().as_millis()
-                );
+                let waited = wait_started.elapsed().as_millis();
+                if waited > GATE_WAIT_WARN_MS {
+                    eprintln!(
+                        "[ZipGate] WARN slow ACTIVATE key='{}' waited_ms={}",
+                        key, waited
+                    );
+                }
                 return Ok(ActiveKeyGuard {
                     key: key.to_string(),
                 });
@@ -123,6 +123,10 @@ fn acquire_active_nested_zip_key(key: &str) -> Result<ActiveKeyGuard, String> {
         }
     }
 }
+
+/// Warn threshold: log if cache wait or load takes longer than this
+const CACHE_WAIT_WARN_MS: u128 = 5000;
+const CACHE_LOAD_WARN_MS: u128 = 10000;
 
 fn get_cached_nested_zip_bytes(
     outer_zip_path: &str,
@@ -138,43 +142,28 @@ fn get_cached_nested_zip_bytes(
 
         match &*guard {
             CacheState::Ready(cached) if cached.key == key => {
-                let waited = wait_started.elapsed();
-                println!(
-                    "[ZipCache] HIT key='{}' waited_ms={} size_mb={:.1}",
-                    key,
-                    waited.as_millis(),
-                    cached.bytes.len() as f64 / (1024.0 * 1024.0)
-                );
+                let waited = wait_started.elapsed().as_millis();
+                if waited > CACHE_WAIT_WARN_MS {
+                    eprintln!(
+                        "[ZipCache] WARN slow HIT key='{}' waited_ms={} size_mb={:.1}",
+                        key, waited, cached.bytes.len() as f64 / (1024.0 * 1024.0)
+                    );
+                }
                 return Ok(cached.bytes.clone());
             }
             CacheState::Loading(loading_key) if loading_key == &key => {
-                println!(
-                    "[ZipCache] WAIT same key='{}' waited_ms={}",
-                    key,
-                    wait_started.elapsed().as_millis()
-                );
                 guard = CACHE_READY
                     .wait(guard)
                     .map_err(|e| format!("Cache lock poisoned: {}", e))?;
                 drop(guard);
             }
             CacheState::Loading(_) => {
-                println!(
-                    "[ZipCache] WAIT other key='{}' waited_ms={}",
-                    key,
-                    wait_started.elapsed().as_millis()
-                );
                 guard = CACHE_READY
                     .wait(guard)
                     .map_err(|e| format!("Cache lock poisoned: {}", e))?;
                 drop(guard);
             }
             CacheState::Empty | CacheState::Ready(_) => {
-                println!(
-                    "[ZipCache] LOAD START key='{}' waited_ms={}",
-                    key,
-                    wait_started.elapsed().as_millis()
-                );
                 *guard = CacheState::Loading(key.clone());
                 drop(guard);
                 break;
@@ -191,12 +180,14 @@ fn get_cached_nested_zip_bytes(
     match load_result {
         Ok(bytes) => {
             let shared = Arc::new(bytes);
-            println!(
-                "[ZipCache] LOAD DONE key='{}' load_ms={} size_mb={:.1}",
-                key,
-                load_started.elapsed().as_millis(),
-                shared.len() as f64 / (1024.0 * 1024.0)
-            );
+            let load_ms = load_started.elapsed().as_millis();
+            let size_mb = shared.len() as f64 / (1024.0 * 1024.0);
+            if load_ms > CACHE_LOAD_WARN_MS {
+                eprintln!(
+                    "[ZipCache] WARN slow LOAD key='{}' load_ms={} size_mb={:.1}",
+                    key, load_ms, size_mb
+                );
+            }
             *guard = CacheState::Ready(CachedInnerZip {
                 key,
                 bytes: shared.clone(),
@@ -310,15 +301,8 @@ impl Drop for ActiveKeyGuard {
             if guard.active_key.as_deref() == Some(self.key.as_str()) {
                 guard.active_users = guard.active_users.saturating_sub(1);
                 if guard.active_users == 0 {
-                    println!("[ZipGate] RELEASE key='{}'", self.key);
                     guard.active_key = None;
                     ACTIVE_KEY_READY.notify_all();
-                } else {
-                    println!(
-                        "[ZipGate] LEAVE key='{}' remaining_users={}",
-                        self.key,
-                        guard.active_users
-                    );
                 }
             }
         }

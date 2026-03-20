@@ -175,20 +175,6 @@ impl WorkQueue {
                 }
 
                 flush_current(&mut batches, &mut current_key, &mut current_assets);
-                for batch in &batches {
-                    if let Some(key) = batch
-                        .assets
-                        .first()
-                        .and_then(zip_cache::nested_zip_group_key)
-                    {
-                        println!(
-                            "[WorkQueue] Prepared {:?} nested batch key='{}' size={}",
-                            category,
-                            key,
-                            batch.assets.len()
-                        );
-                    }
-                }
                 batches
             }
         }
@@ -261,12 +247,11 @@ impl WorkQueue {
     }
 
     /// Spawn a worker task that processes assets from the queue
-    async fn spawn_worker(&self, worker_id: usize, db: SqlitePool) -> tokio::task::JoinHandle<()> {
+    async fn spawn_worker(&self, _worker_id: usize, db: SqlitePool) -> tokio::task::JoinHandle<()> {
         let work_rx = self.work_rx.clone();
         let category_states = self.category_states.clone();
 
         tokio::spawn(async move {
-            println!("[Worker {}] Started", worker_id);
 
             loop {
                 // Try to get work from queue (non-blocking)
@@ -275,20 +260,12 @@ impl WorkQueue {
                         let category = work_batch.category;
                         let generation = work_batch.generation;
                         let batch_assets = work_batch.assets;
-                        let batch_nested_key = batch_assets
-                            .first()
-                            .and_then(zip_cache::nested_zip_group_key);
-
                         // Get category state
                         let state = {
                             let states = category_states.read().await;
                             match states.get(&category) {
                                 Some(s) => s.clone(),
-                                None => {
-                                    // Category not initialized, skip this asset
-                                    println!("[Worker {}] Category {:?} not initialized", worker_id, category);
-                                    continue;
-                                }
+                                None => continue,
                             }
                         };
 
@@ -299,8 +276,6 @@ impl WorkQueue {
 
                         // Check stop signal for this category
                         if state.stop_signal.load(Ordering::SeqCst) {
-                            // Category stopped, skip this asset
-                            println!("[Worker {}] Skipping asset (category {:?} stopped)", worker_id, category);
                             continue;
                         }
 
@@ -311,25 +286,13 @@ impl WorkQueue {
 
                         // Check again if stopped after pause
                         if state.stop_signal.load(Ordering::SeqCst) {
-                            println!("[Worker {}] Skipping asset (category {:?} stopped after pause)", worker_id, category);
                             continue;
                         }
 
                         // Acquire concurrency permit (limits parallel processing per category)
                         let Ok(_permit) = state.concurrency_limiter.acquire().await else {
-                            println!("[Worker {}] Semaphore closed, stopping", worker_id);
                             break;
                         };
-
-                        if let Some(key) = &batch_nested_key {
-                            println!(
-                                "[Worker {}] Starting {:?} nested batch key='{}' size={}",
-                                worker_id,
-                                category,
-                                key,
-                                batch_assets.len()
-                            );
-                        }
 
                         // For CLAP, collect a batch before processing
                         if category == ProcessingCategory::Clap {
@@ -394,9 +357,9 @@ impl WorkQueue {
                                     state.completed_assets.fetch_add(1, Ordering::SeqCst);
                                 } else {
                                     state.failed_assets.fetch_add(1, Ordering::SeqCst);
-                                    println!(
-                                        "[Worker {}] Failed to process asset {}: {:?}",
-                                        worker_id, asset.filename, result.error
+                                    eprintln!(
+                                        "[Worker] Failed to process asset {}: {:?}",
+                                        asset.filename, result.error
                                     );
 
                                     if let Some(error_msg) = &result.error {
@@ -416,14 +379,6 @@ impl WorkQueue {
                             }
                         }
 
-                        if let Some(key) = &batch_nested_key {
-                            println!(
-                                "[Worker {}] Finished {:?} nested batch key='{}'",
-                                worker_id,
-                                category,
-                                key
-                            );
-                        }
                     }
                     Err(crossbeam::channel::TryRecvError::Empty) => {
                         // No work available, wait a bit
@@ -439,19 +394,16 @@ impl WorkQueue {
                             // Give a small grace period for more work to arrive
                             tokio::time::sleep(Duration::from_millis(100)).await;
                             if work_rx.is_empty() {
-                                println!("[Worker {}] No more work and all categories stopped, exiting", worker_id);
                                 break;
                             }
                         }
                     }
                     Err(crossbeam::channel::TryRecvError::Disconnected) => {
-                        println!("[Worker {}] Channel disconnected, exiting", worker_id);
                         break;
                     }
                 }
             }
 
-            println!("[Worker {}] Finished", worker_id);
         })
     }
 
