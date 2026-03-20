@@ -176,6 +176,14 @@
 
       unlisten = await listen<ScanProgressEvent>('scan-progress', (event) => {
         const e = event.payload;
+        uiState.scanDetails = {
+          phase: e.phase as typeof uiState.scanDetails.phase,
+          filesFound: e.files_found,
+          filesInserted: e.files_inserted,
+          filesTotal: e.files_total,
+          zipsScanned: e.zips_scanned,
+          currentPath: e.current_path ?? uiState.scanDetails.currentPath,
+        };
         if (e.phase === 'discovering') {
           const zipInfo = e.zips_scanned > 0 ? ` (${e.zips_scanned} zips)` : '';
           scanProgress = `Discovering... ${e.files_found} found${zipInfo}`;
@@ -348,7 +356,14 @@
     {#if uiState.isScanning && scanProgress}
       <div class="mb-4 rounded-lg border border-default bg-secondary p-4 flex items-center gap-3">
         <Spinner size="sm" />
-        <span class="text-sm text-secondary">{scanProgress}</span>
+        <div class="flex flex-col min-w-0">
+          <span class="text-sm text-secondary">{scanProgress}</span>
+          {#if uiState.scanDetails.currentPath}
+            <span class="text-xs text-tertiary overflow-hidden whitespace-nowrap text-ellipsis block" style="direction: rtl;" title={uiState.scanDetails.currentPath}>
+              {uiState.scanDetails.currentPath}
+            </span>
+          {/if}
+        </div>
       </div>
     {/if}
 
