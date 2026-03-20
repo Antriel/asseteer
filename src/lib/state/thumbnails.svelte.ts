@@ -17,6 +17,9 @@ const failed = new Set<number>();
 /** IDs we've already sent to the backend (dedup) */
 const requested = new Set<number>();
 
+/** Incremented each time the cache is fully cleared — lets components react and re-request */
+export const cacheReset = $state({ version: 0 });
+
 // ---------------------------------------------------------------------------
 // Stats (updated by backend events)
 // ---------------------------------------------------------------------------
@@ -191,4 +194,5 @@ export function clearThumbnailCache(): void {
     cancelTimer = null;
   }
   thumbnailMetrics.reset();
+  cacheReset.version++;
 }

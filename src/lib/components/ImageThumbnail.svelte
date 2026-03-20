@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { invoke } from '@tauri-apps/api/core';
   import { type Asset, getAssetFilePath } from '$lib/types';
@@ -8,6 +7,7 @@
     hasThumbnailFailed,
     requestThumbnail,
     cancelThumbnail,
+    cacheReset,
   } from '$lib/state/thumbnails.svelte';
   import Spinner from '$lib/components/shared/Spinner.svelte';
 
@@ -52,7 +52,7 @@
 
   let displayUrl = $derived(isSmallImage ? smallImageUrl : thumbnailUrl);
 
-  onMount(() => {
+  $effect(() => {
     if (isSmallImage) {
       if (!asset.zip_entry) {
         // Regular file — use convertFileSrc for zero-IPC direct access
@@ -68,14 +68,15 @@
           .catch(() => {
             smallImageFailed = true;
           });
+        return () => {
+          // Revoke blob URL for zip entries
+          if (smallImageUrl && asset.zip_entry) {
+            URL.revokeObjectURL(smallImageUrl);
+          }
+        };
       }
-      return () => {
-        // Revoke blob URL for zip entries
-        if (smallImageUrl && asset.zip_entry) {
-          URL.revokeObjectURL(smallImageUrl);
-        }
-      };
     } else {
+      void cacheReset.version; // re-run when cache is cleared so we re-request
       requestThumbnail(asset.id);
       return () => cancelThumbnail(asset.id);
     }
