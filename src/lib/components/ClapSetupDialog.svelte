@@ -35,7 +35,7 @@
       items.push({ key: 'downloading-uv', label: 'Downloading runtime tools', hint: '~30 MB' });
     }
     items.push(
-      { key: 'starting-process', label: 'Starting Python server', hint: '' },
+      { key: 'starting-process', label: 'Starting Python server', hint: isFirstTimeSetup ? 'may take 20+ min (GPU: ~8 GB)' : '' },
       { key: 'loading-model', label: 'Loading AI model', hint: isFirstTimeSetup ? '~1-2 GB first time' : '' },
     );
     return items;
@@ -178,6 +178,15 @@
           class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin"
         ></div>
         <span class="text-sm text-secondary">Checking setup state...</span>
+      </div>
+    {/if}
+
+    <!-- Download-in-progress notice -->
+    {#if setupFinished === 'running' && isFirstTimeSetup && (clapState.startupPhase === 'waiting-for-server' || clapState.startupPhase === 'starting-process')}
+      <div class="px-6 pb-3">
+        <p class="text-xs text-tertiary">
+          Keep this app open while downloading — closing it will cancel the download.
+        </p>
       </div>
     {/if}
 

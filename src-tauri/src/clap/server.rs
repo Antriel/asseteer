@@ -80,8 +80,8 @@ pub async fn ensure_server_running() -> Result<(), String> {
     println!("[CLAP] Using port {}", port);
     set_active_port(port);
 
-    let child = match start_server_process(&clap_dir, port).await {
-        Ok(child) => child,
+    let (child, log_path) = match start_server_process(&clap_dir, port).await {
+        Ok(pair) => pair,
         Err(e) => {
             emit_startup_progress("error", Some(&e));
             return Err(e);
@@ -99,8 +99,9 @@ pub async fn ensure_server_running() -> Result<(), String> {
 
     // Hold lock until server is ready — prevents concurrent callers from
     // spawning duplicate server processes during the startup window
-    emit_startup_progress("waiting-for-server", Some("Starting Python server"));
-    if let Err(e) = wait_for_server_ready().await {
+    emit_startup_progress("waiting-for-server", Some("Starting Python server…"));
+    let child_ref = guard.as_mut().expect("just assigned");
+    if let Err(e) = wait_for_server_ready(child_ref, &log_path).await {
         emit_startup_progress("error", Some(&e));
         return Err(e);
     }
@@ -174,7 +175,7 @@ fn find_clap_server_dir() -> Result<std::path::PathBuf, String> {
 /// Tries `uv run` first (automatic Python management). If uv download fails
 /// and a manual venv exists, falls back to using the venv directly.
 /// Server output is captured to a log file in the app data directory.
-async fn start_server_process(clap_dir: &std::path::Path, port: u16) -> Result<Child, String> {
+async fn start_server_process(clap_dir: &std::path::Path, port: u16) -> Result<(Child, PathBuf), String> {
     let (stdout, stderr, log_path) = logs::create_log_file()?;
 
     // Emit download event only if uv isn't already cached
@@ -215,14 +216,15 @@ async fn start_server_process(clap_dir: &std::path::Path, port: u16) -> Result<C
                         log_path
                     )
                 })?;
-            Ok(child)
+            Ok((child, log_path))
         }
         Err(uv_err) => {
             println!(
                 "[CLAP] uv not available ({}), trying manual venv fallback...",
                 uv_err
             );
-            start_server_venv_fallback(clap_dir, port, stdout, stderr, log_path)
+            let child = start_server_venv_fallback(clap_dir, port, stdout, stderr, log_path.clone())?;
+            Ok((child, log_path))
         }
     }
 }
@@ -274,27 +276,103 @@ fn start_server_venv_fallback(
         })
 }
 
-/// Wait for the server to become healthy (up to 120 seconds).
+/// Wait for the server to become healthy (up to 30 minutes).
 ///
-/// First run can take a while: uv downloads Python (~25MB) + dependencies (~500MB)
-/// + the HuggingFace model (~1-2GB).
-async fn wait_for_server_ready() -> Result<(), String> {
-    println!("[CLAP] Waiting for server to be ready (up to 120s for first-run setup)...");
-    for i in 0..240 {
+/// First run can take a while: uv downloads Python (~25MB) + dependencies
+/// (~500MB CPU / ~8GB GPU) + the HuggingFace model (~1-2GB).
+/// We check process liveness on every iteration for a fast-fail if the
+/// process died, and tail the log every 10s to show download progress.
+async fn wait_for_server_ready(child: &mut Child, log_path: &std::path::Path) -> Result<(), String> {
+    println!("[CLAP] Waiting for server to be ready (GPU first-run may take 20+ minutes)...");
+
+    // 30 minutes at 500ms intervals
+    for i in 0..3600u32 {
+        // Fast-fail: if the child process has exited, no point waiting further
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let tail = read_log_tail(log_path).unwrap_or_default();
+                let tail_section = if tail.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\nLast log output:\n{}", tail)
+                };
+                return Err(format!(
+                    "CLAP server process exited unexpectedly (exit code: {}).{}\n\nCheck logs in {:?} for details.",
+                    status, tail_section, logs::log_dir()
+                ));
+            }
+            _ => {} // still running or check failed — keep waiting
+        }
+
         tokio::time::sleep(Duration::from_millis(500)).await;
+
         if get_clap_client().await.health_check().await.is_ok() {
             println!("[CLAP] Server ready after {}ms", (i + 1) * 500);
             return Ok(());
         }
+
+        // Every 10 seconds, tail the log and surface the last meaningful line
+        // as the startup detail so the UI shows real download progress.
+        if i > 0 && i % 20 == 19 {
+            if let Some(line) = read_log_last_meaningful_line(log_path) {
+                emit_startup_progress("waiting-for-server", Some(&line));
+            }
+        }
     }
 
     Err(format!(
-        "Semantic search server failed to start within 120 seconds. \
-         This may happen on first run if the AI model is still downloading. \
-         Try restarting the app to resume the download. \
+        "Semantic search server is still not responding after 30 minutes. \
+         On first run with GPU support, PyTorch CUDA (~8 GB) may still be downloading — \
+         keep the app open rather than restarting, as restarting will cancel the download. \
          Check logs in {:?} for details.",
         logs::log_dir()
     ))
+}
+
+/// Read the last ~4 KB of the log file and return the last line that looks
+/// like meaningful uv/pip output (download progress, installs, errors).
+/// Falls back to the last non-empty line if nothing keyword-matched.
+fn read_log_last_meaningful_line(log_path: &std::path::Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(log_path).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(4096))).ok()?;
+
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).ok()?;
+
+    let keywords = ["Downloading", "Installing", "Resolved", "Built", "Fetching", "Audited", "error", "Error"];
+
+    // Prefer a line that looks like uv/pip progress
+    let meaningful = buf.lines().rev().find(|l| {
+        let trimmed = l.trim();
+        !trimmed.is_empty() && keywords.iter().any(|kw| trimmed.contains(kw))
+    });
+
+    let line = meaningful
+        .or_else(|| buf.lines().rev().find(|l| !l.trim().is_empty()))?
+        .trim();
+
+    // Truncate long lines (e.g. full wheel URLs)
+    Some(if line.len() > 80 {
+        format!("{}…", &line[..80])
+    } else {
+        line.to_string()
+    })
+}
+
+/// Read the last ~2 KB of the log file as a plain string (for error reports).
+fn read_log_tail(log_path: &std::path::Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(log_path).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(2048))).ok()?;
+
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).ok()?;
+    Some(buf.trim().to_string())
 }
 
 /// Call the /preload endpoint to ensure the model is loaded.
