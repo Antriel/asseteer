@@ -19,6 +19,7 @@ import {
 } from '$lib/database/queries';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { DurationFilter } from '$lib/state/assets.svelte';
+import type { FolderLocation } from '$lib/types';
 
 // Maximum number of semantic search results to display
 const MAX_SEMANTIC_RESULTS = 500;
@@ -163,6 +164,7 @@ class ClapState {
     query: string,
     limit: number = MAX_SEMANTIC_RESULTS,
     durationFilter?: DurationFilter,
+    folderLocation?: FolderLocation | null,
   ): Promise<SemanticSearchResult[]> {
     // Increment version to cancel any in-progress search
     const currentVersion = ++this.searchVersion;
@@ -198,7 +200,7 @@ class ClapState {
 
     try {
       // Request one extra to detect if there are more results
-      const results = await searchAudioSemantic(query, limit + 1, durationFilter);
+      const results = await searchAudioSemantic(query, limit + 1, durationFilter, folderLocation);
 
       // Only update results if this search is still current
       if (currentVersion === this.searchVersion) {
@@ -229,6 +231,7 @@ class ClapState {
     filename: string,
     limit: number = MAX_SEMANTIC_RESULTS,
     durationFilter?: DurationFilter,
+    folderLocation?: FolderLocation | null,
   ): Promise<SemanticSearchResult[]> {
     const currentVersion = ++this.searchVersion;
 
@@ -251,7 +254,7 @@ class ClapState {
     }
 
     try {
-      const results = await searchAudioBySimilarity(assetId, limit + 1, durationFilter);
+      const results = await searchAudioBySimilarity(assetId, limit + 1, durationFilter, folderLocation);
 
       if (currentVersion === this.searchVersion) {
         this.hasMoreResults = results.length > limit;

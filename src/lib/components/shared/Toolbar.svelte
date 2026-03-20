@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { assetsState } from '$lib/state/assets.svelte';
   import type { SearchColumn } from '$lib/database/queries';
   import { viewState } from '$lib/state/view.svelte';
@@ -61,7 +62,7 @@
 
     try {
       // Pass duration filter to semantic search for pre-filtering before similarity computation
-      await clapState.search(query, undefined, assetsState.durationFilter);
+      await clapState.search(query, undefined, assetsState.durationFilter, assetsState.folderLocation);
     } catch (error) {
       showToast(`Semantic search failed: ${error}`, 'error');
       // Fall back to FTS
@@ -120,6 +121,21 @@
 
   // Check if similarity search is active
   let isSimilarityMode = $derived(isAudioTab && clapState.similarToAssetId !== null);
+
+  // Re-run semantic/similarity search when the folder filter changes.
+  // FTS is already handled by setFolderFilter → loadAssets().
+  $effect(() => {
+    assetsState.folderLocation; // reactive dependency
+    untrack(() => {
+      if (isSimilarityMode && clapState.similarToAssetId !== null && clapState.similarToFilename) {
+        clapState
+          .searchBySimilarity(clapState.similarToAssetId, clapState.similarToFilename, undefined, assetsState.durationFilter, assetsState.folderLocation)
+          .catch((e) => showToast(`${e}`, 'error'));
+      } else if (isSemanticModeEnabled && clapState.lastSearchQuery.trim()) {
+        handleSemanticSearch(clapState.lastSearchQuery);
+      }
+    });
+  });
 
   // Save search text and clear input when entering similarity mode
   $effect(() => {

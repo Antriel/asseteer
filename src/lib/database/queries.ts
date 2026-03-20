@@ -620,6 +620,19 @@ export interface SemanticSearchResult {
 }
 
 /**
+ * Convert a FolderLocation to the flat object the Rust FolderFilter expects.
+ */
+function toFolderFilter(loc: FolderLocation | null | undefined) {
+  if (!loc) return null;
+  return {
+    folderId: loc.folderId,
+    relPath: loc.relPath,
+    zipFile: loc.type === 'zip' ? loc.zipFile : null,
+    zipPrefix: loc.type === 'zip' ? loc.zipPrefix : null,
+  };
+}
+
+/**
  * Search audio assets semantically using CLAP embeddings
  * Falls back to error if CLAP server is unavailable
  */
@@ -627,12 +640,14 @@ export async function searchAudioSemantic(
   query: string,
   limit: number = 50,
   durationFilter?: DurationFilter,
+  folderLocation?: FolderLocation | null,
 ): Promise<SemanticSearchResult[]> {
   return invoke('search_audio_semantic', {
     query,
     limit,
     minDurationMs: durationFilter?.minMs ?? null,
     maxDurationMs: durationFilter?.maxMs ?? null,
+    folderFilter: toFolderFilter(folderLocation),
   });
 }
 
@@ -643,12 +658,14 @@ export async function searchAudioBySimilarity(
   assetId: number,
   limit: number = 500,
   durationFilter?: DurationFilter,
+  folderLocation?: FolderLocation | null,
 ): Promise<SemanticSearchResult[]> {
   return invoke('search_audio_by_similarity', {
     assetId,
     limit,
     minDurationMs: durationFilter?.minMs ?? null,
     maxDurationMs: durationFilter?.maxMs ?? null,
+    folderFilter: toFolderFilter(folderLocation),
   });
 }
 

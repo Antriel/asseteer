@@ -5,14 +5,30 @@
 
 use super::embedding::{blob_to_embedding, cosine_similarity};
 use rayon::prelude::*;
+use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::time::Instant;
 use tokio::sync::RwLock;
+
+/// Folder filter passed to cache search — mirrors the TypeScript FolderLocation type.
+/// zip_file/zip_prefix present → ZIP filter; absent → filesystem folder filter.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderFilter {
+    pub folder_id: i64,
+    pub rel_path: String,
+    pub zip_file: Option<String>,
+    pub zip_prefix: Option<String>,
+}
 
 /// Per-entry metadata stored alongside the flat embedding matrix.
 struct EntryMeta {
     asset_id: i64,
     duration_ms: Option<i64>,
+    folder_id: i64,
+    rel_path: String,
+    zip_file: Option<String>,
+    zip_entry: Option<String>,
 }
 
 /// The loaded cache: flat embedding matrix + per-entry metadata.
@@ -34,6 +50,10 @@ struct CacheRow {
     asset_id: i64,
     embedding: Vec<u8>,
     duration_ms: Option<i64>,
+    folder_id: i64,
+    rel_path: String,
+    zip_file: Option<String>,
+    zip_entry: Option<String>,
 }
 
 /// Load all embeddings from the database into a flat matrix cache.
@@ -42,8 +62,10 @@ async fn load_cache(pool: &SqlitePool) -> Result<LoadedCache, String> {
 
     let rows: Vec<CacheRow> = sqlx::query_as(
         r#"
-        SELECT ae.asset_id, ae.embedding, am.duration_ms
+        SELECT ae.asset_id, ae.embedding, am.duration_ms,
+               a.folder_id, a.rel_path, a.zip_file, a.zip_entry
         FROM audio_embeddings ae
+        JOIN assets a ON ae.asset_id = a.id
         LEFT JOIN audio_metadata am ON ae.asset_id = am.asset_id
         "#,
     )
@@ -73,6 +95,10 @@ async fn load_cache(pool: &SqlitePool) -> Result<LoadedCache, String> {
         meta.push(EntryMeta {
             asset_id: row.asset_id,
             duration_ms: row.duration_ms,
+            folder_id: row.folder_id,
+            rel_path: row.rel_path.clone(),
+            zip_file: row.zip_file.clone(),
+            zip_entry: row.zip_entry.clone(),
         });
     }
 
@@ -150,6 +176,7 @@ pub async fn search(
     exclude_asset_id: Option<i64>,
     min_duration_ms: Option<i64>,
     max_duration_ms: Option<i64>,
+    folder_filter: Option<&FolderFilter>,
     pool: &SqlitePool,
 ) -> Result<Vec<SimilarityResult>, String> {
     ensure_loaded(pool).await?;
@@ -187,6 +214,41 @@ pub async fn search(
                 match m.duration_ms {
                     Some(d) if d <= max => {}
                     _ => return false,
+                }
+            }
+            if let Some(ff) = folder_filter {
+                if m.folder_id != ff.folder_id {
+                    return false;
+                }
+                match &ff.zip_file {
+                    Some(zip_file) => {
+                        // ZIP filter: rel_path + zip_file must match, zip_entry must match prefix
+                        if m.rel_path != ff.rel_path {
+                            return false;
+                        }
+                        if m.zip_file.as_deref() != Some(zip_file.as_str()) {
+                            return false;
+                        }
+                        match &m.zip_entry {
+                            None => return false,
+                            Some(entry) => {
+                                if let Some(prefix) = &ff.zip_prefix {
+                                    if !prefix.is_empty() && !entry.starts_with(prefix.as_str()) {
+                                        return false;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        // Filesystem folder filter: match rel_path exactly or as path prefix
+                        if !ff.rel_path.is_empty()
+                            && m.rel_path != ff.rel_path
+                            && !m.rel_path.starts_with(&format!("{}/", ff.rel_path))
+                        {
+                            return false;
+                        }
+                    }
                 }
             }
             true

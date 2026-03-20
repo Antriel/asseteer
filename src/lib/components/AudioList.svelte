@@ -152,7 +152,7 @@
   async function findSimilar(asset: AudioAsset) {
     closeContextMenu();
     try {
-      await clapState.searchBySimilarity(asset.id, asset.filename, undefined, assetsState.durationFilter);
+      await clapState.searchBySimilarity(asset.id, asset.filename, undefined, assetsState.durationFilter, assetsState.folderLocation);
     } catch (error) {
       showToast(`${error}`, 'error');
     }

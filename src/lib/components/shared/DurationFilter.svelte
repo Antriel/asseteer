@@ -104,10 +104,10 @@
   function reloadWithFilter() {
     // If similarity search is active, re-run with the new filter
     if (clapState.similarToAssetId !== null && clapState.similarToFilename) {
-      clapState.searchBySimilarity(clapState.similarToAssetId, clapState.similarToFilename, undefined, assetsState.durationFilter);
+      clapState.searchBySimilarity(clapState.similarToAssetId, clapState.similarToFilename, undefined, assetsState.durationFilter, assetsState.folderLocation);
     } else if (clapState.semanticSearchEnabled && clapState.lastSearchQuery) {
       // If semantic search is active, re-run semantic search with the new filter
-      clapState.search(clapState.lastSearchQuery, undefined, assetsState.durationFilter);
+      clapState.search(clapState.lastSearchQuery, undefined, assetsState.durationFilter, assetsState.folderLocation);
     } else {
       // Otherwise reload regular assets
       const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';

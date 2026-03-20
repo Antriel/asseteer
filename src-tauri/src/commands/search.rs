@@ -2,6 +2,7 @@
 
 use crate::clap::{cache as embedding_cache, ensure_server_running, get_clap_client, HealthInfo};
 use crate::clap::blob_to_embedding;
+use crate::clap::cache::FolderFilter;
 use crate::AppState;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -100,6 +101,7 @@ pub async fn search_audio_semantic(
     limit: usize,
     min_duration_ms: Option<i64>,
     max_duration_ms: Option<i64>,
+    folder_filter: Option<FolderFilter>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SemanticSearchResult>, String> {
     // Ensure server is running
@@ -115,6 +117,7 @@ pub async fn search_audio_semantic(
         None,
         min_duration_ms,
         max_duration_ms,
+        folder_filter.as_ref(),
         &state.pool,
     )
     .await?;
@@ -158,6 +161,7 @@ pub async fn search_audio_by_similarity(
     limit: usize,
     min_duration_ms: Option<i64>,
     max_duration_ms: Option<i64>,
+    folder_filter: Option<FolderFilter>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SemanticSearchResult>, String> {
     // Fetch the source asset's embedding
@@ -181,6 +185,7 @@ pub async fn search_audio_by_similarity(
         None,
         min_duration_ms,
         max_duration_ms,
+        folder_filter.as_ref(),
         &state.pool,
     )
     .await?;
