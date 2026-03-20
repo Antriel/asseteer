@@ -113,7 +113,7 @@ END;
 pub const CREATE_SCAN_SESSIONS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS scan_sessions (
     id INTEGER PRIMARY KEY,
-    source_folder_id INTEGER REFERENCES source_folders(id),
+    source_folder_id INTEGER REFERENCES source_folders(id) ON DELETE CASCADE,
     total_files INTEGER,
     processed_files INTEGER DEFAULT 0,
     status TEXT DEFAULT 'running',
