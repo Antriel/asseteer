@@ -1,14 +1,16 @@
-use crate::utils::load_asset_bytes;
+use crate::zip_cache;
 use crate::AppState;
 use crate::models::Asset;
+use tauri::ipc::Response;
 use tauri::State;
 
-/// Get raw bytes for an asset (works for both regular files and zip entries)
+/// Get raw bytes for an asset (works for both regular files and zip entries).
+/// Returns a binary IPC response (ArrayBuffer on the JS side) to avoid JSON number[] overhead.
 #[tauri::command]
 pub async fn get_asset_bytes(
     state: State<'_, AppState>,
     asset_id: i64,
-) -> Result<Vec<u8>, String> {
+) -> Result<Response, String> {
     // Load asset from database with folder_path from source_folders JOIN
     let asset = sqlx::query_as::<_, Asset>(
         "SELECT a.*, sf.path as folder_path
@@ -21,8 +23,9 @@ pub async fn get_asset_bytes(
     .await
     .map_err(|e| format!("Failed to load asset: {}", e))?;
 
-    // Load bytes (handles both regular files and zip entries)
-    load_asset_bytes(&asset)
+    // Load bytes — uses the nested-ZIP memory cache for nested ZIP assets.
+    // Wrap in Response so Tauri sends raw bytes instead of JSON number[].
+    zip_cache::load_asset_bytes_cached(&asset).map(Response::new)
 }
 
 /// Request thumbnail generation for a batch of asset IDs.

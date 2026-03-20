@@ -109,9 +109,10 @@
       (async () => {
         try {
           if (zipEntry) {
-            // Asset is inside a zip - need to extract it
-            const bytes = await invoke<number[]>('get_asset_bytes', { assetId });
-            const blob = new Blob([new Uint8Array(bytes)], { type: `audio/${assetFormat}` });
+            // Asset is inside a zip - need to extract it.
+            // invoke returns ArrayBuffer (binary IPC) to avoid JSON number[] overhead.
+            const buffer = await invoke<ArrayBuffer>('get_asset_bytes', { assetId });
+            const blob = new Blob([buffer], { type: `audio/${assetFormat}` });
             const newBlobUrl = URL.createObjectURL(blob);
 
             untrack(() => {
