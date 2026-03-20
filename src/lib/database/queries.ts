@@ -1,5 +1,5 @@
 import type Database from '@tauri-apps/plugin-sql';
-import type { Asset, FolderLocation, SearchConfigEntry, SourceFolder } from '$lib/types';
+import type { Asset, FolderLocation, SearchExclude, SourceFolder } from '$lib/types';
 import type { DurationFilter } from '$lib/state/assets.svelte';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -509,72 +509,85 @@ export async function getZipDirectoryChildren(
 }
 
 // ============================================================================
-// Search config (per-folder search depth settings)
+// Search excludes (per-folder/zip segment exclusion from search indexing)
 // ============================================================================
 
 /**
- * Get search config entries for a source folder
+ * Get search excludes for a source folder
  */
-export async function getSearchConfig(
+export async function getSearchExcludes(
   db: Database,
   folderId: number,
-): Promise<SearchConfigEntry[]> {
-  return db.select<SearchConfigEntry[]>(
-    `SELECT subfolder_prefix, skip_depth
-     FROM folder_search_config
+): Promise<SearchExclude[]> {
+  return db.select<SearchExclude[]>(
+    `SELECT zip_file, excluded_path
+     FROM folder_search_excludes
      WHERE source_folder_id = ?
-     ORDER BY subfolder_prefix COLLATE NOCASE`,
+     ORDER BY excluded_path COLLATE NOCASE`,
     [folderId],
   );
 }
 
 /**
- * Get distinct top-level subfolder names for a source folder (depth 1 only).
- * Used to show available prefixes when adding search config rules.
+ * Get all distinct rel_path values for a source folder (filesystem directories).
+ * Used to build the search config tree.
  */
-export async function getTopLevelSubfolders(
+export async function getDistinctRelPaths(
   db: Database,
   folderId: number,
 ): Promise<string[]> {
-  // Extract the first path segment from rel_path
-  const rows = await db.select<Array<{ segment: string }>>(
-    `SELECT DISTINCT
-       CASE
-         WHEN INSTR(rel_path, '/') > 0 THEN SUBSTR(rel_path, 1, INSTR(rel_path, '/') - 1)
-         ELSE rel_path
-       END as segment
-     FROM assets
+  const rows = await db.select<Array<{ rel_path: string }>>(
+    `SELECT DISTINCT rel_path FROM assets
      WHERE folder_id = ? AND rel_path != ''
-     ORDER BY segment COLLATE NOCASE`,
+     ORDER BY rel_path COLLATE NOCASE`,
     [folderId],
   );
-  return rows.map((r) => r.segment).filter(Boolean);
+  return rows.map((r) => r.rel_path);
 }
 
 /**
- * Get a sample asset path for a folder to use as search depth preview
+ * Get all distinct zip_entry directory prefixes for a specific zip file in a folder.
+ * Used to build the search config tree for ZIP-internal paths.
  */
-export async function getSampleAssetPath(
+export async function getDistinctZipDirs(
   db: Database,
   folderId: number,
-  prefix?: string,
-): Promise<{ rel_path: string; filename: string; zip_entry: string | null } | null> {
-  const condition = prefix
-    ? 'AND (rel_path = ? OR rel_path LIKE ?)'
-    : '';
-  const params: unknown[] = [folderId];
-  if (prefix) {
-    params.push(prefix, prefix + '/%');
-  }
-
-  const rows = await db.select<Array<{ rel_path: string; filename: string; zip_entry: string | null }>>(
-    `SELECT rel_path, filename, zip_entry FROM assets
-     WHERE folder_id = ? ${condition} AND rel_path != ''
-     ORDER BY LENGTH(rel_path) DESC
-     LIMIT 1`,
-    params,
+  relPath: string,
+  zipFile: string,
+): Promise<string[]> {
+  const rows = await db.select<Array<{ zip_entry: string }>>(
+    `SELECT DISTINCT zip_entry FROM assets
+     WHERE folder_id = ? AND rel_path = ? AND zip_file = ? AND zip_entry IS NOT NULL`,
+    [folderId, relPath, zipFile],
   );
-  return rows[0] ?? null;
+  // Extract unique directory prefixes from zip_entry values
+  const dirs = new Set<string>();
+  for (const row of rows) {
+    const parts = row.zip_entry.split('/');
+    // Build cumulative prefixes for all directory segments (skip the filename)
+    let cumulative = '';
+    for (let i = 0; i < parts.length - 1; i++) {
+      cumulative = cumulative ? cumulative + '/' + parts[i] : parts[i];
+      dirs.add(cumulative);
+    }
+  }
+  return [...dirs].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
+/**
+ * Get all distinct zip files within a folder (with their rel_path).
+ * Used to show ZIP nodes in the search config tree.
+ */
+export async function getDistinctZipFiles(
+  db: Database,
+  folderId: number,
+): Promise<Array<{ rel_path: string; zip_file: string }>> {
+  return db.select<Array<{ rel_path: string; zip_file: string }>>(
+    `SELECT DISTINCT rel_path, zip_file FROM assets
+     WHERE folder_id = ? AND zip_file IS NOT NULL
+     ORDER BY rel_path COLLATE NOCASE, zip_file COLLATE NOCASE`,
+    [folderId],
+  );
 }
 
 // ============================================================================

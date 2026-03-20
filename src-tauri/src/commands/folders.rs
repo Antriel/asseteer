@@ -1,4 +1,4 @@
-use crate::commands::scan::{compute_searchable_path, load_search_config};
+use crate::commands::scan::{compute_searchable_path, load_search_excludes};
 use crate::models::SourceFolder;
 use crate::AppState;
 use serde::Deserialize;
@@ -60,35 +60,35 @@ pub async fn rename_folder(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct SearchConfigEntry {
-    pub subfolder_prefix: String,
-    pub skip_depth: i32,
+pub struct SearchExclude {
+    pub zip_file: Option<String>,
+    pub excluded_path: String,
 }
 
-/// Update search config for a folder and re-index all its assets' searchable_path
+/// Update search excludes for a folder and re-index all its assets' searchable_path
 #[tauri::command]
-pub async fn update_search_config(
+pub async fn update_search_excludes(
     folder_id: i64,
-    config: Vec<SearchConfigEntry>,
+    excludes: Vec<SearchExclude>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    // Replace all config entries for this folder
+    // Replace all excludes for this folder
     let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
 
-    sqlx::query("DELETE FROM folder_search_config WHERE source_folder_id = ?1")
+    sqlx::query("DELETE FROM folder_search_excludes WHERE source_folder_id = ?1")
         .bind(folder_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
 
-    for entry in &config {
+    for entry in &excludes {
         sqlx::query(
-            "INSERT INTO folder_search_config (source_folder_id, subfolder_prefix, skip_depth)
+            "INSERT INTO folder_search_excludes (source_folder_id, zip_file, excluded_path)
              VALUES (?1, ?2, ?3)",
         )
         .bind(folder_id)
-        .bind(&entry.subfolder_prefix)
-        .bind(entry.skip_depth)
+        .bind(&entry.zip_file)
+        .bind(&entry.excluded_path)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
@@ -96,11 +96,11 @@ pub async fn update_search_config(
 
     tx.commit().await.map_err(|e| e.to_string())?;
 
-    // Re-index: load the new config, fetch all assets for this folder, recompute searchable_path
-    let search_config = load_search_config(&state.pool, folder_id).await?;
+    // Re-index: load the new excludes, fetch all assets, recompute searchable_path
+    let search_excludes = load_search_excludes(&state.pool, folder_id).await?;
 
-    let assets: Vec<(i64, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, rel_path, zip_entry FROM assets WHERE folder_id = ?1",
+    let assets: Vec<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, rel_path, zip_file, zip_entry FROM assets WHERE folder_id = ?1",
     )
     .bind(folder_id)
     .fetch_all(&state.pool)
@@ -109,8 +109,8 @@ pub async fn update_search_config(
 
     // Update in batches within a transaction
     let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
-    for (id, rel_path, zip_entry) in &assets {
-        let sp = compute_searchable_path(rel_path, zip_entry.as_deref(), &search_config);
+    for (id, rel_path, zip_file, zip_entry) in &assets {
+        let sp = compute_searchable_path(rel_path, zip_file.as_deref(), zip_entry.as_deref(), &search_excludes);
         sqlx::query("UPDATE assets SET searchable_path = ?1 WHERE id = ?2")
             .bind(&sp)
             .bind(id)

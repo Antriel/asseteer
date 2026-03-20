@@ -1,5 +1,5 @@
 use crate::commands::scan::{
-    discover_files_streaming, load_search_config, DiscoveredAsset, ScanProgress,
+    discover_files_streaming, load_search_excludes, DiscoveredAsset, ScanProgress,
     ScanProgressState,
 };
 use crate::AppState;
@@ -108,8 +108,8 @@ pub async fn preview_rescan(
         ));
     }
 
-    // 2. Load search config for this folder
-    let search_config = load_search_config(&state.pool, folder_id).await?;
+    // 2. Load search excludes for this folder
+    let search_excludes = load_search_excludes(&state.pool, folder_id).await?;
 
     // 3. Discover files on disk (reuse streaming discovery, collect results)
     let (tx, mut rx) = mpsc::channel::<Vec<DiscoveredAsset>>(32);
@@ -131,7 +131,7 @@ pub async fn preview_rescan(
             tx,
             &discover_progress,
             "rescan-progress",
-            &search_config,
+            &search_excludes,
         )
     });
 

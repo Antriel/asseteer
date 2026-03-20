@@ -24,8 +24,11 @@ pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
-    // Create folder_search_config table
-    sqlx::query(CREATE_FOLDER_SEARCH_CONFIG_TABLE)
+    // Create folder_search_excludes table + unique index
+    sqlx::query(CREATE_FOLDER_SEARCH_EXCLUDES_TABLE)
+        .execute(pool)
+        .await?;
+    sqlx::query(CREATE_FOLDER_SEARCH_EXCLUDES_INDEX)
         .execute(pool)
         .await?;
 

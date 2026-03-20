@@ -39,9 +39,9 @@ export type FolderLocation =
   | { type: 'folder'; folderId: number; relPath: string }
   | { type: 'zip'; folderId: number; relPath: string; zipFile: string; zipPrefix: string };
 
-export interface SearchConfigEntry {
-  subfolder_prefix: string;
-  skip_depth: number;
+export interface SearchExclude {
+  zip_file: string | null;
+  excluded_path: string;
 }
 
 export interface ScanSession {

@@ -107,8 +107,8 @@ pub async fn add_folder(
 
     let session_id = create_scan_session(&state, folder_id).await?;
 
-    // Load folder search config (sorted by prefix length desc for longest-match-first)
-    let search_config = load_search_config(&state.pool, folder_id).await?;
+    // Load folder search excludes
+    let search_excludes = load_search_excludes(&state.pool, folder_id).await?;
 
     let (tx, mut rx) = mpsc::channel::<Vec<DiscoveredAsset>>(32);
 
@@ -123,7 +123,7 @@ pub async fn add_folder(
     let discover_app = app.clone();
     let discover_progress = progress.clone();
     let discovery_handle = tokio::task::spawn_blocking(move || {
-        discover_files_streaming(&discover_app, &root_path_buf, folder_id, tx, &discover_progress, "scan-progress", &search_config)
+        discover_files_streaming(&discover_app, &root_path_buf, folder_id, tx, &discover_progress, "scan-progress", &search_excludes)
     });
 
     // Receive chunks and insert them as they arrive
@@ -271,7 +271,7 @@ pub(crate) fn discover_files_streaming(
     tx: mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
     event_name: &str,
-    search_config: &[(String, i32)],
+    search_excludes: &std::collections::HashSet<(Option<String>, String)>,
 ) -> Result<(), String> {
     let mut chunk = Vec::with_capacity(CHUNK_SIZE);
     let mut last_emit = Instant::now();
@@ -325,7 +325,7 @@ pub(crate) fn discover_files_streaming(
                     .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
                     .unwrap_or(0);
 
-                let searchable_path = compute_searchable_path(&rel_path, None, search_config);
+                let searchable_path = compute_searchable_path(&rel_path, None, None, search_excludes);
                 chunk.push(DiscoveredAsset {
                     filename: filename.to_string(),
                     folder_id,
@@ -366,7 +366,7 @@ pub(crate) fn discover_files_streaming(
                     &tx,
                     progress,
                     &mut chunk,
-                    search_config,
+                    search_excludes,
                 ) {
                     Ok(()) => {
                         progress.zips_scanned.fetch_add(1, Ordering::Relaxed);
@@ -440,56 +440,53 @@ pub(crate) fn compute_rel_path(root: &Path, file_path: &Path) -> String {
 /// Finds the longest matching prefix, strips that prefix plus `skip_depth`
 /// additional segments from the rel_path, appends the directory portion of
 /// zip_entry (if present), and replaces path separators with spaces.
+/// Compute the searchable path for FTS indexing.
+///
+/// `excludes` is a set of (zip_file, cumulative_path) pairs. Segments whose
+/// cumulative path appears in the set are omitted from the result.
 pub(crate) fn compute_searchable_path(
     rel_path: &str,
+    zip_file: Option<&str>,
     zip_entry: Option<&str>,
-    config: &[(String, i32)],
+    excludes: &std::collections::HashSet<(Option<String>, String)>,
 ) -> String {
-    let mut path_to_use = rel_path.to_string();
+    let mut result = Vec::new();
 
-    // Find longest matching prefix from config
-    for (prefix, skip_depth) in config {
-        let matches = if prefix.is_empty() {
-            true
+    // Filesystem segments: walk rel_path, skip excluded cumulative paths
+    let mut cumulative = String::new();
+    for segment in rel_path.split('/').filter(|s| !s.is_empty()) {
+        if cumulative.is_empty() {
+            cumulative.push_str(segment);
         } else {
-            path_to_use == *prefix || path_to_use.starts_with(&format!("{}/", prefix))
-        };
-        if matches {
-            // Strip the prefix
-            let remainder = if prefix.is_empty() {
-                path_to_use.clone()
-            } else if path_to_use.len() == prefix.len() {
-                String::new()
-            } else {
-                path_to_use[prefix.len() + 1..].to_string()
-            };
-            // Skip additional depth segments
-            let segments: Vec<&str> = remainder.split('/').filter(|s| !s.is_empty()).collect();
-            let skip = *skip_depth as usize;
-            if skip >= segments.len() {
-                path_to_use = String::new();
-            } else {
-                path_to_use = segments[skip..].join("/");
-            }
-            break;
+            cumulative.push('/');
+            cumulative.push_str(segment);
+        }
+        if !excludes.contains(&(None, cumulative.clone())) {
+            result.push(segment.to_string());
         }
     }
 
-    // Append directory portion of zip_entry (everything before the last `/`)
+    // ZIP-internal directory segments (directory portion of zip_entry, before last '/')
     if let Some(entry) = zip_entry {
         if let Some(last_slash) = entry.rfind('/') {
             let dir_part = &entry[..last_slash];
-            if !dir_part.is_empty() {
-                if !path_to_use.is_empty() {
-                    path_to_use.push(' ');
+            let zip_key = zip_file.map(|s| s.to_string());
+            let mut cum = String::new();
+            for segment in dir_part.split('/').filter(|s| !s.is_empty()) {
+                if cum.is_empty() {
+                    cum.push_str(segment);
+                } else {
+                    cum.push('/');
+                    cum.push_str(segment);
                 }
-                path_to_use.push_str(dir_part);
+                if !excludes.contains(&(zip_key.clone(), cum.clone())) {
+                    result.push(segment.to_string());
+                }
             }
         }
     }
 
-    // Replace path separators with spaces
-    path_to_use.replace('/', " ").replace('\\', " ")
+    result.join(" ")
 }
 
 /// Discover assets inside a zip file, streaming chunks through the channel
@@ -502,7 +499,7 @@ fn discover_zip_streaming(
     tx: &mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
     chunk: &mut Vec<DiscoveredAsset>,
-    search_config: &[(String, i32)],
+    search_excludes: &std::collections::HashSet<(Option<String>, String)>,
 ) -> Result<(), String> {
     let file =
         File::open(zip_path).map_err(|e| format!("Failed to open zip: {}", e))?;
@@ -512,7 +509,7 @@ fn discover_zip_streaming(
 
     discover_zip_recursive_streaming(
         archive, folder_id, rel_path, zip_filename, zip_mtime,
-        "", tx, progress, chunk, search_config,
+        "", tx, progress, chunk, search_excludes,
     )
 }
 
@@ -527,7 +524,7 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
     tx: &mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
     chunk: &mut Vec<DiscoveredAsset>,
-    search_config: &[(String, i32)],
+    search_excludes: &std::collections::HashSet<(Option<String>, String)>,
 ) -> Result<(), String> {
     // First pass: collect entry info (indices needed to avoid borrow conflicts)
     let mut entries_info: Vec<(usize, String, u64)> = Vec::new();
@@ -585,7 +582,7 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
                             tx,
                             progress,
                             chunk,
-                            search_config,
+                            search_excludes,
                         ) {
                             eprintln!(
                                 "Warning: Failed to process nested zip {}{}: {}",
@@ -602,7 +599,7 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
                 }
             } else if let Some(asset_type) = detect_asset_type_from_ext(&ext_str) {
                 let full_entry_path = format!("{}{}", prefix, entry_name);
-                let searchable_path = compute_searchable_path(rel_path, Some(&full_entry_path), search_config);
+                let searchable_path = compute_searchable_path(rel_path, Some(zip_filename), Some(&full_entry_path), search_excludes);
 
                 chunk.push(DiscoveredAsset {
                     filename: filename.to_string(),
@@ -671,21 +668,20 @@ pub(crate) async fn insert_asset_chunk(
     Ok(())
 }
 
-/// Load folder search config sorted by prefix length descending (longest match first)
-pub(crate) async fn load_search_config(
+/// Load folder search excludes as a HashSet of (zip_file, excluded_path) pairs.
+pub(crate) async fn load_search_excludes(
     pool: &sqlx::SqlitePool,
     folder_id: i64,
-) -> Result<Vec<(String, i32)>, String> {
-    let rows: Vec<(String, i32)> = sqlx::query_as(
-        "SELECT subfolder_prefix, skip_depth FROM folder_search_config
-         WHERE source_folder_id = ?1
-         ORDER BY LENGTH(subfolder_prefix) DESC",
+) -> Result<std::collections::HashSet<(Option<String>, String)>, String> {
+    let rows: Vec<(Option<String>, String)> = sqlx::query_as(
+        "SELECT zip_file, excluded_path FROM folder_search_excludes
+         WHERE source_folder_id = ?1",
     )
     .bind(folder_id)
     .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
-    Ok(rows)
+    Ok(rows.into_iter().collect())
 }
 
 /// Detect asset type from file extension

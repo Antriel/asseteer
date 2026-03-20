@@ -12,14 +12,18 @@ CREATE TABLE IF NOT EXISTS source_folders (
 )
 "#;
 
-pub const CREATE_FOLDER_SEARCH_CONFIG_TABLE: &str = r#"
-CREATE TABLE IF NOT EXISTS folder_search_config (
+pub const CREATE_FOLDER_SEARCH_EXCLUDES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS folder_search_excludes (
     id INTEGER PRIMARY KEY,
     source_folder_id INTEGER NOT NULL REFERENCES source_folders(id) ON DELETE CASCADE,
-    subfolder_prefix TEXT NOT NULL DEFAULT '',
-    skip_depth INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(source_folder_id, subfolder_prefix)
+    zip_file TEXT,
+    excluded_path TEXT NOT NULL
 )
+"#;
+
+pub const CREATE_FOLDER_SEARCH_EXCLUDES_INDEX: &str = r#"
+CREATE UNIQUE INDEX IF NOT EXISTS idx_search_excludes_unique
+    ON folder_search_excludes(source_folder_id, COALESCE(zip_file, ''), excluded_path)
 "#;
 
 pub const CREATE_ASSETS_TABLE: &str = r#"
