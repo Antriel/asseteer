@@ -378,7 +378,8 @@ async fn find_missing_thumbnails(pool: &SqlitePool, ids: &[i64]) -> Vec<i64> {
          LEFT JOIN image_metadata im ON a.id = im.asset_id
          WHERE a.id IN ({}) AND a.asset_type = 'image'
          AND (im.asset_id IS NULL OR im.thumbnail_data IS NULL)
-         AND NOT (im.width IS NOT NULL AND im.width <= 128 AND im.height IS NOT NULL AND im.height <= 128)",
+         AND NOT (im.width IS NOT NULL AND im.width <= 128 AND im.height IS NOT NULL AND im.height <= 128)
+         AND NOT (a.zip_entry IS NOT NULL AND a.zip_compression = 'store' AND a.zip_entry NOT LIKE '%.zip/%')",
         placeholders.join(",")
     );
     let mut q = sqlx::query_as::<_, (i64,)>(&query);

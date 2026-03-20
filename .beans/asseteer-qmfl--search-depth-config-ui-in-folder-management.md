@@ -1,11 +1,11 @@
 ---
 # asseteer-qmfl
 title: Search depth config UI in folder management
-status: in-progress
+status: completed
 type: feature
 priority: normal
 created_at: 2026-03-19T10:44:00Z
-updated_at: 2026-03-19T10:48:33Z
+updated_at: 2026-03-20T10:38:41Z
 parent: asseteer-i459
 ---
 

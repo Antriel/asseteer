@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { getDatabase } from '$lib/database/connection';
 import { getPendingAssetCounts, getPendingClapCount } from '$lib/database/queries';
+import { settings } from '$lib/state/settings.svelte';
 import type {
   PendingCount,
   ProcessingCategory,
@@ -116,7 +117,10 @@ class ProcessingState {
     this.lastRunResult = null;
 
     try {
-      await invoke('start_processing', { category });
+      await invoke('start_processing', {
+        category,
+        preGenerateThumbnails: settings.preGenerateThumbnails,
+      });
       console.log(`[Processing] Started ${category}`);
 
       // Query initial progress

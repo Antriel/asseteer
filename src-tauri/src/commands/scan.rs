@@ -43,6 +43,7 @@ pub(crate) struct DiscoveredAsset {
     pub rel_path: String,
     pub zip_file: Option<String>,
     pub zip_entry: Option<String>,
+    pub zip_compression: Option<String>,
     pub searchable_path: String,
     pub format: String,
     pub asset_type: AssetType,
@@ -332,6 +333,7 @@ pub(crate) fn discover_files_streaming(
                     rel_path,
                     zip_file: None,
                     zip_entry: None,
+                    zip_compression: None,
                     searchable_path,
                     format: ext_str.to_string(),
                     asset_type,
@@ -527,7 +529,7 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
     search_excludes: &std::collections::HashSet<(Option<String>, String)>,
 ) -> Result<(), String> {
     // First pass: collect entry info (indices needed to avoid borrow conflicts)
-    let mut entries_info: Vec<(usize, String, u64)> = Vec::new();
+    let mut entries_info: Vec<(usize, String, u64, &'static str)> = Vec::new();
 
     for i in 0..archive.len() {
         let entry = archive
@@ -535,12 +537,13 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
             .map_err(|e| format!("Failed to read zip entry: {}", e))?;
 
         if !entry.is_dir() {
-            entries_info.push((i, entry.name().to_string(), entry.size()));
+            let compression = compression_method_str(entry.compression());
+            entries_info.push((i, entry.name().to_string(), entry.size(), compression));
         }
     }
 
     // Second pass: process entries
-    for (idx, entry_name, entry_size) in entries_info {
+    for (idx, entry_name, entry_size, entry_compression) in entries_info {
         let entry_path_buf = PathBuf::from(&entry_name);
 
         let filename = entry_path_buf
@@ -607,6 +610,7 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
                     rel_path: rel_path.to_string(),
                     zip_file: Some(zip_filename.to_string()),
                     zip_entry: Some(full_entry_path),
+                    zip_compression: Some(entry_compression.to_string()),
                     searchable_path,
                     format: ext_str.to_string(),
                     asset_type,
@@ -642,16 +646,17 @@ pub(crate) async fn insert_asset_chunk(
     for asset in assets {
         sqlx::query(
             "INSERT OR IGNORE INTO assets (
-                filename, folder_id, rel_path, zip_file, zip_entry,
+                filename, folder_id, rel_path, zip_file, zip_entry, zip_compression,
                 searchable_path, asset_type, format, file_size, fs_modified_at,
                 created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
         .bind(&asset.filename)
         .bind(asset.folder_id)
         .bind(&asset.rel_path)
         .bind(&asset.zip_file)
         .bind(&asset.zip_entry)
+        .bind(&asset.zip_compression)
         .bind(&asset.searchable_path)
         .bind(asset.asset_type.as_str())
         .bind(&asset.format)
@@ -690,6 +695,19 @@ fn detect_asset_type(path: &Path) -> Option<AssetType> {
         let ext_str = ext.to_string_lossy().to_lowercase();
         detect_asset_type_from_ext(&ext_str)
     })
+}
+
+/// Convert a ZIP compression method to a canonical lowercase string.
+fn compression_method_str(method: zip::CompressionMethod) -> &'static str {
+    match method {
+        zip::CompressionMethod::Stored => "store",
+        zip::CompressionMethod::Deflated => "deflate",
+        zip::CompressionMethod::Deflate64 => "deflate64",
+        zip::CompressionMethod::Bzip2 => "bzip2",
+        zip::CompressionMethod::Zstd => "zstd",
+        zip::CompressionMethod::Lzma => "lzma",
+        _ => "unknown",
+    }
 }
 
 /// Detect asset type from extension string

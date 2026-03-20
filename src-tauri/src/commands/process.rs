@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, State};
 #[tauri::command]
 pub async fn start_processing(
     category: String,
+    pre_generate_thumbnails: bool,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
@@ -69,7 +70,7 @@ pub async fn start_processing(
 
     // Start the work queue for this category
     state.work_queue
-        .start(cat, assets, state.pool.clone(), app.clone())
+        .start(cat, assets, state.pool.clone(), app.clone(), pre_generate_thumbnails)
         .await?;
 
     Ok(())
@@ -268,10 +269,10 @@ pub async fn retry_failed_assets(
     .await
     .map_err(|e| format!("Failed to update retry count: {}", e))?;
 
-    // Start processing
+    // Start processing (retry never pre-generates thumbnails inline)
     state
         .work_queue
-        .start(cat, assets, state.pool.clone(), app)
+        .start(cat, assets, state.pool.clone(), app, false)
         .await?;
 
     Ok(count)

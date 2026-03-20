@@ -30,9 +30,9 @@ pub struct ProcessingResult {
 }
 
 /// Process a single asset (thumbnail + metadata combined)
-pub async fn process_asset(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
+pub async fn process_asset(asset: &Asset, db: &SqlitePool, pre_generate_thumbnails: bool) -> ProcessingResult {
     match asset.asset_type.as_str() {
-        "image" => process_image(asset, db).await,
+        "image" => process_image(asset, db, pre_generate_thumbnails).await,
         "audio" => process_audio(asset, db).await,
         _ => ProcessingResult {
             asset_id: asset.id,
@@ -42,8 +42,8 @@ pub async fn process_asset(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     }
 }
 
-/// Process an image asset (dimensions only, thumbnails are generated lazily)
-async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
+/// Process an image asset. Extracts dimensions; optionally generates thumbnail inline.
+async fn process_image(asset: &Asset, db: &SqlitePool, pre_generate_thumbnails: bool) -> ProcessingResult {
     let asset_id = asset.id;
 
     let asset_clone = asset.clone();
@@ -61,27 +61,40 @@ async fn process_image(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
 
             let (width, height) = img.dimensions();
 
-            Ok::<_, String>((width, height))
+            // Optionally generate thumbnail inline (skip for small images — no benefit)
+            let thumbnail = if pre_generate_thumbnails && (width > 128 || height > 128) {
+                Some(generate_thumbnail(&img, 128)?)
+            } else {
+                None
+            };
+
+            Ok::<_, String>((width, height, thumbnail))
         }),
     )
     .await;
 
     match result {
-        Ok(Ok(Ok((width, height)))) => {
+        Ok(Ok(Ok((width, height, thumbnail)))) => {
             let now = unix_now();
 
-            // Insert dimensions only; don't overwrite thumbnail if lazy loading already generated one
+            // Insert dimensions and optional thumbnail. On conflict, update dimensions but
+            // preserve any existing thumbnail (lazy worker may have already generated one).
             match sqlx::query(
                 "INSERT INTO image_metadata (asset_id, width, height, thumbnail_data, processed_at)
-                 VALUES (?, ?, ?, NULL, ?)
+                 VALUES (?, ?, ?, ?, ?)
                  ON CONFLICT (asset_id) DO UPDATE SET
                      width = excluded.width,
                      height = excluded.height,
-                     processed_at = excluded.processed_at",
+                     processed_at = excluded.processed_at,
+                     thumbnail_data = CASE
+                         WHEN image_metadata.thumbnail_data IS NULL THEN excluded.thumbnail_data
+                         ELSE image_metadata.thumbnail_data
+                     END",
             )
             .bind(asset_id)
             .bind(width as i32)
             .bind(height as i32)
+            .bind(thumbnail.as_deref())
             .bind(now)
             .execute(db)
             .await
@@ -562,7 +575,7 @@ mod tests {
         let mut asset = make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
         asset.id = insert_asset(&db, &asset).await;
 
-        let result = process_asset(&asset, &db).await;
+        let result = process_asset(&asset, &db, false).await;
         assert!(result.success, "Should succeed: {:?}", result.error);
 
         let (width, height): (i32, i32) =
@@ -587,7 +600,7 @@ mod tests {
         let mut asset = make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
         asset.id = insert_asset(&db, &asset).await;
 
-        process_asset(&asset, &db).await;
+        process_asset(&asset, &db, false).await;
 
         let (thumb,): (Option<Vec<u8>>,) =
             sqlx::query_as("SELECT thumbnail_data FROM image_metadata WHERE asset_id = ?")
@@ -626,7 +639,7 @@ mod tests {
         .unwrap();
 
         // Process again – ON CONFLICT should update dimensions but keep thumbnail
-        process_asset(&asset, &db).await;
+        process_asset(&asset, &db, false).await;
 
         let row: (i32, i32, Option<Vec<u8>>) = sqlx::query_as(
             "SELECT width, height, thumbnail_data FROM image_metadata WHERE asset_id = ?",
@@ -709,7 +722,7 @@ mod tests {
         let mut asset = make_test_asset_with_path("test.wav", &folder_path, folder_id, "audio", "wav");
         asset.id = insert_asset(&db, &asset).await;
 
-        let result = process_asset(&asset, &db).await;
+        let result = process_asset(&asset, &db, false).await;
         assert!(result.success, "Should succeed: {:?}", result.error);
 
         let (duration_ms, sample_rate, channels): (i64, Option<i32>, Option<i32>) =
@@ -742,7 +755,7 @@ mod tests {
         let mut asset = make_asset("test.mp4", folder_id, "", "video", "mp4");
         asset.id = 999; // not in DB, but we won't reach the DB write
 
-        let result = process_asset(&asset, &db).await;
+        let result = process_asset(&asset, &db, false).await;
         assert!(!result.success);
         assert!(result.error.unwrap().contains("Unsupported"));
     }
@@ -759,7 +772,7 @@ mod tests {
         asset.folder_path = "/no/such".to_string();
         asset.id = insert_asset(&db, &asset).await;
 
-        let result = process_asset(&asset, &db).await;
+        let result = process_asset(&asset, &db, false).await;
         assert!(!result.success);
         assert!(result.error.is_some());
     }

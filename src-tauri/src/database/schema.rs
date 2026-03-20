@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS assets (
     rel_path TEXT NOT NULL,
     zip_file TEXT,
     zip_entry TEXT,
+    zip_compression TEXT,
     searchable_path TEXT NOT NULL DEFAULT '',
     asset_type TEXT NOT NULL,
     format TEXT NOT NULL,

@@ -78,6 +78,7 @@ struct WorkBatch {
     category: ProcessingCategory,
     generation: u64,
     assets: Vec<Asset>,
+    pre_generate_thumbnails: bool,
 }
 
 /// Work queue manages asset processing with a worker pool
@@ -118,6 +119,7 @@ impl WorkQueue {
         category: ProcessingCategory,
         generation: u64,
         assets: Vec<Asset>,
+        pre_generate_thumbnails: bool,
     ) -> Vec<WorkBatch> {
         match category {
             ProcessingCategory::Clap => assets
@@ -126,6 +128,7 @@ impl WorkQueue {
                     category,
                     generation,
                     assets: chunk.to_vec(),
+                    pre_generate_thumbnails,
                 })
                 .collect(),
             ProcessingCategory::Image | ProcessingCategory::Audio => {
@@ -144,6 +147,7 @@ impl WorkQueue {
                         category,
                         generation,
                         assets: std::mem::take(current_assets),
+                        pre_generate_thumbnails,
                     });
                     *current_key = None;
                 };
@@ -169,6 +173,7 @@ impl WorkQueue {
                                 category,
                                 generation,
                                 assets: vec![asset],
+                                pre_generate_thumbnails,
                             });
                         }
                     }
@@ -187,6 +192,7 @@ impl WorkQueue {
         assets: Vec<Asset>,
         db: SqlitePool,
         app_handle: AppHandle,
+        pre_generate_thumbnails: bool,
     ) -> Result<(), String> {
         // Get or create category state
         let state = self.ensure_category_state(category).await;
@@ -209,7 +215,7 @@ impl WorkQueue {
         state.failed_assets.store(0, Ordering::SeqCst);
 
         // Queue work batches with locality-aware grouping for nested ZIP assets
-        let batches = Self::build_work_batches(category, generation, assets);
+        let batches = Self::build_work_batches(category, generation, assets, pre_generate_thumbnails);
         println!(
             "[WorkQueue] Queueing {} batches for category '{}' ({} assets)",
             batches.len(),
@@ -260,6 +266,7 @@ impl WorkQueue {
                         let category = work_batch.category;
                         let generation = work_batch.generation;
                         let batch_assets = work_batch.assets;
+                        let pre_generate_thumbnails = work_batch.pre_generate_thumbnails;
                         // Get category state
                         let state = {
                             let states = category_states.read().await;
@@ -346,7 +353,7 @@ impl WorkQueue {
                                     *current = Some(asset.filename.clone());
                                 }
 
-                                let result = process_asset(&asset, &db).await;
+                                let result = process_asset(&asset, &db, pre_generate_thumbnails).await;
 
                                 {
                                     let mut current = state.current_file.write().await;

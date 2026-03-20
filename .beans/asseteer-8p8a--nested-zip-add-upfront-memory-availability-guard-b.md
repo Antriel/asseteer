@@ -1,11 +1,11 @@
 ---
 # asseteer-8p8a
 title: 'Nested ZIP: add upfront memory availability guard before processing large inner ZIPs'
-status: todo
+status: scrapped
 type: task
 priority: normal
 created_at: 2026-03-19T16:21:56Z
-updated_at: 2026-03-19T16:22:10Z
+updated_at: 2026-03-20T10:54:01Z
 parent: asseteer-kvnt
 ---
 

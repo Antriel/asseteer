@@ -1,11 +1,11 @@
 ---
 # asseteer-qin7
 title: Manual fallback setup scripts (setup.bat/setup.sh)
-status: todo
+status: scrapped
 type: task
 priority: low
 created_at: 2026-03-17T10:05:55Z
-updated_at: 2026-03-17T10:05:55Z
+updated_at: 2026-03-20T10:53:38Z
 parent: asseteer-5kja
 ---
 

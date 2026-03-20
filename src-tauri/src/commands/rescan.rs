@@ -333,12 +333,13 @@ pub async fn apply_rescan(
     for (asset_id, disc) in &preview.modified {
         // Update the asset row (including searchable_path to refresh FTS triggers)
         sqlx::query(
-            "UPDATE assets SET file_size = ?1, fs_modified_at = ?2, modified_at = ?3, searchable_path = ?4 WHERE id = ?5",
+            "UPDATE assets SET file_size = ?1, fs_modified_at = ?2, modified_at = ?3, searchable_path = ?4, zip_compression = ?5 WHERE id = ?6",
         )
         .bind(disc.file_size)
         .bind(disc.fs_modified_at)
         .bind(now)
         .bind(&disc.searchable_path)
+        .bind(&disc.zip_compression)
         .bind(asset_id)
         .execute(&mut *tx)
         .await
@@ -387,16 +388,17 @@ pub async fn apply_rescan(
     for asset in &preview.added {
         sqlx::query(
             "INSERT OR IGNORE INTO assets (
-                filename, folder_id, rel_path, zip_file, zip_entry,
+                filename, folder_id, rel_path, zip_file, zip_entry, zip_compression,
                 searchable_path, asset_type, format, file_size, fs_modified_at,
                 created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
         .bind(&asset.filename)
         .bind(asset.folder_id)
         .bind(&asset.rel_path)
         .bind(&asset.zip_file)
         .bind(&asset.zip_entry)
+        .bind(&asset.zip_compression)
         .bind(&asset.searchable_path)
         .bind(asset.asset_type.as_str())
         .bind(&asset.format)

@@ -1,11 +1,11 @@
 ---
 # asseteer-hj8x
 title: 'Full image view improvements: mousewheel zoom, checkerboard transparency, pixel-art mode'
-status: in-progress
+status: completed
 type: feature
 priority: normal
 created_at: 2026-03-20T08:26:33Z
-updated_at: 2026-03-20T09:46:45Z
+updated_at: 2026-03-20T10:38:37Z
 parent: asseteer-kvnt
 ---
 

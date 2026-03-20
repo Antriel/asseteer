@@ -9,6 +9,7 @@ pub struct Asset {
     pub rel_path: String,
     pub zip_file: Option<String>,
     pub zip_entry: Option<String>,
+    pub zip_compression: Option<String>,
     pub asset_type: String,
     pub format: String,
     pub file_size: i64,
