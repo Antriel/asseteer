@@ -1,11 +1,11 @@
 ---
 # asseteer-5m6z
 title: Increase CLAP concurrency for I/O pipelining
-status: todo
+status: scrapped
 type: task
 priority: high
 created_at: 2026-03-16T09:38:40Z
-updated_at: 2026-03-18T11:17:20Z
+updated_at: 2026-03-20T09:57:32Z
 parent: asseteer-526f
 blocked_by:
     - asseteer-8yo6
@@ -33,3 +33,6 @@ Increase CLAP concurrency and spawn multiple server processes for parallel infer
 - **Only spawn 2nd server during processing** — search only converts a single text string to an embedding vector, no benefit from a second server
 - **Check free memory before spawning 2nd server** — each server process uses ~2GB RAM (or VRAM if GPU mode). Only start the second if there's enough headroom
 - Keep single-server as the default; 2nd server is an optimization for batch processing only
+
+## Reasons for Scrapping
+Not worth the extra complexity. The quick wins (batching, ZIP caching) already delivered significant speedups. Multi-server coordination adds state management burden disproportionate to the gain.

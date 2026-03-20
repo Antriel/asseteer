@@ -1,11 +1,11 @@
 ---
 # asseteer-8yo6
 title: Benchmark CLAP processing pipeline
-status: in-progress
+status: scrapped
 type: task
 priority: high
 created_at: 2026-03-16T09:38:19Z
-updated_at: 2026-03-18T11:32:14Z
+updated_at: 2026-03-20T09:57:32Z
 parent: asseteer-526f
 ---
 
@@ -113,3 +113,6 @@ Added a /noop endpoint and measured pure HTTP round-trip (200 requests):
 | Keep-alive | 0.26ms | 0.23ms |
 
 **Conclusion:** The 22ms "HTTP overhead" from earlier benchmarks is actually server contention (waiting for the previous inference to finish), not transport cost. HTTP on localhost is essentially free (<1ms). No need for WebSocket, Unix sockets, or any transport-layer optimization.
+
+## Reasons for Scrapping
+Parent epic scrapped — not worth extra complexity.

@@ -1,11 +1,11 @@
 ---
 # asseteer-0l36
 title: Investigate ONNX Runtime for CLAP inference speedup
-status: todo
+status: scrapped
 type: task
 priority: deferred
 created_at: 2026-03-18T11:17:34Z
-updated_at: 2026-03-18T12:31:37Z
+updated_at: 2026-03-20T09:57:32Z
 parent: asseteer-526f
 ---
 
@@ -35,3 +35,6 @@ CLAP model inference is 34ms/file (66% of in-process time). ONNX Runtime could p
 - **MS-CLAP** — Viable alternative to LAION-CLAP; MIT/permissive license, competitive retrieval performance. Worth benchmarking.
 
 **If M2D-CLAP performance is needed commercially**: contact NTT authors about licensing, or wait for a permissive-license SOTA model (field moves fast, likely by mid-2026).
+
+## Reasons for Scrapping
+Parent epic scrapped — not worth extra complexity.
