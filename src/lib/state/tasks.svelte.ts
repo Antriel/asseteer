@@ -270,7 +270,7 @@ class ProcessingState {
         clap: clapCount,
         total: assetCounts.images + assetCounts.audio + clapCount,
       };
-      console.log('[Processing] Pending count updated:', this.pendingCount);
+      console.log('[Processing] Pending count updated:', $state.snapshot(this.pendingCount));
       return this.pendingCount;
     } catch (error) {
       console.error('[Processing] Failed to refresh pending count:', error);
