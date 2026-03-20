@@ -2,10 +2,20 @@
 
 use reqwest::{multipart, Client};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::sync::OnceCell;
 
-const CLAP_SERVER_URL: &str = "http://127.0.0.1:5555";
+/// The port the CLAP server is listening on. Updated by server.rs when a free port is found.
+static ACTIVE_PORT: AtomicU16 = AtomicU16::new(5555);
+
+pub fn set_active_port(port: u16) {
+    ACTIVE_PORT.store(port, Ordering::Relaxed);
+}
+
+pub fn get_active_port() -> u16 {
+    ACTIVE_PORT.load(Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthInfo {
@@ -13,6 +23,9 @@ pub struct HealthInfo {
     pub model: String,
     pub device: String,
     pub embedding_dim: i32,
+    /// The port the server is listening on (injected by Rust, not from server JSON)
+    #[serde(skip_deserializing, default)]
+    pub port: u16,
 }
 
 #[derive(Serialize)]
@@ -52,7 +65,6 @@ struct BatchEmbeddingResponse {
 /// Async HTTP client for communicating with the CLAP Python server
 pub struct ClapClient {
     client: Client,
-    base_url: String,
 }
 
 impl ClapClient {
@@ -62,27 +74,47 @@ impl ClapClient {
             .build()
             .expect("Failed to create HTTP client");
 
-        Self {
-            client,
-            base_url: CLAP_SERVER_URL.to_string(),
-        }
+        Self { client }
     }
 
-    /// Check if the CLAP server is running and healthy
+    fn base_url(&self) -> String {
+        format!("http://127.0.0.1:{}", get_active_port())
+    }
+
+    /// Check if the CLAP server is running and healthy.
+    ///
+    /// Validates the response is actually from our CLAP server (not some other
+    /// service that happens to be listening on the same port) by parsing the JSON
+    /// and checking the expected fields are present with the right values.
     pub async fn health_check(&self) -> Result<(), String> {
-        let url = format!("{}/health", self.base_url);
-        self.client
+        let url = format!("{}/health", self.base_url());
+        let response = self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(2))
             .send()
             .await
             .map_err(|e| format!("Health check failed: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Health check returned: {}", response.status()));
+        }
+
+        let info = response
+            .json::<HealthInfo>()
+            .await
+            .map_err(|_| "Port is in use by a different service (not CLAP server)".to_string())?;
+
+        if info.status != "ok" {
+            return Err(format!("CLAP server reported unhealthy status: {}", info.status));
+        }
+
         Ok(())
     }
 
     /// Get detailed health info including device (CPU/GPU)
     pub async fn health_check_detailed(&self) -> Result<HealthInfo, String> {
-        let url = format!("{}/health", self.base_url);
+        let url = format!("{}/health", self.base_url());
         let response = self
             .client
             .get(&url)
@@ -93,15 +125,17 @@ impl ClapClient {
         if !response.status().is_success() {
             return Err(format!("Health check returned: {}", response.status()));
         }
-        response
+        let mut info = response
             .json::<HealthInfo>()
             .await
-            .map_err(|e| format!("Failed to parse health response: {}", e))
+            .map_err(|e| format!("Failed to parse health response: {}", e))?;
+        info.port = get_active_port();
+        Ok(info)
     }
 
     /// Trigger model preloading on the server
     pub async fn preload(&self) -> Result<(), String> {
-        let url = format!("{}/preload", self.base_url);
+        let url = format!("{}/preload", self.base_url());
         let response = self
             .client
             .post(&url)
@@ -116,7 +150,7 @@ impl ClapClient {
 
     /// Generate text embedding from a query string
     pub async fn embed_text(&self, text: &str) -> Result<Vec<f32>, String> {
-        let url = format!("{}/embed/text", self.base_url);
+        let url = format!("{}/embed/text", self.base_url());
         let request = TextRequest {
             text: text.to_string(),
         };
@@ -144,7 +178,7 @@ impl ClapClient {
     /// Generate audio embedding from a file path
     #[allow(dead_code)]
     pub async fn embed_audio_path(&self, path: &str) -> Result<Vec<f32>, String> {
-        let url = format!("{}/embed/audio", self.base_url);
+        let url = format!("{}/embed/audio", self.base_url());
         let request = AudioPathRequest {
             audio_path: path.to_string(),
         };
@@ -172,7 +206,7 @@ impl ClapClient {
     /// Generate audio embedding from raw bytes (for ZIP files)
     #[allow(dead_code)]
     pub async fn embed_audio_bytes(&self, bytes: Vec<u8>, filename: &str) -> Result<Vec<f32>, String> {
-        let url = format!("{}/embed/audio/upload", self.base_url);
+        let url = format!("{}/embed/audio/upload", self.base_url());
 
         let part = multipart::Part::bytes(bytes).file_name(filename.to_string());
         let form = multipart::Form::new().part("audio", part);
@@ -199,7 +233,7 @@ impl ClapClient {
 
     /// Generate audio embeddings for multiple file paths in a single batched request
     pub async fn embed_audio_batch_paths(&self, paths: &[String]) -> Result<Vec<Result<Vec<f32>, String>>, String> {
-        let url = format!("{}/embed/audio/batch", self.base_url);
+        let url = format!("{}/embed/audio/batch", self.base_url());
         let request = BatchAudioPathRequest {
             audio_paths: paths.to_vec(),
         };
@@ -242,7 +276,7 @@ impl ClapClient {
         &self,
         items: Vec<(Vec<u8>, String)>, // (bytes, filename)
     ) -> Result<Vec<Result<Vec<f32>, String>>, String> {
-        let url = format!("{}/embed/audio/batch/upload", self.base_url);
+        let url = format!("{}/embed/audio/batch/upload", self.base_url());
 
         let mut form = multipart::Form::new();
         for (bytes, filename) in items {

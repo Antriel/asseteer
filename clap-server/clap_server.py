@@ -478,5 +478,9 @@ def _process_batch_bytes(file_data: list[tuple[str, bytes]]) -> BatchEmbeddingRe
 
 
 if __name__ == "__main__":
+    import argparse
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=5555)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=5555)
+    args = parser.parse_args()
+    uvicorn.run(app, host="127.0.0.1", port=args.port)

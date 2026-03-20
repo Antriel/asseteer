@@ -29,4 +29,4 @@ pub(crate) fn get_app_handle() -> Option<&'static AppHandle> {
 pub use client::{get_clap_client, HealthInfo};
 pub use embedding::{blob_to_embedding, embedding_to_blob};
 pub use logs::log_dir;
-pub use server::{ensure_server_running, stop_server, stop_server_and_wait};
+pub use server::{ensure_server_running, is_server_running, stop_server, stop_server_and_wait};

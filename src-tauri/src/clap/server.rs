@@ -8,7 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-use super::client::get_clap_client;
+use super::client::{get_clap_client, set_active_port};
 use super::logs;
 use super::uv;
 
@@ -35,33 +35,52 @@ fn emit_startup_progress(phase: &str, detail: Option<&str>) {
 
 static SERVER_PROCESS: Lazy<Mutex<Option<Child>>> = Lazy::new(|| Mutex::new(None));
 
+/// Try ports 5555, 5556, 5557 in sequence and return the first one that is free.
+/// Falls back to 5555 if all are in use (server startup will then fail with a clear error).
+///
+/// Uses a connection attempt rather than bind to detect in-use ports. On Windows,
+/// TcpListener::bind succeeds even when another process is already listening (SO_REUSEADDR),
+/// so we must try connecting instead — if a connection succeeds, something is listening there.
+fn find_free_port() -> u16 {
+    for port in [5555u16, 5556, 5557] {
+        let in_use = std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            std::time::Duration::from_millis(50),
+        )
+        .is_ok();
+        if !in_use {
+            return port;
+        }
+    }
+    println!("[CLAP] Warning: ports 5555-5557 all appear to be in use, trying 5555 anyway");
+    5555
+}
+
+/// Returns true if we have previously spawned a server process this session.
+pub async fn is_server_running() -> bool {
+    SERVER_PROCESS.lock().await.is_some()
+}
+
 /// Ensures CLAP server is running, starts it if needed
 pub async fn ensure_server_running() -> Result<(), String> {
-    println!("[CLAP] Checking if server is running...");
-    emit_startup_progress("checking", None);
+    // Acquire lock first — the process slot is the source of truth.
+    // We never probe arbitrary ports to avoid hitting unrelated services.
+    let mut guard = SERVER_PROCESS.lock().await;
 
-    // Check if already running (quick check without lock)
-    if get_clap_client().await.health_check().await.is_ok() {
-        println!("[CLAP] Server already running");
+    if guard.is_some() {
         emit_startup_progress("ready", None);
         return Ok(());
     }
 
     println!("[CLAP] Server not running, attempting to start...");
 
-    // Acquire lock
-    let mut guard = SERVER_PROCESS.lock().await;
-
-    // Double-check after acquiring lock
-    if get_clap_client().await.health_check().await.is_ok() {
-        println!("[CLAP] Server started by another task");
-        emit_startup_progress("ready", None);
-        return Ok(());
-    }
-
     let clap_dir = find_clap_server_dir()?;
 
-    let child = match start_server_process(&clap_dir).await {
+    let port = find_free_port();
+    println!("[CLAP] Using port {}", port);
+    set_active_port(port);
+
+    let child = match start_server_process(&clap_dir, port).await {
         Ok(child) => child,
         Err(e) => {
             emit_startup_progress("error", Some(&e));
@@ -155,7 +174,7 @@ fn find_clap_server_dir() -> Result<std::path::PathBuf, String> {
 /// Tries `uv run` first (automatic Python management). If uv download fails
 /// and a manual venv exists, falls back to using the venv directly.
 /// Server output is captured to a log file in the app data directory.
-async fn start_server_process(clap_dir: &std::path::Path) -> Result<Child, String> {
+async fn start_server_process(clap_dir: &std::path::Path, port: u16) -> Result<Child, String> {
     let (stdout, stderr, log_path) = logs::create_log_file()?;
 
     // Emit download event only if uv isn't already cached
@@ -170,13 +189,14 @@ async fn start_server_process(clap_dir: &std::path::Path) -> Result<Child, Strin
             emit_startup_progress("starting-process", Some("Starting Python server"));
 
             let gpu_index = detect_pytorch_index();
+            let port_str = port.to_string();
             let mut args = vec!["run", "--python", "3.13"];
             // Leak the string so we get a &str with the right lifetime for the args vec
             let index_str: Option<&str> = gpu_index.as_ref().map(|s| &**s);
             if let Some(index) = index_str {
                 args.extend(["--index", index]);
             }
-            args.push("clap_server.py");
+            args.extend(["clap_server.py", "--port", &port_str]);
 
             let child = Command::new(&uv_path)
                 .args(&args)
@@ -202,7 +222,7 @@ async fn start_server_process(clap_dir: &std::path::Path) -> Result<Child, Strin
                 "[CLAP] uv not available ({}), trying manual venv fallback...",
                 uv_err
             );
-            start_server_venv_fallback(clap_dir, stdout, stderr, log_path)
+            start_server_venv_fallback(clap_dir, port, stdout, stderr, log_path)
         }
     }
 }
@@ -210,6 +230,7 @@ async fn start_server_process(clap_dir: &std::path::Path) -> Result<Child, Strin
 /// Fallback: start server using a manually-created venv.
 fn start_server_venv_fallback(
     clap_dir: &std::path::Path,
+    port: u16,
     stdout: Stdio,
     stderr: Stdio,
     log_path: PathBuf,
@@ -229,6 +250,7 @@ fn start_server_venv_fallback(
     }
 
     println!("[CLAP] Using manual venv fallback: {:?}", python_path);
+    let port_str = port.to_string();
 
     Command::new(&python_path)
         .args([
@@ -238,7 +260,7 @@ fn start_server_venv_fallback(
             "--host",
             "127.0.0.1",
             "--port",
-            "5555",
+            &port_str,
         ])
         .current_dir(clap_dir)
         .stdout(stdout)

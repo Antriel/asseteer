@@ -144,7 +144,7 @@
       {:else if clapState.setupStatus === 'ready' && clapState.serverAvailable}
         <div class="w-2 h-2 rounded-full bg-success"></div>
         <span class="text-secondary"
-          >CLAP: Ready ({clapState.device === 'cuda' ? 'GPU' : 'CPU'})</span
+          >CLAP: Ready ({clapState.device === 'cuda' ? 'GPU' : 'CPU'}{clapState.port && clapState.port !== 5555 ? ` · port ${clapState.port}` : ''})</span
         >
       {:else if clapState.setupStatus === 'offline'}
         <div class="w-2 h-2 rounded-full bg-tertiary"></div>

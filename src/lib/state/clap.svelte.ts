@@ -47,6 +47,7 @@ class ClapState {
   // Server info (from detailed health check)
   device = $state<string | null>(null);
   model = $state<string | null>(null);
+  port = $state<number | null>(null);
 
   // Setup
   setupStatus = $state<ClapSetupStatus>('not-configured');
@@ -326,10 +327,12 @@ class ClapState {
       const info: ClapServerInfo = await getClapServerInfo();
       this.device = info.device;
       this.model = info.model;
+      this.port = info.port || null;
       this.setupStatus = 'ready';
     } catch {
       this.device = null;
       this.model = null;
+      this.port = null;
     }
   }
 
@@ -354,6 +357,7 @@ class ClapState {
     this.serverAvailable = false;
     this.device = null;
     this.model = null;
+    this.port = null;
   }
 
   /**

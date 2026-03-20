@@ -239,9 +239,16 @@ pub async fn get_pending_clap_count(state: State<'_, AppState>) -> Result<i64, S
     Ok(row.0)
 }
 
-/// Check if CLAP server is available
+/// Check if the CLAP server is available.
+///
+/// Only health-checks the server if we actually launched it this session —
+/// we never probe arbitrary ports to avoid hitting unrelated services.
 #[tauri::command]
 pub async fn check_clap_server() -> Result<bool, String> {
+    use crate::clap::is_server_running;
+    if !is_server_running().await {
+        return Ok(false);
+    }
     match get_clap_client().await.health_check().await {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),

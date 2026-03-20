@@ -698,6 +698,7 @@ export interface ClapServerInfo {
   model: string;
   device: string;
   embedding_dim: number;
+  port: number;
 }
 
 /**
