@@ -1,16 +1,16 @@
 <script lang="ts">
-  import type { Asset, FolderLocation } from '$lib/types';
-  import { getAssetDisplayPath, getAssetDirectoryPath, getAssetZipPath } from '$lib/types';
+  import type { Asset } from '$lib/types';
+  import { getAssetDisplayPath, getAssetDirectoryPath } from '$lib/types';
   import AudioPlayer from './AudioPlayer.svelte';
   import VirtualList from './shared/VirtualList.svelte';
+  import AssetContextMenu from './shared/AssetContextMenu.svelte';
   import { AudioIcon, FolderIcon, SearchIcon } from './icons';
   import Badge from './shared/Badge.svelte';
-  import { openPath } from '@tauri-apps/plugin-opener';
   import { viewState } from '$lib/state/view.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
-  import { exploreState } from '$lib/state/explore.svelte';
   import { clapState } from '$lib/state/clap.svelte';
   import { showToast } from '$lib/state/ui.svelte';
+  import { showInFolder, openDirectory } from '$lib/actions/assetActions';
 
   // Extended asset type with optional similarity score
   type AudioAsset = Asset & { similarity?: number };
@@ -78,43 +78,6 @@
     containerRef?.focus();
   }
 
-  async function showInFolder(asset: Asset) {
-    viewState.openFolderSidebar();
-    await exploreState.loadRoots();
-    await exploreState.navigateToAsset(asset);
-    const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
-    let location: FolderLocation;
-    if (asset.zip_file) {
-      const zipParts = (asset.zip_entry ?? '').split('/').filter(Boolean);
-      const zipDirParts = zipParts.slice(0, -1);
-      const zipPrefix = zipDirParts.length > 0 ? zipDirParts.join('/') + '/' : '';
-      location = { type: 'zip', folderId: asset.folder_id, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix };
-    } else {
-      location = { type: 'folder', folderId: asset.folder_id, relPath: asset.rel_path };
-    }
-    assetsState.setFolderFilter(location, assetType);
-  }
-
-  async function openDirectory(asset: Asset) {
-    try {
-      let dirPath: string;
-
-      if (asset.zip_file) {
-        // For zip entries, open the directory containing the ZIP file
-        dirPath = asset.rel_path
-          ? asset.folder_path + '\\' + asset.rel_path.replace(/\//g, '\\')
-          : asset.folder_path;
-      } else {
-        // For regular files, get the directory containing the file
-        dirPath = getAssetDirectoryPath(asset).replace(/\//g, '\\');
-      }
-
-      await openPath(dirPath);
-    } catch (error) {
-      console.error('Failed to open directory:', error);
-    }
-  }
-
   function getSelectedIndex(): number {
     if (!selectedAsset) return -1;
     return assets.findIndex((a) => a.id === selectedAsset!.id);
@@ -145,12 +108,8 @@
     contextMenu = { x: e.clientX, y: e.clientY, asset };
   }
 
-  function closeContextMenu() {
-    contextMenu = null;
-  }
-
   async function findSimilar(asset: AudioAsset) {
-    closeContextMenu();
+    contextMenu = null;
     try {
       await clapState.searchBySimilarity(asset.id, asset.filename, undefined, assetsState.durationFilter, assetsState.folderLocation);
     } catch (error) {
@@ -267,7 +226,7 @@
         </button>
         <button
           class="w-8 h-8 flex items-center justify-center text-secondary hover:text-accent border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
-          onclick={() => showInFolder(selectedAsset!)}
+          onclick={() => showInFolder(selectedAsset!, viewState.activeTab === 'images' ? 'image' : 'audio')}
           title="Show in folder"
         >
           <FolderIcon size="sm" />
@@ -392,16 +351,15 @@
 
 <!-- Context menu -->
 {#if contextMenu}
-  <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-  <div
-    class="fixed inset-0 z-50"
-    onclick={closeContextMenu}
-    oncontextmenu={(e) => { e.preventDefault(); closeContextMenu(); }}
+  <AssetContextMenu
+    x={contextMenu.x}
+    y={contextMenu.y}
+    asset={contextMenu.asset}
+    onclose={() => contextMenu = null}
+    onShowInFolder={(a) => showInFolder(a, viewState.activeTab === 'images' ? 'image' : 'audio')}
+    onOpenDirectory={openDirectory}
   >
-    <div
-      class="absolute bg-elevated border border-default rounded-lg shadow-lg py-1 min-w-[180px]"
-      style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
-    >
+    {#snippet extraItems()}
       <button
         class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
         onclick={() => findSimilar(contextMenu!.asset)}
@@ -411,22 +369,6 @@
         </svg>
         Find Similar Sounds
       </button>
-      <button
-        class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
-        onclick={() => { const a = contextMenu!.asset; closeContextMenu(); showInFolder(a); }}
-      >
-        <FolderIcon size="sm" class="text-secondary" />
-        Show in Folder
-      </button>
-      <button
-        class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
-        onclick={() => { const a = contextMenu!.asset; closeContextMenu(); openDirectory(a); }}
-      >
-        <svg class="w-4 h-4 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-        </svg>
-        Open in File Explorer
-      </button>
-    </div>
-  </div>
+    {/snippet}
+  </AssetContextMenu>
 {/if}

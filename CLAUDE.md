@@ -106,6 +106,8 @@ See `src/lib/database/CLAUDE.md` for query patterns.
 - **Tauri plugins**: Use built-in plugins (`@tauri-apps/plugin-dialog`, etc.) over custom commands
 - **Tauri events**: Use `listen()` from `@tauri-apps/api/event` for backend→frontend communication. Store `UnlistenFn` and clean up on destroy.
 - **CLAP functions**: Semantic search uses `invoke()` commands, not direct SQL — see bottom of `queries.ts`
+- **Asset actions**: `showInFolder(asset, assetType)` and `openDirectory(asset)` live in `$lib/actions/assetActions.ts` — use these instead of duplicating the logic
+- **Asset context menu**: `AssetContextMenu.svelte` (in `shared/`) renders the backdrop + menu panel. Pass `onShowInFolder`, `onOpenDirectory`, and optionally an `extraItems` snippet for additional menu items at the top (e.g., AudioList's "Find Similar Sounds")
 
 ## State Modules
 
