@@ -151,13 +151,6 @@
               {isProcessing ? 'Active' : pendingTotal}
             </span>
           {/if}
-        {:else if item.icon === 'processing' && (pendingTotal > 0 || isProcessing)}
-          <!-- Small dot indicator when collapsed -->
-          <span
-            class="absolute top-1 right-1 w-2 h-2 rounded-full {isProcessing
-              ? 'bg-accent'
-              : 'bg-tertiary'}"
-          ></span>
         {/if}
       </a>
     {/each}
