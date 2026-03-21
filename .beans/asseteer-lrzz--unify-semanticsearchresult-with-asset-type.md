@@ -1,11 +1,11 @@
 ---
 # asseteer-lrzz
 title: Unify SemanticSearchResult with Asset type
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-03-20T11:43:41Z
-updated_at: 2026-03-20T11:43:41Z
+updated_at: 2026-03-21T08:01:12Z
 parent: asseteer-38rb
 ---
 
@@ -15,3 +15,8 @@ This causes awkward mapping in the library page (`src/routes/(app)/library/+page
 
 **Suggested approach:**
 Make SemanticSearchResult extend Asset (or use `Asset & { similarity: number }`). The Rust backend already returns null for width/height on audio assets, so the types should align naturally.
+
+## Summary of Changes
+
+- Changed `SemanticSearchResult` from a redundant interface to `Asset & { similarity: number }` in `queries.ts`
+- Removed the awkward `.map((result) => ({ ...result, width: null, height: null }))` in `library/+page.svelte` — the type is now directly compatible with `Asset[]`

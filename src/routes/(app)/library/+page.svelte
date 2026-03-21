@@ -78,7 +78,6 @@
     viewState.activeTab === 'audio' && clapState.semanticSearchEnabled,
   );
 
-  // Semantic search results with Asset compatibility (add width/height as null)
   // Apply client-side filename filter when in similarity mode
   let semanticAssets = $derived.by(() => {
     let results = clapState.semanticResults;
@@ -86,11 +85,7 @@
     if (filter) {
       results = results.filter((r) => r.filename.toLowerCase().includes(filter));
     }
-    return results.map((result) => ({
-      ...result,
-      width: null,
-      height: null,
-    }));
+    return results;
   });
 
   // Unified "active assets" - what should be displayed based on current mode

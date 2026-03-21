@@ -589,29 +589,10 @@ export async function getDistinctZipFiles(
 // ============================================================================
 
 /**
- * Result of a semantic search query - includes full asset data for direct use
+ * Result of a semantic search query - full Asset data plus similarity score.
+ * The Rust backend always returns null for width/height (audio-only).
  */
-export interface SemanticSearchResult {
-  // Asset fields
-  id: number;
-  filename: string;
-  folder_id: number;
-  rel_path: string;
-  zip_file: string | null;
-  zip_entry: string | null;
-  folder_path: string;
-  asset_type: string;
-  format: string;
-  file_size: number;
-  created_at: number;
-  modified_at: number;
-  // Audio metadata (nullable)
-  duration_ms: number | null;
-  sample_rate: number | null;
-  channels: number | null;
-  // Similarity score
-  similarity: number;
-}
+export type SemanticSearchResult = Asset & { similarity: number };
 
 /**
  * Convert a FolderLocation to the flat object the Rust FolderFilter expects.
