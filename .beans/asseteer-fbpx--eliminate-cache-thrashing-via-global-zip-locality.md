@@ -1,0 +1,163 @@
+---
+# asseteer-fbpx
+title: Eliminate cache thrashing via global ZIP-locality batch grouping
+status: todo
+type: task
+priority: high
+created_at: 2026-03-21T09:37:10Z
+updated_at: 2026-03-21T10:35:39Z
+parent: asseteer-k1go
+---
+
+## Problem
+
+The current batch building in `work_queue.rs:build_work_batches()` groups consecutive assets by nested ZIP key, but only processes consecutive runs. Assets from the same nested ZIP that appear non-consecutively in the input list get split into separate batches. With 23 workers pulling from a shared channel, batches from different nested ZIPs interleave, causing the single-slot ZipCache to thrash.
+
+### Evidence from logs
+
+The same nested ZIP gets activated repeatedly throughout processing:
+- `Doomed - Heavy Metal Music Collection.zip` activated **7 times** (lines 148, 162, 212, 239, 270, 280, 328)
+- `Adventure Game Music Collection.zip` — **6 times**
+- `Epic Boss Battles Music Collection 2.zip` — **6 times**
+
+Each activation means waiting for the current key to drain, evicting cached data, then re-decompressing the nested ZIP.
+
+ZipGate wait times escalate through the session as convoy builds:
+- Early: 6-15s
+- Mid: 40-80s
+- Late: 98s, 104s, 115s, 122s, 134s
+
+### Two sub-problems
+
+1. **Batch size cap of 8** (`NESTED_ZIP_BATCH_SIZE = 8`): A nested ZIP with 10+ files gets split into multiple batches. Between those batches, other ZIPs steal the cache slot.
+
+2. **Only consecutive grouping**: If the asset list has `[zip_a_file1, zip_b_file1, zip_a_file2]`, zip_a gets two separate batches instead of one.
+
+## Suggested fix
+
+### For Audio/Image processing (already has partial locality awareness)
+
+1. **Sort all assets by nested ZIP key before batching** — group globally, not just consecutive runs
+2. **Remove or significantly increase NESTED_ZIP_BATCH_SIZE** — process ALL items from a nested ZIP as a single batch. The ZipGate already ensures only one key is active at a time, so a batch of 40 items from the same ZIP is fine. The batch size cap was meant to limit memory, but the actual bytes are loaded one at a time within the batch.
+
+### For CLAP processing (NO locality awareness currently)
+
+CLAP uses simple `assets.chunks(CLAP_BATCH_SIZE)` with no ZIP grouping at all (line 138-146). Within each CLAP batch, `process_clap_embedding_batch()` calls `zip_cache::load_asset_bytes_cached()` for each zip asset (processor.rs:337). If a batch of 8 contains assets from 3 different nested ZIPs, the cache thrashes 3 times within that single batch.
+
+CLAP batches should also be grouped by nested ZIP key. Since CLAP concurrency is 1 (single worker), this is straightforward — just sort/group assets before chunking.
+
+## Implementation plan
+
+- [ ] In `build_work_batches()`, sort assets by `nested_zip_group_key()` before iterating
+- [ ] Remove or greatly increase `NESTED_ZIP_BATCH_SIZE` (consider making it unlimited for same-key batches)
+- [ ] Add ZIP locality grouping for CLAP batch building (sort before `chunks(CLAP_BATCH_SIZE)`)
+- [ ] Consider: within a CLAP batch, load bytes grouped by nested ZIP (load all from same zip before moving to next)
+
+## Files to modify
+
+- `src-tauri/src/task_system/work_queue.rs` — `build_work_batches()` (lines 131-199), constants at top
+- `src-tauri/src/task_system/processor.rs` — `process_clap_embedding_batch()` (lines 313-420), byte loading loop
+
+## Current code reference
+
+```rust
+// work_queue.rs lines 17-18
+const CLAP_BATCH_SIZE: usize = 8;
+const NESTED_ZIP_BATCH_SIZE: usize = 8;
+
+// CLAP batching — no locality awareness
+ProcessingCategory::Clap => assets
+    .chunks(CLAP_BATCH_SIZE)
+    .map(|chunk| WorkBatch { ... })
+    .collect(),
+
+// Image/Audio batching — only consecutive grouping, capped at 8
+for asset in assets {
+    let asset_key = zip_cache::nested_zip_group_key(&asset);
+    match asset_key {
+        Some(key) if current_key == Some(&key) && current_assets.len() < NESTED_ZIP_BATCH_SIZE => {
+            current_assets.push(asset); // same key, add to batch
+        }
+        Some(key) => {
+            flush_current(...); // different key or batch full, start new batch
+            current_key = Some(key);
+            current_assets.push(asset);
+        }
+        None => { /* non-nested: singleton batch */ }
+    }
+}
+```
+
+
+## Revised design: Staged dispatch (supersedes "Suggested fix" above)
+
+### Why simple sorting isn't enough
+
+Even with globally sorted batches in a FIFO channel, thread scheduling is non-deterministic. Worker 5 (holding key B) could enter the ZipGate before Worker 1 (holding key A), activating key B with only 1 worker while Workers 1-4 (all holding key A batches) block. This degrades to serial processing with wasted parallelism.
+
+### Staged dispatch approach
+
+Instead of pushing all batches into the channel upfront, use a **dispatcher** that controls what's available to workers:
+
+```
+Batch groups (pre-sorted):
+  ZIP groups:     [A1,A2,A3,A4], [B1,B2,B3], [C1,C2], [D1,D2,D3,D4,D5]
+  Non-ZIP pool:   [n1, n2, n3, n4, n5, n6, n7, ...]
+
+Dispatcher loop:
+  1. Push all batches for key A into channel → workers grab & process in parallel
+  2. While waiting for A to complete, also push non-ZIP batches to fill idle workers
+  3. All A batches done → push key B batches
+  4. Continue filling with non-ZIP batches between key groups
+  5. Repeat until all work done
+```
+
+This guarantees:
+- All workers processing ZIP batches have the SAME key (no gate races)
+- Full parallelism within each key (multiple workers read from shared Arc<Vec<u8>>)
+- Non-ZIP batches keep remaining workers saturated during key transitions
+- No changes needed to ZipGate or ZipCache
+
+### For CLAP processing
+
+CLAP has concurrency=1 (single worker), so dispatch ordering is simpler. Just sort assets by nested ZIP key before chunking into CLAP_BATCH_SIZE batches. Within each batch, `process_clap_embedding_batch()` loads bytes sequentially, so same-key grouping avoids cache thrashing within a batch.
+
+### Interaction with multi-slot cache (asseteer-5nvp)
+
+This staged dispatch is designed to be **upgraded** by the multi-slot cache:
+- With single-slot cache: dispatch one key group at a time (this bean)
+- With multi-slot cache: dispatcher queries cache budget, can dispatch multiple key groups simultaneously if memory allows
+
+The dispatcher interface should be designed with this upgrade path in mind, even if the initial implementation only supports one active key group.
+
+## Revised implementation plan
+
+- [ ] Group all batches by nested ZIP key globally (sort, not just consecutive)
+- [ ] Separate non-ZIP batches into a fill pool
+- [ ] Implement dispatcher that sends one key group at a time + non-ZIP fill batches
+- [ ] Track completion of key groups (counter per group, decrement on batch done)
+- [ ] When key group completes, dispatch next key group
+- [ ] Apply same sorting to CLAP batch building
+- [ ] Remove NESTED_ZIP_BATCH_SIZE cap (keep batches at reasonable size for parallelism, e.g. 8, but all from same key)
+
+
+## Non-ZIP batch metering
+
+The dispatcher must NOT push all non-ZIP batches at once — doing so would effectively serialize ZIP processing behind all non-ZIP work (workers would be saturated with non-ZIP work, and in single-slot mode there'd be nothing to interleave with the active ZIP key).
+
+Instead, non-ZIP batches are used as **fill** to occupy idle workers:
+
+```
+23 workers total
+
+1. Push A batches (4) → 4 workers busy with ZIP A, 19 idle
+2. Push ~19 non-ZIP batches → 19 workers busy with non-ZIP, 0 idle
+3. Workers finish and re-request work:
+   - Non-ZIP worker finishes → dispatcher gives another non-ZIP batch (if available)
+   - A-batch worker finishes → if more A batches exist, give those, otherwise non-ZIP
+4. All A batches done → push B batches (3) + refill non-ZIP for remaining idle workers
+```
+
+The goal: at any point, idle workers get non-ZIP fill, while ZIP key groups proceed at full parallelism. ZIP and non-ZIP work progress concurrently throughout.
+
+Implementation option: use two channels — one for ZIP batches (dispatched in key groups), one for non-ZIP (always available). Workers try the ZIP channel first, fall back to non-ZIP. Or: single channel but dispatcher monitors channel depth and tops up non-ZIP batches as workers drain them.
