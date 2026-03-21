@@ -3,19 +3,56 @@ use crate::models::{Asset, ProcessingCategory};
 use crate::task_system::processor::{process_asset, process_clap_embedding_batch};
 use crate::utils::unix_now;
 use crate::zip_cache;
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{Notify, RwLock, Semaphore};
 use tokio::time::{interval, Duration};
 
 const BATCH_UPDATE_INTERVAL_SEC: u64 = 2;
 const CLAP_BATCH_SIZE: usize = 8;
 const NESTED_ZIP_BATCH_SIZE: usize = 8;
+
+/// Tracks completion of a group of ZIP batches for staged dispatch.
+/// The dispatcher waits on `done` until all batches in the group finish processing.
+struct BatchGroupCompletion {
+    remaining: AtomicUsize,
+    done: Notify,
+}
+
+impl BatchGroupCompletion {
+    fn new(count: usize) -> Self {
+        Self {
+            remaining: AtomicUsize::new(count),
+            done: Notify::new(),
+        }
+    }
+
+    fn batch_done(&self) {
+        if self.remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.done.notify_one();
+        }
+    }
+}
+
+/// A group of batches sharing the same nested ZIP key.
+struct ZipBatchGroup {
+    #[cfg_attr(not(test), allow(dead_code))]
+    key: String,
+    batches: Vec<WorkBatch>,
+}
+
+/// Dispatch plan separating ZIP-grouped and non-ZIP batches.
+struct BatchPlan {
+    /// ZIP batches grouped by key, sorted by group size descending
+    zip_groups: Vec<ZipBatchGroup>,
+    /// Non-ZIP batches (individual assets) + CLAP batches
+    non_zip: Vec<WorkBatch>,
+}
 
 
 async fn record_processing_error(
@@ -86,31 +123,42 @@ impl CategoryState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct WorkBatch {
     category: ProcessingCategory,
     generation: u64,
     assets: Vec<Asset>,
     pre_generate_thumbnails: bool,
+    /// Completion tracker for staged ZIP dispatch (None for non-ZIP / CLAP batches)
+    group_completion: Option<Arc<BatchGroupCompletion>>,
 }
 
 /// Work queue manages asset processing with a worker pool
 pub struct WorkQueue {
-    work_tx: Sender<WorkBatch>,
-    work_rx: Receiver<WorkBatch>,
+    /// High-priority channel for ZIP batches (staged dispatch, one key group at a time)
+    zip_tx: Sender<WorkBatch>,
+    zip_rx: Receiver<WorkBatch>,
+    /// Low-priority channel for non-ZIP and CLAP batches
+    nonzip_tx: Sender<WorkBatch>,
+    nonzip_rx: Receiver<WorkBatch>,
     category_states: Arc<RwLock<HashMap<ProcessingCategory, CategoryState>>>,
     worker_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
+    dispatcher_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl WorkQueue {
     pub fn new() -> Self {
-        let (work_tx, work_rx) = unbounded();
+        let (zip_tx, zip_rx) = unbounded();
+        let (nonzip_tx, nonzip_rx) = unbounded();
 
         Self {
-            work_tx,
-            work_rx,
+            zip_tx,
+            zip_rx,
+            nonzip_tx,
+            nonzip_rx,
             category_states: Arc::new(RwLock::new(HashMap::new())),
             worker_handles: Arc::new(RwLock::new(Vec::new())),
+            dispatcher_handle: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -128,72 +176,123 @@ impl WorkQueue {
         }).clone()
     }
 
-    fn build_work_batches(
+    /// Build a dispatch plan that separates ZIP-grouped and non-ZIP batches.
+    ///
+    /// For Image/Audio: groups assets globally by nested ZIP key (HashMap, not just
+    /// consecutive runs). ZIP groups are sorted by size descending so the largest
+    /// groups are dispatched first.
+    ///
+    /// For CLAP: sorts by key then chunks with key-boundary awareness. All CLAP
+    /// batches go into `non_zip` since CLAP has concurrency=1 and doesn't need
+    /// staged dispatch.
+    fn build_batch_plan(
         category: ProcessingCategory,
         generation: u64,
         assets: Vec<Asset>,
         pre_generate_thumbnails: bool,
-    ) -> Vec<WorkBatch> {
+    ) -> BatchPlan {
         match category {
-            ProcessingCategory::Clap => assets
-                .chunks(CLAP_BATCH_SIZE)
-                .map(|chunk| WorkBatch {
-                    category,
-                    generation,
-                    assets: chunk.to_vec(),
-                    pre_generate_thumbnails,
-                })
-                .collect(),
-            ProcessingCategory::Image | ProcessingCategory::Audio => {
-                let mut batches = Vec::new();
-                let mut current_key: Option<String> = None;
-                let mut current_assets = Vec::new();
+            ProcessingCategory::Clap => {
+                // Sort assets so same-key assets are consecutive
+                let mut sorted = assets;
+                sorted.sort_by(|a, b| {
+                    let ka = zip_cache::nested_zip_group_key(a);
+                    let kb = zip_cache::nested_zip_group_key(b);
+                    ka.cmp(&kb)
+                });
 
-                let flush_current = |batches: &mut Vec<WorkBatch>,
-                                     current_key: &mut Option<String>,
-                                     current_assets: &mut Vec<Asset>| {
-                    if current_assets.is_empty() {
-                        return;
+                // Build batches that respect key boundaries
+                let mut batches = Vec::new();
+                let mut current_batch = Vec::new();
+                let mut current_key: Option<String> = None;
+
+                for asset in sorted {
+                    let key = zip_cache::nested_zip_group_key(&asset);
+
+                    // Flush on key change or batch full
+                    if !current_batch.is_empty()
+                        && (key != current_key || current_batch.len() >= CLAP_BATCH_SIZE)
+                    {
+                        batches.push(WorkBatch {
+                            category,
+                            generation,
+                            assets: std::mem::take(&mut current_batch),
+                            pre_generate_thumbnails: false,
+                            group_completion: None,
+                        });
                     }
 
+                    current_key = key;
+                    current_batch.push(asset);
+                }
+                if !current_batch.is_empty() {
                     batches.push(WorkBatch {
                         category,
                         generation,
-                        assets: std::mem::take(current_assets),
-                        pre_generate_thumbnails,
+                        assets: current_batch,
+                        pre_generate_thumbnails: false,
+                        group_completion: None,
                     });
-                    *current_key = None;
-                };
+                }
+
+                BatchPlan {
+                    zip_groups: vec![],
+                    non_zip: batches,
+                }
+            }
+            ProcessingCategory::Image | ProcessingCategory::Audio => {
+                // Group assets globally by nested ZIP key
+                let mut zip_map: HashMap<String, Vec<Asset>> = HashMap::new();
+                let mut non_zip_assets: Vec<Asset> = Vec::new();
 
                 for asset in assets {
-                    let asset_key = zip_cache::nested_zip_group_key(&asset);
-
-                    match asset_key {
-                        Some(key)
-                            if current_key.as_ref() == Some(&key)
-                                && current_assets.len() < NESTED_ZIP_BATCH_SIZE =>
-                        {
-                            current_assets.push(asset);
-                        }
-                        Some(key) => {
-                            flush_current(&mut batches, &mut current_key, &mut current_assets);
-                            current_key = Some(key);
-                            current_assets.push(asset);
-                        }
-                        None => {
-                            flush_current(&mut batches, &mut current_key, &mut current_assets);
-                            batches.push(WorkBatch {
-                                category,
-                                generation,
-                                assets: vec![asset],
-                                pre_generate_thumbnails,
-                            });
-                        }
+                    match zip_cache::nested_zip_group_key(&asset) {
+                        Some(key) => zip_map.entry(key).or_default().push(asset),
+                        None => non_zip_assets.push(asset),
                     }
                 }
 
-                flush_current(&mut batches, &mut current_key, &mut current_assets);
-                batches
+                // Create ZIP batch groups
+                let mut zip_groups: Vec<ZipBatchGroup> = zip_map
+                    .into_iter()
+                    .map(|(key, group_assets)| {
+                        let batches = group_assets
+                            .chunks(NESTED_ZIP_BATCH_SIZE)
+                            .map(|chunk| WorkBatch {
+                                category,
+                                generation,
+                                assets: chunk.to_vec(),
+                                pre_generate_thumbnails,
+                                group_completion: None, // set by dispatcher
+                            })
+                            .collect();
+                        ZipBatchGroup { key, batches }
+                    })
+                    .collect();
+
+                // Sort groups by total asset count descending (process largest first)
+                zip_groups.sort_by(|a, b| {
+                    let a_total: usize = a.batches.iter().map(|b| b.assets.len()).sum();
+                    let b_total: usize = b.batches.iter().map(|b| b.assets.len()).sum();
+                    b_total.cmp(&a_total)
+                });
+
+                // Create non-ZIP batches (one per asset)
+                let non_zip = non_zip_assets
+                    .into_iter()
+                    .map(|asset| WorkBatch {
+                        category,
+                        generation,
+                        assets: vec![asset],
+                        pre_generate_thumbnails,
+                        group_completion: None,
+                    })
+                    .collect();
+
+                BatchPlan {
+                    zip_groups,
+                    non_zip,
+                }
             }
         }
     }
@@ -227,18 +326,54 @@ impl WorkQueue {
         state.completed_assets.store(0, Ordering::SeqCst);
         state.failed_assets.store(0, Ordering::SeqCst);
 
-        // Queue work batches with locality-aware grouping for nested ZIP assets
-        let batches = Self::build_work_batches(category, generation, assets, pre_generate_thumbnails);
+        // Build dispatch plan with global ZIP-locality grouping
+        let plan = Self::build_batch_plan(category, generation, assets, pre_generate_thumbnails);
+        let total_assets = state.total_assets.load(Ordering::SeqCst);
         println!(
-            "[WorkQueue] Queueing {} batches for category '{}' ({} assets)",
-            batches.len(),
+            "[WorkQueue] Queueing {} ZIP groups + {} non-ZIP batches for category '{}' ({} assets)",
+            plan.zip_groups.len(),
+            plan.non_zip.len(),
             category.as_str(),
-            state.total_assets.load(Ordering::SeqCst)
+            total_assets
         );
-        for batch in batches {
-            self.work_tx
+
+        // Push non-ZIP batches to non-ZIP channel (always available to workers)
+        for batch in plan.non_zip {
+            self.nonzip_tx
                 .send(batch)
-                .map_err(|e| format!("Failed to queue asset batch: {}", e))?;
+                .map_err(|e| format!("Failed to queue non-ZIP batch: {}", e))?;
+        }
+
+        // Spawn staged dispatcher for ZIP groups (one key group at a time)
+        if !plan.zip_groups.is_empty() {
+            let zip_tx = self.zip_tx.clone();
+            let stop_signal = state.stop_signal.clone();
+            let gen = state.generation.clone();
+
+            let dispatcher = tokio::spawn(async move {
+                for group in plan.zip_groups {
+                    if stop_signal.load(Ordering::SeqCst)
+                        || gen.load(Ordering::SeqCst) != generation
+                    {
+                        break;
+                    }
+
+                    let completion = Arc::new(BatchGroupCompletion::new(group.batches.len()));
+
+                    for mut batch in group.batches {
+                        batch.group_completion = Some(completion.clone());
+                        if zip_tx.send(batch).is_err() {
+                            return; // channel closed
+                        }
+                    }
+
+                    // Wait for all batches in this group to complete
+                    completion.done.notified().await;
+                }
+            });
+
+            let mut dh = self.dispatcher_handle.write().await;
+            *dh = Some(dispatcher);
         }
 
         // Check if we need to spawn workers (clean up completed workers first)
@@ -265,145 +400,163 @@ impl WorkQueue {
         Ok(())
     }
 
-    /// Spawn a worker task that processes assets from the queue
+    /// Spawn a worker task that processes assets from both channels.
+    /// Workers check the ZIP channel first (priority) then fall back to non-ZIP.
     async fn spawn_worker(&self, _worker_id: usize, db: SqlitePool) -> tokio::task::JoinHandle<()> {
-        let work_rx = self.work_rx.clone();
+        let zip_rx = self.zip_rx.clone();
+        let nonzip_rx = self.nonzip_rx.clone();
         let category_states = self.category_states.clone();
 
         tokio::spawn(async move {
-
             loop {
-                // Try to get work from queue (non-blocking)
-                match work_rx.try_recv() {
-                    Ok(work_batch) => {
-                        let category = work_batch.category;
-                        let generation = work_batch.generation;
-                        let batch_assets = work_batch.assets;
-                        let pre_generate_thumbnails = work_batch.pre_generate_thumbnails;
-                        // Get category state
-                        let state = {
-                            let states = category_states.read().await;
-                            match states.get(&category) {
-                                Some(s) => s.clone(),
-                                None => continue,
-                            }
-                        };
+                // Try ZIP channel first (high priority — staged dispatch)
+                let work_batch = match zip_rx.try_recv() {
+                    Ok(batch) => batch,
+                    Err(TryRecvError::Disconnected) => break,
+                    Err(TryRecvError::Empty) => {
+                        // Fall back to non-ZIP channel
+                        match nonzip_rx.try_recv() {
+                            Ok(batch) => batch,
+                            Err(TryRecvError::Disconnected) => break,
+                            Err(TryRecvError::Empty) => {
+                                tokio::time::sleep(Duration::from_millis(50)).await;
 
-                        // Skip stale items from a previous run
-                        if generation != state.generation.load(Ordering::SeqCst) {
-                            continue;
-                        }
+                                // Check if all categories are stopped
+                                let all_stopped = {
+                                    let states = category_states.read().await;
+                                    states.values().all(|s| !s.is_running.load(Ordering::SeqCst))
+                                };
 
-                        // Check stop signal for this category
-                        if state.stop_signal.load(Ordering::SeqCst) {
-                            continue;
-                        }
-
-                        // Wait while paused
-                        while state.pause_signal.load(Ordering::SeqCst) && !state.stop_signal.load(Ordering::SeqCst) {
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                        }
-
-                        // Check again if stopped after pause
-                        if state.stop_signal.load(Ordering::SeqCst) {
-                            continue;
-                        }
-
-                        // Acquire concurrency permit (limits parallel processing per category)
-                        let Ok(_permit) = state.concurrency_limiter.acquire().await else {
-                            break;
-                        };
-
-                        // For CLAP, collect a batch before processing
-                        if category == ProcessingCategory::Clap {
-                            let batch_len = batch_assets.len();
-                            {
-                                let mut current = state.current_file.write().await;
-                                *current = Some(format!("batch of {} files", batch_len));
-                            }
-
-                            let results = process_clap_embedding_batch(&batch_assets, &db).await;
-
-                            {
-                                let mut current = state.current_file.write().await;
-                                *current = None;
-                            }
-
-                            for result in results {
-                                if result.success {
-                                    state.completed_assets.fetch_add(1, Ordering::SeqCst);
-                                } else {
-                                    state.failed_assets.fetch_add(1, Ordering::SeqCst);
-                                    if let Some(error_msg) = &result.error {
-                                        record_processing_error(result.asset_id, &category, error_msg, &db).await;
-                                    }
-                                }
-                            }
-                        } else {
-                            for asset in batch_assets {
-                                while state.pause_signal.load(Ordering::SeqCst)
-                                    && !state.stop_signal.load(Ordering::SeqCst)
-                                {
+                                if all_stopped && zip_rx.is_empty() && nonzip_rx.is_empty() {
                                     tokio::time::sleep(Duration::from_millis(100)).await;
-                                }
-
-                                if state.stop_signal.load(Ordering::SeqCst) {
-                                    break;
-                                }
-
-                                {
-                                    let mut current = state.current_file.write().await;
-                                    *current = Some(asset.filename.clone());
-                                }
-
-                                let result = process_asset(&asset, &db, pre_generate_thumbnails).await;
-
-                                {
-                                    let mut current = state.current_file.write().await;
-                                    *current = None;
-                                }
-
-                                if result.success {
-                                    state.completed_assets.fetch_add(1, Ordering::SeqCst);
-                                } else {
-                                    state.failed_assets.fetch_add(1, Ordering::SeqCst);
-                                    eprintln!(
-                                        "[Worker] Failed to process asset {}: {:?}",
-                                        asset.filename, result.error
-                                    );
-
-                                    if let Some(error_msg) = &result.error {
-                                        record_processing_error(asset.id, &category, error_msg, &db).await;
+                                    if zip_rx.is_empty() && nonzip_rx.is_empty() {
+                                        break;
                                     }
                                 }
+                                continue;
                             }
                         }
-
                     }
-                    Err(crossbeam::channel::TryRecvError::Empty) => {
-                        // No work available, wait a bit
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+                };
 
-                        // Check if all categories are stopped
-                        let all_stopped = {
-                            let states = category_states.read().await;
-                            states.values().all(|s| !s.is_running.load(Ordering::SeqCst))
-                        };
+                let category = work_batch.category;
+                let generation = work_batch.generation;
+                let batch_assets = work_batch.assets;
+                let pre_generate_thumbnails = work_batch.pre_generate_thumbnails;
+                let group_completion = work_batch.group_completion;
 
-                        if all_stopped && work_rx.is_empty() {
-                            // Give a small grace period for more work to arrive
+                // Get category state
+                let state = {
+                    let states = category_states.read().await;
+                    match states.get(&category) {
+                        Some(s) => s.clone(),
+                        None => {
+                            // Signal completion even for unknown categories
+                            if let Some(c) = &group_completion { c.batch_done(); }
+                            continue;
+                        }
+                    }
+                };
+
+                // Skip stale items from a previous run
+                if generation != state.generation.load(Ordering::SeqCst) {
+                    if let Some(c) = &group_completion { c.batch_done(); }
+                    continue;
+                }
+
+                // Check stop signal for this category
+                if state.stop_signal.load(Ordering::SeqCst) {
+                    if let Some(c) = &group_completion { c.batch_done(); }
+                    continue;
+                }
+
+                // Wait while paused
+                while state.pause_signal.load(Ordering::SeqCst) && !state.stop_signal.load(Ordering::SeqCst) {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+
+                // Check again if stopped after pause
+                if state.stop_signal.load(Ordering::SeqCst) {
+                    if let Some(c) = &group_completion { c.batch_done(); }
+                    continue;
+                }
+
+                // Acquire concurrency permit (limits parallel processing per category)
+                let Ok(_permit) = state.concurrency_limiter.acquire().await else {
+                    if let Some(c) = &group_completion { c.batch_done(); }
+                    break;
+                };
+
+                // For CLAP, process as a batch
+                if category == ProcessingCategory::Clap {
+                    let batch_len = batch_assets.len();
+                    {
+                        let mut current = state.current_file.write().await;
+                        *current = Some(format!("batch of {} files", batch_len));
+                    }
+
+                    let results = process_clap_embedding_batch(&batch_assets, &db).await;
+
+                    {
+                        let mut current = state.current_file.write().await;
+                        *current = None;
+                    }
+
+                    for result in results {
+                        if result.success {
+                            state.completed_assets.fetch_add(1, Ordering::SeqCst);
+                        } else {
+                            state.failed_assets.fetch_add(1, Ordering::SeqCst);
+                            if let Some(error_msg) = &result.error {
+                                record_processing_error(result.asset_id, &category, error_msg, &db).await;
+                            }
+                        }
+                    }
+                } else {
+                    for asset in batch_assets {
+                        while state.pause_signal.load(Ordering::SeqCst)
+                            && !state.stop_signal.load(Ordering::SeqCst)
+                        {
                             tokio::time::sleep(Duration::from_millis(100)).await;
-                            if work_rx.is_empty() {
-                                break;
+                        }
+
+                        if state.stop_signal.load(Ordering::SeqCst) {
+                            break;
+                        }
+
+                        {
+                            let mut current = state.current_file.write().await;
+                            *current = Some(asset.filename.clone());
+                        }
+
+                        let result = process_asset(&asset, &db, pre_generate_thumbnails).await;
+
+                        {
+                            let mut current = state.current_file.write().await;
+                            *current = None;
+                        }
+
+                        if result.success {
+                            state.completed_assets.fetch_add(1, Ordering::SeqCst);
+                        } else {
+                            state.failed_assets.fetch_add(1, Ordering::SeqCst);
+                            eprintln!(
+                                "[Worker] Failed to process asset {}: {:?}",
+                                asset.filename, result.error
+                            );
+
+                            if let Some(error_msg) = &result.error {
+                                record_processing_error(asset.id, &category, error_msg, &db).await;
                             }
                         }
-                    }
-                    Err(crossbeam::channel::TryRecvError::Disconnected) => {
-                        break;
                     }
                 }
-            }
 
+                // Signal group completion (for staged ZIP dispatch)
+                if let Some(c) = &group_completion {
+                    c.batch_done();
+                }
+            }
         })
     }
 
@@ -530,6 +683,11 @@ impl WorkQueue {
             zip_cache::clear();
         }
 
+        // Abort the staged dispatcher if running
+        if let Some(handle) = self.dispatcher_handle.write().await.take() {
+            handle.abort();
+        }
+
         // Check if all categories are stopped
         let all_stopped = {
             let states = self.category_states.read().await;
@@ -650,10 +808,44 @@ impl WorkQueue {
         state.completed_assets.store(0, Ordering::SeqCst);
         state.failed_assets.store(0, Ordering::SeqCst);
 
-        for batch in Self::build_work_batches(category, generation, assets, false) {
-            self.work_tx
+        let plan = Self::build_batch_plan(category, generation, assets, false);
+
+        // Push non-ZIP batches
+        for batch in plan.non_zip {
+            self.nonzip_tx
                 .send(batch)
                 .map_err(|e| format!("Failed to queue: {}", e))?;
+        }
+
+        // Spawn staged dispatcher for ZIP groups
+        if !plan.zip_groups.is_empty() {
+            let zip_tx = self.zip_tx.clone();
+            let stop_signal = state.stop_signal.clone();
+            let gen = state.generation.clone();
+
+            let dispatcher = tokio::spawn(async move {
+                for group in plan.zip_groups {
+                    if stop_signal.load(Ordering::SeqCst)
+                        || gen.load(Ordering::SeqCst) != generation
+                    {
+                        break;
+                    }
+
+                    let completion = Arc::new(BatchGroupCompletion::new(group.batches.len()));
+
+                    for mut batch in group.batches {
+                        batch.group_completion = Some(completion.clone());
+                        if zip_tx.send(batch).is_err() {
+                            return;
+                        }
+                    }
+
+                    completion.done.notified().await;
+                }
+            });
+
+            let mut dh = self.dispatcher_handle.write().await;
+            *dh = Some(dispatcher);
         }
 
         // Spawn workers (clean up stale handles first)
@@ -843,7 +1035,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_work_batches_groups_consecutive_nested_zip_assets() {
+    fn test_batch_plan_separates_zip_and_nonzip() {
         let assets = vec![
             make_nested_batch_asset("pack_a.zip", "inner_a.zip/one.wav", "one.wav"),
             make_nested_batch_asset("pack_a.zip", "inner_a.zip/two.wav", "two.wav"),
@@ -853,16 +1045,55 @@ mod tests {
             make_nested_batch_asset("pack_b.zip", "inner_b.zip/five.wav", "five.wav"),
         ];
 
-        let batches = WorkQueue::build_work_batches(ProcessingCategory::Audio, 7, assets, false);
-        let batch_sizes: Vec<usize> = batches.iter().map(|batch| batch.assets.len()).collect();
+        let plan = WorkQueue::build_batch_plan(ProcessingCategory::Audio, 7, assets, false);
 
-        assert_eq!(batch_sizes, vec![3, 1, 2]);
-        assert!(batches.iter().all(|batch| batch.generation == 7));
-        assert!(batches.iter().all(|batch| batch.category == ProcessingCategory::Audio));
+        // 2 ZIP groups (pack_a with 3 assets, pack_b with 2)
+        assert_eq!(plan.zip_groups.len(), 2);
+        // Sorted by size descending: pack_a (3) before pack_b (2)
+        assert_eq!(plan.zip_groups[0].batches.iter().map(|b| b.assets.len()).sum::<usize>(), 3);
+        assert_eq!(plan.zip_groups[1].batches.iter().map(|b| b.assets.len()).sum::<usize>(), 2);
+
+        // 1 non-ZIP batch (plain.wav)
+        assert_eq!(plan.non_zip.len(), 1);
+        assert_eq!(plan.non_zip[0].assets.len(), 1);
+
+        // All batches have correct generation/category
+        for group in &plan.zip_groups {
+            for batch in &group.batches {
+                assert_eq!(batch.generation, 7);
+                assert_eq!(batch.category, ProcessingCategory::Audio);
+            }
+        }
     }
 
     #[test]
-    fn test_build_work_batches_splits_large_nested_zip_runs() {
+    fn test_batch_plan_groups_non_consecutive_same_key() {
+        // Assets from the same ZIP key are interleaved with other keys
+        let assets = vec![
+            make_nested_batch_asset("pack_a.zip", "inner_a.zip/one.wav", "one.wav"),
+            make_nested_batch_asset("pack_b.zip", "inner_b.zip/two.wav", "two.wav"),
+            make_nested_batch_asset("pack_a.zip", "inner_a.zip/three.wav", "three.wav"),
+            make_nested_batch_asset("pack_b.zip", "inner_b.zip/four.wav", "four.wav"),
+            make_nested_batch_asset("pack_a.zip", "inner_a.zip/five.wav", "five.wav"),
+        ];
+
+        let plan = WorkQueue::build_batch_plan(ProcessingCategory::Audio, 1, assets, false);
+
+        // Both ZIP groups should exist with ALL their assets (globally grouped)
+        assert_eq!(plan.zip_groups.len(), 2);
+        let total_zip_assets: usize = plan.zip_groups.iter()
+            .flat_map(|g| &g.batches)
+            .map(|b| b.assets.len())
+            .sum();
+        assert_eq!(total_zip_assets, 5);
+        // pack_a has 3, pack_b has 2
+        assert_eq!(plan.zip_groups[0].batches.iter().map(|b| b.assets.len()).sum::<usize>(), 3);
+        assert_eq!(plan.zip_groups[1].batches.iter().map(|b| b.assets.len()).sum::<usize>(), 2);
+        assert_eq!(plan.non_zip.len(), 0);
+    }
+
+    #[test]
+    fn test_batch_plan_splits_large_zip_groups() {
         let assets: Vec<Asset> = (0..10)
             .map(|i| {
                 make_nested_batch_asset(
@@ -873,10 +1104,50 @@ mod tests {
             })
             .collect();
 
-        let batches = WorkQueue::build_work_batches(ProcessingCategory::Audio, 3, assets, false);
-        let batch_sizes: Vec<usize> = batches.iter().map(|batch| batch.assets.len()).collect();
+        let plan = WorkQueue::build_batch_plan(ProcessingCategory::Audio, 3, assets, false);
 
+        assert_eq!(plan.zip_groups.len(), 1);
+        let batch_sizes: Vec<usize> = plan.zip_groups[0].batches.iter().map(|b| b.assets.len()).collect();
         assert_eq!(batch_sizes, vec![NESTED_ZIP_BATCH_SIZE, 2]);
+    }
+
+    #[test]
+    fn test_batch_plan_clap_respects_key_boundaries() {
+        let assets = vec![
+            make_nested_batch_asset("pack_a.zip", "inner_a.zip/one.wav", "one.wav"),
+            make_nested_batch_asset("pack_a.zip", "inner_a.zip/two.wav", "two.wav"),
+            make_nested_batch_asset("pack_b.zip", "inner_b.zip/three.wav", "three.wav"),
+            make_asset("plain.wav", 1, "", "audio", "wav"),
+        ];
+
+        let plan = WorkQueue::build_batch_plan(ProcessingCategory::Clap, 1, assets, false);
+
+        // CLAP: all batches go to non_zip (no staged dispatch needed)
+        assert_eq!(plan.zip_groups.len(), 0);
+
+        // No batch should contain assets from different ZIP keys
+        for batch in &plan.non_zip {
+            let keys: Vec<_> = batch.assets.iter()
+                .map(|a| zip_cache::nested_zip_group_key(a))
+                .collect();
+            let first = &keys[0];
+            assert!(keys.iter().all(|k| k == first),
+                "CLAP batch should not cross key boundaries: {:?}", keys);
+        }
+    }
+
+    #[test]
+    fn test_batch_group_completion_tracking() {
+        let completion = Arc::new(BatchGroupCompletion::new(3));
+
+        // First two decrements should not notify
+        completion.batch_done();
+        assert_eq!(completion.remaining.load(Ordering::SeqCst), 2);
+        completion.batch_done();
+        assert_eq!(completion.remaining.load(Ordering::SeqCst), 1);
+        // Third decrement hits zero (notify_one called internally)
+        completion.batch_done();
+        assert_eq!(completion.remaining.load(Ordering::SeqCst), 0);
     }
 
     // -----------------------------------------------------------------------

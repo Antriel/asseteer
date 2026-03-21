@@ -1,11 +1,11 @@
 ---
 # asseteer-fbpx
 title: Eliminate cache thrashing via global ZIP-locality batch grouping
-status: todo
+status: completed
 type: task
 priority: high
 created_at: 2026-03-21T09:37:10Z
-updated_at: 2026-03-21T10:35:39Z
+updated_at: 2026-03-21T11:44:46Z
 parent: asseteer-k1go
 ---
 
@@ -115,13 +115,13 @@ The dispatcher interface should be designed with this upgrade path in mind, even
 
 ## Revised implementation plan
 
-- [ ] Group all batches by nested ZIP key globally (sort, not just consecutive)
-- [ ] Separate non-ZIP batches into a fill pool
-- [ ] Implement dispatcher that sends one key group at a time + non-ZIP fill batches
-- [ ] Track completion of key groups (counter per group, decrement on batch done)
-- [ ] When key group completes, dispatch next key group
-- [ ] Apply same sorting to CLAP batch building
-- [ ] Remove NESTED_ZIP_BATCH_SIZE cap (keep batches at reasonable size for parallelism, e.g. 8, but all from same key)
+- [x] Group all batches by nested ZIP key globally (sort, not just consecutive)
+- [x] Separate non-ZIP batches into a fill pool
+- [x] Implement dispatcher that sends one key group at a time + non-ZIP fill batches
+- [x] Track completion of key groups (counter per group, decrement on batch done)
+- [x] When key group completes, dispatch next key group
+- [x] Apply same sorting to CLAP batch building
+- [x] Remove NESTED_ZIP_BATCH_SIZE cap (keep batches at reasonable size for parallelism, e.g. 8, but all from same key)
 
 
 ## Non-ZIP batch metering
@@ -144,3 +144,19 @@ Instead, non-ZIP batches are used as **fill** to occupy idle workers:
 The goal: at any point, idle workers get non-ZIP fill, while ZIP key groups proceed at full parallelism. ZIP and non-ZIP work progress concurrently throughout.
 
 Implementation option: use two channels — one for ZIP batches (dispatched in key groups), one for non-ZIP (always available). Workers try the ZIP channel first, fall back to non-ZIP. Or: single channel but dispatcher monitors channel depth and tops up non-ZIP batches as workers drain them.
+
+## Summary of Changes
+
+Implemented staged ZIP-locality dispatch in `src-tauri/src/task_system/work_queue.rs`:
+
+1. **Two-channel architecture**: Replaced single crossbeam channel with `zip_tx/rx` (high priority) and `nonzip_tx/rx` (low priority). Workers check ZIP channel first, falling back to non-ZIP.
+
+2. **Global ZIP key grouping**: `build_batch_plan()` replaces `build_work_batches()`, using a HashMap to group ALL assets by nested ZIP key globally (not just consecutive runs).
+
+3. **Staged dispatcher**: A spawned tokio task dispatches one ZIP key group at a time. Each group gets a `BatchGroupCompletion` tracker (AtomicUsize + Notify). Workers decrement after processing; when it hits 0, the dispatcher advances to the next group.
+
+4. **CLAP key-boundary chunking**: CLAP batches are sorted by key and chunked with key-boundary awareness, preventing cache thrashing within a single batch.
+
+5. **ZIP groups sorted by size**: Largest key groups dispatched first for better pipelining.
+
+All 56 existing tests pass + 5 new tests added (global grouping, non-consecutive grouping, large group splitting, CLAP key boundaries, completion tracking).
