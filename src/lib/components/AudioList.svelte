@@ -11,6 +11,7 @@
   import { clapState } from '$lib/state/clap.svelte';
   import { showToast } from '$lib/state/ui.svelte';
   import { showInFolder, openDirectory } from '$lib/actions/assetActions';
+  import { formatDuration, formatFileSize, formatSimilarity } from '$lib/utils/format';
 
   // Extended asset type with optional similarity score
   type AudioAsset = Asset & { similarity?: number };
@@ -21,10 +22,6 @@
   }
 
   let { assets, showSimilarity = false }: Props = $props();
-
-  function formatSimilarity(similarity: number): string {
-    return `${Math.round(similarity * 100)}%`;
-  }
 
   let selectedAsset = $state<Asset | null>(null);
   let shouldAutoPlay = $state(false);
@@ -37,23 +34,6 @@
 
   // Item height: button with h-20 (80px) + gap-2 (8px) = 88px per item
   const itemHeight = 88;
-
-  function formatDuration(ms: number): string {
-    const totalSeconds = ms / 1000;
-    const minutes = Math.floor(totalSeconds / 60);
-    if (totalSeconds < 10) {
-      const secs = totalSeconds % 60;
-      const wholeSecs = Math.floor(secs);
-      const millis = Math.floor((secs - wholeSecs) * 1000);
-      return `${minutes}:${wholeSecs.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
-    }
-    const remainingSeconds = Math.floor(totalSeconds % 60);
-    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
-  }
-
-  function formatFileSize(bytes: number): string {
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-  }
 
   function formatLocation(asset: Asset): string {
     return getAssetDisplayPath(asset);

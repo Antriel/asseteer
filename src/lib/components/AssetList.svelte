@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import type { Asset } from '$lib/types';
   import { getAssetDisplayPath } from '$lib/types';
-  import { formatFileSize } from '$lib/state/assets.svelte';
+  import { formatFileSize } from '$lib/utils/format';
   import AssetThumbnail from './AssetThumbnail.svelte';
   import Badge from './shared/Badge.svelte';
   import AssetContextMenu from './shared/AssetContextMenu.svelte';

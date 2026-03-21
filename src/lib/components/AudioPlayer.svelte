@@ -3,6 +3,7 @@
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { type Asset, getAssetFilePath } from '$lib/types';
   import { PlayIcon, PauseIcon } from './icons';
+  import { formatDuration } from '$lib/utils/format';
 
   interface Props {
     asset: Asset;
@@ -225,18 +226,6 @@
     audioElement.currentTime = percentage * duration;
   }
 
-  function formatTime(seconds: number): string {
-    const mins = Math.floor(seconds / 60);
-    if (seconds < 10) {
-      const secs = seconds % 60;
-      const wholeSecs = Math.floor(secs);
-      const ms = Math.floor((secs - wholeSecs) * 1000);
-      return `${mins}:${wholeSecs.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
-    }
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  }
-
   // Pause if another player becomes active
   $effect(() => {
     if (!isActive && isPlaying) {
@@ -338,8 +327,8 @@
         ></div>
       </div>
       <div class="flex justify-between mt-1 text-[0.625rem] text-secondary">
-        <span>{formatTime(currentTime)}</span>
-        <span>{formatTime(duration)}</span>
+        <span>{formatDuration(currentTime * 1000)}</span>
+        <span>{formatDuration(duration * 1000)}</span>
       </div>
     </div>
 

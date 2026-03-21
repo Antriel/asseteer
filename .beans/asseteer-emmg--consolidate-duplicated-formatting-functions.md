@@ -1,11 +1,11 @@
 ---
 # asseteer-emmg
 title: Consolidate duplicated formatting functions
-status: todo
+status: completed
 type: task
 priority: low
 created_at: 2026-03-20T11:43:48Z
-updated_at: 2026-03-20T11:48:52Z
+updated_at: 2026-03-21T08:12:22Z
 parent: asseteer-38rb
 ---
 
@@ -21,3 +21,14 @@ Create `$lib/utils/format.ts` with canonical implementations: `formatDuration(ms
 
 ## CLAUDE.md Updates
 When implementing this, add `$lib/utils/format.ts` to the root `CLAUDE.md` Key Patterns section so future work uses the canonical formatters instead of creating new ones.
+
+## Summary of Changes
+
+Created `$lib/utils/format.ts` with canonical implementations of `formatDuration(ms)`, `formatFileSize(bytes)`, and `formatSimilarity(score)`.
+
+- **AudioList.svelte**: removed 3 local functions, now imports from utils
+- **AudioPlayer.svelte**: removed `formatTime(seconds)`, now uses `formatDuration(seconds * 1000)`
+- **assets.svelte.ts**: removed exported `formatFileSize`
+- **clap.svelte.ts**: removed exported `formatSimilarity`
+- **AssetList.svelte**: updated import from `assets.svelte` → `$lib/utils/format`
+- **CLAUDE.md**: added formatting utilities entry to Key Patterns section

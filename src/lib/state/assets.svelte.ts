@@ -190,11 +190,3 @@ listen<{ asset_id: number; success: boolean }>('thumbnail-ready', async (event) 
   }
 }).catch(console.error);
 
-/**
- * Get formatted file size
- */
-export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}

@@ -417,10 +417,3 @@ class ClapState {
 
 // Export singleton instance
 export const clapState = new ClapState();
-
-/**
- * Format similarity score as percentage
- */
-export function formatSimilarity(similarity: number): string {
-  return `${Math.round(similarity * 100)}%`;
-}
