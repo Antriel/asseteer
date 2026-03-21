@@ -43,7 +43,6 @@ class ProcessingState {
    * Initialize event listeners for processing events
    */
   async initializeListeners() {
-    console.time('[Processing] initializeListeners');
     // Clean up existing listeners
     this.cleanup();
 
@@ -51,11 +50,9 @@ class ProcessingState {
 
     const listenerPromises = categories.flatMap((category) => [
       listen<CategoryProgress>(`processing-progress-${category}`, (event) => {
-        console.log(`[Processing] ${category} progress:`, event.payload);
         this.updateCategoryProgress(category, event.payload);
       }),
       listen<CategoryProgress>(`processing-complete-${category}`, async (event) => {
-        console.log(`[Processing] ${category} complete:`, event.payload);
         this.updateCategoryProgress(category, event.payload);
         await this.refreshPendingCount();
         this.checkAllComplete();
@@ -63,7 +60,6 @@ class ProcessingState {
     ]);
 
     this.unlistenFns = await Promise.all(listenerPromises);
-    console.timeEnd('[Processing] initializeListeners');
   }
 
   /**
@@ -87,7 +83,6 @@ class ProcessingState {
 
     if (!anyRunning && total > 0) {
       this.lastRunResult = { total, completed, failed };
-      console.log('[Processing] All complete:', this.lastRunResult);
     }
   }
 
@@ -109,7 +104,6 @@ class ProcessingState {
     // Check if category has pending items
     const pendingCount = this.getPendingCountForCategory(category);
     if (pendingCount === 0) {
-      console.log(`[Processing] Skipping ${category}: No pending assets`);
       return; // Gracefully skip instead of throwing error
     }
 
@@ -121,7 +115,6 @@ class ProcessingState {
         category,
         preGenerateThumbnails: settings.preGenerateThumbnails,
       });
-      console.log(`[Processing] Started ${category}`);
 
       // Query initial progress
       await this.refreshProgress(category);
@@ -145,7 +138,6 @@ class ProcessingState {
       );
 
     if (promises.length === 0) {
-      console.log('[Processing] No enabled categories have pending assets');
       return;
     }
 
@@ -158,7 +150,6 @@ class ProcessingState {
   async pause(category: ProcessingCategory) {
     try {
       await invoke('pause_processing', { category });
-      console.log(`[Processing] Paused ${category}`);
       // Backend will emit progress update with paused state
     } catch (error) {
       console.error(`[Processing] Failed to pause ${category}:`, error);
@@ -172,7 +163,6 @@ class ProcessingState {
   async resume(category: ProcessingCategory) {
     try {
       await invoke('resume_processing', { category });
-      console.log(`[Processing] Resumed ${category}`);
       // Backend will emit progress update with resumed state
     } catch (error) {
       console.error(`[Processing] Failed to resume ${category}:`, error);
@@ -186,7 +176,6 @@ class ProcessingState {
   async stop(category: ProcessingCategory, skipPendingRefresh = false) {
     try {
       await invoke('stop_processing', { category });
-      console.log(`[Processing] Stopped ${category}`);
       // State will be updated by backend or can be refreshed
       await this.refreshProgress(category);
       // Refresh pending count since stopped assets remain unprocessed
@@ -259,28 +248,22 @@ class ProcessingState {
    * Refresh pending asset count from database
    */
   async refreshPendingCount() {
-    console.time('[Processing] refreshPendingCount');
     try {
       const db = await getDatabase();
-      console.time('[Processing] getPendingCounts queries');
       const [assetCounts, clapCount] = await Promise.all([
         getPendingAssetCounts(db, settings.preGenerateThumbnails),
         getPendingClapCount(),
       ]);
-      console.timeEnd('[Processing] getPendingCounts queries');
       this.pendingCount = {
         images: assetCounts.images,
         audio: assetCounts.audio,
         clap: clapCount,
         total: assetCounts.images + assetCounts.audio + clapCount,
       };
-      console.log('[Processing] Pending count updated:', $state.snapshot(this.pendingCount));
       return this.pendingCount;
     } catch (error) {
       console.error('[Processing] Failed to refresh pending count:', error);
       throw error;
-    } finally {
-      console.timeEnd('[Processing] refreshPendingCount');
     }
   }
 
@@ -327,7 +310,6 @@ class ProcessingState {
   async retryFailed(category: ProcessingCategory): Promise<number> {
     try {
       const count = await invoke<number>('retry_failed_assets', { category });
-      console.log(`[Processing] Retrying ${count} failed ${category} assets`);
 
       // Refresh progress after starting retry
       await this.refreshProgress(category);
@@ -348,7 +330,6 @@ class ProcessingState {
         category: category || null,
         onlyResolved,
       });
-      console.log(`[Processing] Cleared ${count} errors`);
       return count;
     } catch (error) {
       console.error('[Processing] Failed to clear errors:', error);

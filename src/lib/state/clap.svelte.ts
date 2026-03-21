@@ -128,7 +128,6 @@ class ClapState {
    * Start CLAP server if not running
    */
   async ensureServer(): Promise<boolean> {
-    console.log('[CLAP State] ensureServer called, serverAvailable:', this.serverAvailable);
     if (this.serverAvailable) return true;
 
     this.serverStarting = true;
@@ -137,9 +136,7 @@ class ClapState {
     this.startupPhase = null;
     this.startupDetail = null;
     try {
-      console.log('[CLAP State] Calling startClapServer...');
       await startClapServer();
-      console.log('[CLAP State] startClapServer returned successfully');
       this.serverAvailable = true;
       this.setupStatus = 'ready';
       await this.refreshServerInfo();
@@ -156,7 +153,6 @@ class ClapState {
       this.serverStarting = false;
       this.startupPhase = null;
       this.startupDetail = null;
-      console.log('[CLAP State] ensureServer finished, serverAvailable:', this.serverAvailable);
     }
   }
 

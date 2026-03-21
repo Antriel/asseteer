@@ -32,19 +32,14 @@
   }
 
   onMount(async () => {
-    console.log('[Library] onMount started');
-    console.time('[Library] refreshAssetCounts');
     await Promise.all([refreshAssetCounts(), refreshPendingClapCount()]);
-    console.timeEnd('[Library] refreshAssetCounts');
 
     // Load assets for the current tab (persists across navigation)
     const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
-    console.time('[Library] loadAssets');
-    assetsState.loadAssets(currentType).then(() => console.timeEnd('[Library] loadAssets'));
+    assetsState.loadAssets(currentType);
 
     // Listen for scan completion to refresh counts
     const unlistenScan = await listen('scan-complete', async () => {
-      console.log('[Library] Scan complete, refreshing asset counts');
       await refreshAssetCounts();
       // Refresh folder tree if sidebar is open
       if (viewState.folderSidebarOpen) {
@@ -55,7 +50,6 @@
 
     // Listen for category-specific processing completion to refresh counts
     const handleProcessingComplete = async () => {
-      console.log('[Library] Processing complete, refreshing asset counts and reloading assets');
       await refreshAssetCounts();
       // Reload current tab's assets
       const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
