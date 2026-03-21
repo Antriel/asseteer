@@ -53,26 +53,6 @@ pub struct AudioMetadata {
     pub processed_at: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScanSession {
-    pub id: i64,
-    pub source_folder_id: Option<i64>,
-    pub total_files: Option<i64>,
-    pub processed_files: i64,
-    pub status: String,
-    pub started_at: i64,
-    pub completed_at: Option<i64>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScanProgress {
-    pub session_id: i64,
-    pub total_files: usize,
-    pub processed_files: usize,
-    pub current_file: String,
-    pub status: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AssetType {
@@ -123,12 +103,6 @@ impl ProcessingCategory {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PendingCount {
-    pub images: usize,
-    pub audio: usize,
-    pub total: usize,
-}
 
 /// Processing error stored in database
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
