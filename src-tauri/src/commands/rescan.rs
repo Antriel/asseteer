@@ -1,8 +1,9 @@
 use crate::commands::scan::{
-    discover_files_streaming, load_search_excludes, DiscoveredAsset, ScanProgress,
-    ScanProgressState,
+    discover_files_streaming, insert_asset_row, load_search_excludes, DiscoveredAsset,
+    ScanProgress, ScanProgressState,
 };
 use crate::AppState;
+use crate::utils::now_millis;
 use serde::Serialize;
 use sqlx;
 use std::collections::HashMap;
@@ -386,29 +387,7 @@ pub async fn apply_rescan(
 
     // Insert new assets
     for asset in &preview.added {
-        sqlx::query(
-            "INSERT OR IGNORE INTO assets (
-                filename, folder_id, rel_path, zip_file, zip_entry, zip_compression,
-                searchable_path, asset_type, format, file_size, fs_modified_at,
-                created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        )
-        .bind(&asset.filename)
-        .bind(asset.folder_id)
-        .bind(&asset.rel_path)
-        .bind(&asset.zip_file)
-        .bind(&asset.zip_entry)
-        .bind(&asset.zip_compression)
-        .bind(&asset.searchable_path)
-        .bind(asset.asset_type.as_str())
-        .bind(&asset.format)
-        .bind(asset.file_size)
-        .bind(asset.fs_modified_at)
-        .bind(now)
-        .bind(now)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
+        insert_asset_row(&mut tx, asset, now).await?;
 
         ops_done += 1;
         if last_emit.elapsed().as_millis() >= EMIT_INTERVAL_MS {
@@ -459,9 +438,3 @@ pub async fn apply_rescan(
     })
 }
 
-fn now_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-}

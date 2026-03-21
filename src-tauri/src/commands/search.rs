@@ -52,6 +52,36 @@ struct AssetMetadataRow {
     channels: Option<i32>,
 }
 
+/// Build `SemanticSearchResult` list from ranked results and a metadata map.
+fn build_search_results(
+    ranked: Vec<crate::clap::cache::SimilarityResult>,
+    metadata: &HashMap<i64, AssetMetadataRow>,
+) -> Vec<SemanticSearchResult> {
+    ranked
+        .into_iter()
+        .filter_map(|r| {
+            metadata.get(&r.asset_id).map(|m| SemanticSearchResult {
+                id: m.id,
+                filename: m.filename.clone(),
+                folder_id: m.folder_id,
+                rel_path: m.rel_path.clone(),
+                zip_file: m.zip_file.clone(),
+                zip_entry: m.zip_entry.clone(),
+                folder_path: m.folder_path.clone(),
+                asset_type: m.asset_type.clone(),
+                format: m.format.clone(),
+                file_size: m.file_size,
+                created_at: m.created_at,
+                modified_at: m.modified_at,
+                duration_ms: m.duration_ms,
+                sample_rate: m.sample_rate,
+                channels: m.channels,
+                similarity: r.similarity,
+            })
+        })
+        .collect()
+}
+
 /// Fetch full asset metadata for a set of asset IDs.
 /// Returns a map from asset_id to row data.
 async fn fetch_asset_metadata(
@@ -127,31 +157,7 @@ pub async fn search_audio_semantic(
     let metadata = fetch_asset_metadata(&ids, &state.pool).await?;
 
     // Build results preserving similarity order, skipping any deleted assets
-    let results = ranked
-        .into_iter()
-        .filter_map(|r| {
-            metadata.get(&r.asset_id).map(|m| SemanticSearchResult {
-                id: m.id,
-                filename: m.filename.clone(),
-                folder_id: m.folder_id,
-                rel_path: m.rel_path.clone(),
-                zip_file: m.zip_file.clone(),
-                zip_entry: m.zip_entry.clone(),
-                folder_path: m.folder_path.clone(),
-                asset_type: m.asset_type.clone(),
-                format: m.format.clone(),
-                file_size: m.file_size,
-                created_at: m.created_at,
-                modified_at: m.modified_at,
-                duration_ms: m.duration_ms,
-                sample_rate: m.sample_rate,
-                channels: m.channels,
-                similarity: r.similarity,
-            })
-        })
-        .collect();
-
-    Ok(results)
+    Ok(build_search_results(ranked, &metadata))
 }
 
 /// Find audio assets similar to a given audio asset using its stored CLAP embedding
@@ -195,31 +201,7 @@ pub async fn search_audio_by_similarity(
     let metadata = fetch_asset_metadata(&ids, &state.pool).await?;
 
     // Build results preserving similarity order, skipping any deleted assets
-    let results = ranked
-        .into_iter()
-        .filter_map(|r| {
-            metadata.get(&r.asset_id).map(|m| SemanticSearchResult {
-                id: m.id,
-                filename: m.filename.clone(),
-                folder_id: m.folder_id,
-                rel_path: m.rel_path.clone(),
-                zip_file: m.zip_file.clone(),
-                zip_entry: m.zip_entry.clone(),
-                folder_path: m.folder_path.clone(),
-                asset_type: m.asset_type.clone(),
-                format: m.format.clone(),
-                file_size: m.file_size,
-                created_at: m.created_at,
-                modified_at: m.modified_at,
-                duration_ms: m.duration_ms,
-                sample_rate: m.sample_rate,
-                channels: m.channels,
-                similarity: r.similarity,
-            })
-        })
-        .collect();
-
-    Ok(results)
+    Ok(build_search_results(ranked, &metadata))
 }
 
 /// Get count of audio assets pending CLAP embedding

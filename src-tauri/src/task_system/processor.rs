@@ -1,7 +1,7 @@
 /// Unified asset processor - handles both thumbnail generation and metadata extraction
 use crate::clap::{embedding_to_blob, ensure_server_running, get_clap_client};
 use crate::models::Asset;
-use crate::utils::resolve_asset_fs_path;
+use crate::utils::{resolve_asset_fs_path, unix_now};
 use crate::zip_cache;
 use image::{DynamicImage, GenericImageView};
 use sqlx::SqlitePool;
@@ -13,12 +13,6 @@ const PROCESSING_TIMEOUT: Duration = Duration::from_secs(30);
 /// Timeout for nested ZIP assets (2 minutes — cache fills can take tens of seconds)
 const NESTED_ZIP_PROCESSING_TIMEOUT: Duration = Duration::from_secs(120);
 
-fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
 
 /// Result of processing an asset
 #[derive(Debug, Clone)]

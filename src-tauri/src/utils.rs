@@ -1,7 +1,24 @@
 use std::fs::File;
 use std::io::{Cursor, Read, Seek};
+use std::time::UNIX_EPOCH;
 use zip::ZipArchive;
 use crate::models::Asset;
+
+/// Seconds since Unix epoch as i64.
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+/// Milliseconds since Unix epoch as u64.
+pub fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 /// Resolve the absolute filesystem path for a regular (non-ZIP) asset.
 /// Returns: folder_path/rel_path/filename (or folder_path/filename if rel_path is empty)

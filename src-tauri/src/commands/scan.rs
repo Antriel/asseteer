@@ -632,6 +632,37 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
 }
 
 /// Insert a chunk of assets in a single transaction
+pub(crate) async fn insert_asset_row(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    asset: &DiscoveredAsset,
+    now: i64,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO assets (
+            filename, folder_id, rel_path, zip_file, zip_entry, zip_compression,
+            searchable_path, asset_type, format, file_size, fs_modified_at,
+            created_at, modified_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+    )
+    .bind(&asset.filename)
+    .bind(asset.folder_id)
+    .bind(&asset.rel_path)
+    .bind(&asset.zip_file)
+    .bind(&asset.zip_entry)
+    .bind(&asset.zip_compression)
+    .bind(&asset.searchable_path)
+    .bind(asset.asset_type.as_str())
+    .bind(&asset.format)
+    .bind(asset.file_size)
+    .bind(asset.fs_modified_at)
+    .bind(now)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub(crate) async fn insert_asset_chunk(
     pool: &sqlx::SqlitePool,
     assets: &[DiscoveredAsset],
@@ -644,29 +675,7 @@ pub(crate) async fn insert_asset_chunk(
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
     for asset in assets {
-        sqlx::query(
-            "INSERT OR IGNORE INTO assets (
-                filename, folder_id, rel_path, zip_file, zip_entry, zip_compression,
-                searchable_path, asset_type, format, file_size, fs_modified_at,
-                created_at, modified_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        )
-        .bind(&asset.filename)
-        .bind(asset.folder_id)
-        .bind(&asset.rel_path)
-        .bind(&asset.zip_file)
-        .bind(&asset.zip_entry)
-        .bind(&asset.zip_compression)
-        .bind(&asset.searchable_path)
-        .bind(asset.asset_type.as_str())
-        .bind(&asset.format)
-        .bind(asset.file_size)
-        .bind(asset.fs_modified_at)
-        .bind(now)
-        .bind(now)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| e.to_string())?;
+        insert_asset_row(&mut tx, asset, now).await?;
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;

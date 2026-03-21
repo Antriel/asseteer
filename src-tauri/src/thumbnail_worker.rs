@@ -7,7 +7,7 @@
 
 use crate::models::Asset;
 use crate::task_system::processor::generate_thumbnail_for_asset;
-use crate::utils::resolve_zip_path;
+use crate::utils::{resolve_zip_path, now_millis};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
@@ -425,9 +425,3 @@ async fn load_assets(pool: &SqlitePool, ids: &[i64]) -> Vec<Asset> {
     result
 }
 
-fn now_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}

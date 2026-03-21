@@ -1,6 +1,7 @@
 /// Work queue with worker pool for processing assets
 use crate::models::{Asset, ProcessingCategory};
 use crate::task_system::processor::{process_asset, process_clap_embedding_batch};
+use crate::utils::unix_now;
 use crate::zip_cache;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use serde::Serialize;
@@ -16,11 +17,23 @@ const BATCH_UPDATE_INTERVAL_SEC: u64 = 2;
 const CLAP_BATCH_SIZE: usize = 8;
 const NESTED_ZIP_BATCH_SIZE: usize = 8;
 
-fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
+
+async fn record_processing_error(
+    asset_id: i64,
+    category: &ProcessingCategory,
+    error_msg: &str,
+    db: &SqlitePool,
+) {
+    let _ = sqlx::query(
+        "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
+         VALUES (?, ?, ?, ?, 0)",
+    )
+    .bind(asset_id)
+    .bind(category.as_str())
+    .bind(error_msg)
+    .bind(unix_now())
+    .execute(db)
+    .await;
 }
 
 /// Progress statistics for a processing category
@@ -322,17 +335,7 @@ impl WorkQueue {
                                 } else {
                                     state.failed_assets.fetch_add(1, Ordering::SeqCst);
                                     if let Some(error_msg) = &result.error {
-                                        let now = unix_now();
-                                        let _ = sqlx::query(
-                                            "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
-                                             VALUES (?, ?, ?, ?, 0)"
-                                        )
-                                        .bind(result.asset_id)
-                                        .bind(category.as_str())
-                                        .bind(error_msg)
-                                        .bind(now)
-                                        .execute(&db)
-                                        .await;
+                                        record_processing_error(result.asset_id, &category, error_msg, &db).await;
                                     }
                                 }
                             }
@@ -370,17 +373,7 @@ impl WorkQueue {
                                     );
 
                                     if let Some(error_msg) = &result.error {
-                                        let now = unix_now();
-                                        let _ = sqlx::query(
-                                            "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
-                                             VALUES (?, ?, ?, ?, 0)"
-                                        )
-                                        .bind(asset.id)
-                                        .bind(category.as_str())
-                                        .bind(error_msg)
-                                        .bind(now)
-                                        .execute(&db)
-                                        .await;
+                                        record_processing_error(asset.id, &category, error_msg, &db).await;
                                     }
                                 }
                             }
