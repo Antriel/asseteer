@@ -1,6 +1,6 @@
 <script lang="ts">
   import { convertFileSrc } from '@tauri-apps/api/core';
-  import { invoke } from '@tauri-apps/api/core';
+  import { loadAssetBlobUrl } from '$lib/utils/assetBlob';
   import { type Asset, getAssetFilePath } from '$lib/types';
   import {
     getThumbnailUrl,
@@ -59,11 +59,9 @@
         smallImageUrl = convertFileSrc(getAssetFilePath(asset));
       } else {
         // Zip entry — need IPC to extract bytes
-        invoke<number[]>('get_asset_bytes', { assetId: asset.id })
-          .then((bytes) => {
-            const arr = new Uint8Array(bytes);
-            const blob = new Blob([arr], { type: `image/${asset.format}` });
-            smallImageUrl = URL.createObjectURL(blob);
+        loadAssetBlobUrl(asset.id, `image/${asset.format}`)
+          .then((url) => {
+            smallImageUrl = url;
           })
           .catch(() => {
             smallImageFailed = true;

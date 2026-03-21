@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+  import { convertFileSrc } from '@tauri-apps/api/core';
+  import { loadAssetBlobUrl } from '$lib/utils/assetBlob';
   import { type Asset, getAssetFilePath } from '$lib/types';
   import { PlayIcon, PauseIcon, VolumeIcon } from './icons';
   import { formatDuration } from '$lib/utils/format';
@@ -110,11 +111,7 @@
       (async () => {
         try {
           if (zipEntry) {
-            // Asset is inside a zip - need to extract it.
-            // invoke returns ArrayBuffer (binary IPC) to avoid JSON number[] overhead.
-            const buffer = await invoke<ArrayBuffer>('get_asset_bytes', { assetId });
-            const blob = new Blob([buffer], { type: `audio/${assetFormat}` });
-            const newBlobUrl = URL.createObjectURL(blob);
+            const newBlobUrl = await loadAssetBlobUrl(assetId, `audio/${assetFormat}`);
 
             untrack(() => {
               blobUrl = newBlobUrl;

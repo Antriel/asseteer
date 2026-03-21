@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { convertFileSrc } from '@tauri-apps/api/core';
-  import { invoke } from '@tauri-apps/api/core';
+  import { loadAssetBlobUrl } from '$lib/utils/assetBlob';
   import { type Asset, getAssetFilePath } from '$lib/types';
   import {
     getThumbnailUrl,
@@ -49,11 +49,9 @@
       if (!asset.zip_entry) {
         smallImageUrl = convertFileSrc(getAssetFilePath(asset));
       } else {
-        invoke<number[]>('get_asset_bytes', { assetId: asset.id })
-          .then((bytes) => {
-            const arr = new Uint8Array(bytes);
-            const blob = new Blob([arr], { type: `image/${asset.format}` });
-            smallImageUrl = URL.createObjectURL(blob);
+        loadAssetBlobUrl(asset.id, `image/${asset.format}`)
+          .then((url) => {
+            smallImageUrl = url;
           })
           .catch(() => {
             smallImageFailed = true;

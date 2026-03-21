@@ -76,6 +76,16 @@ if (thumbnailData) {
 }
 ```
 
+**ZIP asset bytes**: Use `loadAssetBlobUrl` from `$lib/utils/assetBlob` to load a ZIP-embedded asset as a blob URL. Do NOT call `invoke('get_asset_bytes')` directly in components:
+
+```typescript
+import { loadAssetBlobUrl } from '$lib/utils/assetBlob';
+
+const url = await loadAssetBlobUrl(asset.id, `image/${asset.format}`);
+// ...later, cleanup:
+URL.revokeObjectURL(url);
+```
+
 ## Key Rules
 
 1. **All SELECTs go here** - Never create backend commands for reads

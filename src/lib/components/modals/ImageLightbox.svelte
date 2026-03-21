@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { convertFileSrc } from '@tauri-apps/api/core';
-  import { invoke } from '@tauri-apps/api/core';
+  import { loadAssetBlobUrl } from '$lib/utils/assetBlob';
   import { openPath } from '@tauri-apps/plugin-opener';
   import { getAssetFilePath, getAssetDisplayPath, getAssetDirectoryPath } from '$lib/types';
   import type { Asset, FolderLocation } from '$lib/types';
@@ -147,9 +147,7 @@
       (async () => {
         try {
           if (zipEntry) {
-            const bytes = await invoke<number[]>('get_asset_bytes', { assetId });
-            const blob = new Blob([new Uint8Array(bytes)], { type: `image/${assetFormat}` });
-            const newBlobUrl = URL.createObjectURL(blob);
+            const newBlobUrl = await loadAssetBlobUrl(assetId, `image/${assetFormat}`);
 
             untrack(() => {
               blobUrl = newBlobUrl;
