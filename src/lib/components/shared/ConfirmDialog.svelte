@@ -34,7 +34,7 @@
       <div class="flex justify-end gap-2">
         <button
           onclick={() => resolveConfirm(false)}
-          class="px-4 py-2 text-sm font-medium rounded-lg border border-default text-secondary hover:text-primary hover:bg-tertiary transition-colors"
+          class="px-4 py-2 text-sm font-medium rounded-lg bg-tertiary text-secondary hover:text-primary transition-colors"
         >
           Cancel
         </button>

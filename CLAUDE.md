@@ -34,13 +34,19 @@ Use runes, NOT legacy `$:` syntax:
 </script>
 ```
 
-**State modules** (`.svelte.ts` files):
+**State modules** (`.svelte.ts` files) use singleton class pattern:
 ```typescript
-// Export $state directly
-export const myState = $state<MyType>({ value: 0 });
+class MyState {
+  value = $state(0);
+  doubled = $derived(this.value * 2); // OK inside class
 
-// Export FUNCTIONS for derived values (can't export $derived)
-export function getDerivedValue(): number {
+  setValue(v: number) { this.value = v; }
+}
+
+export const myState = new MyState();
+
+// Export FUNCTIONS for derived values needed outside the class
+export function getComputedThing(): number {
   return myState.value * 2;
 }
 ```
@@ -52,6 +58,8 @@ export function getDerivedValue(): number {
   let { item, disabled = false }: Props = $props();
 </script>
 ```
+
+**Callbacks over events**: Use callback props (`onSelect`, `onClose`) not `createEventDispatcher`.
 
 ## Tailwind CSS: Inline-First
 
@@ -93,22 +101,42 @@ See `src/lib/database/CLAUDE.md` for query patterns.
 
 ## Key Patterns
 
-- **Reactivity with Maps**: Use `SvelteMap` from `svelte/reactivity`
-- **State export**: Direct for `$state`, functions for derived values
+- **Reactivity with Maps/Sets**: Use `SvelteMap`/`SvelteSet` from `svelte/reactivity`
+- **State singletons**: Class with `$state` properties, exported as singleton instance
 - **Tauri plugins**: Use built-in plugins (`@tauri-apps/plugin-dialog`, etc.) over custom commands
+- **Tauri events**: Use `listen()` from `@tauri-apps/api/event` for backend→frontend communication. Store `UnlistenFn` and clean up on destroy.
+- **CLAP functions**: Semantic search uses `invoke()` commands, not direct SQL — see bottom of `queries.ts`
+
+## State Modules
+
+All in `src/lib/state/`, initialized as singletons:
+
+| Module | Singleton | Init | Purpose |
+|--------|-----------|------|---------|
+| `assets.svelte.ts` | `assetsState` | On demand | Search, filtering, asset list |
+| `view.svelte.ts` | `viewState` | Immediate | Active tab, layout, lightbox, sidebar |
+| `ui.svelte.ts` | `uiState` | Immediate | Toasts, confirm dialog, scan progress |
+| `tasks.svelte.ts` | `processingState` | Root layout | Per-category processing progress + control |
+| `clap.svelte.ts` | `clapState` | Root layout | CLAP server management + semantic search |
+| `explore.svelte.ts` | `exploreState` | On demand | Folder tree navigation + cache |
+| `thumbnails.svelte.ts` | (functions) | On import | Thumbnail cache, request batching |
+| `settings.svelte.ts` | `settings` | Immediate | Persisted settings (localStorage) |
+
+"Root layout" = `initializeListeners()`/`initialize()` called in `src/routes/+layout.svelte`.
 
 ## UI Structure
 
 **Routes** (`src/routes/`):
-- `/library` - Asset browser (images/audio tabs)
-- `/processing` - Processing dashboard
-- `/scan` - Folder scanning
+- `/library` - Asset browser (images/audio tabs, search, folder panel)
+- `/processing` - Processing dashboard (per-category cards)
+- `/folders` - Source folder management (add/edit/rescan)
+- `/settings` - App settings + CLAP setup
 
-**Layout**: Root layout has sidebar + status bar. Processing state initialized once in root layout.
+**Layout**: Root layout (`+layout.svelte`) has sidebar + folder panel + status bar + toasts + confirm dialog. Processing and CLAP state initialized once here.
 
 **Icons**: Use `$lib/components/icons` (AudioIcon, PlayIcon, PauseIcon, SearchIcon, etc.) instead of inline SVGs.
 
-**Virtual Scrolling**: Use `VirtualList` for simple lists. ImageGrid/AssetList have specialized implementations.
+**Virtual Scrolling**: Use `VirtualList` for simple lists. `ImageGrid`/`AssetList` have specialized implementations.
 
 **Colors**: `bg-primary/secondary/tertiary/elevated`, `text-success/warning/error`, `bg-accent-muted`
 

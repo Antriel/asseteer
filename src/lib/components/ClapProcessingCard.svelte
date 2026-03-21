@@ -2,6 +2,7 @@
   import { clapState } from '$lib/state/clap.svelte';
   import { processingState, getCategoryStatus } from '$lib/state/tasks.svelte';
   import { showToast } from '$lib/state/ui.svelte';
+  import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import Spinner from './shared/Spinner.svelte';
   import ProcessingDetails from './ProcessingDetails.svelte';
@@ -173,13 +174,23 @@
   <!-- Server status and controls -->
   {#if !clapState.serverAvailable && !clapState.serverStarting}
     <div class="flex items-center justify-between p-3 bg-secondary rounded">
-      <span class="text-sm text-secondary">CLAP server not running</span>
-      <button
-        onclick={handleStartServer}
-        class="px-3 py-1.5 text-sm font-medium text-white bg-purple-500 hover:bg-purple-600 rounded transition-colors"
-      >
-        Start Server
-      </button>
+      {#if clapState.setupStatus === 'not-configured'}
+        <span class="text-sm text-secondary">Semantic search requires one-time setup</span>
+        <button
+          onclick={() => goto('/settings')}
+          class="px-3 py-1.5 text-sm font-medium text-white bg-purple-500 hover:bg-purple-600 rounded transition-colors"
+        >
+          Go to Settings
+        </button>
+      {:else}
+        <span class="text-sm text-secondary">CLAP server not running</span>
+        <button
+          onclick={handleStartServer}
+          class="px-3 py-1.5 text-sm font-medium text-white bg-purple-500 hover:bg-purple-600 rounded transition-colors"
+        >
+          Start Server
+        </button>
+      {/if}
     </div>
   {:else if clapState.serverStarting}
     <div class="flex items-center gap-2 p-3 bg-secondary rounded">

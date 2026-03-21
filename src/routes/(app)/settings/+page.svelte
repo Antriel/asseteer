@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { clapState, type ClapSetupStatus } from '$lib/state/clap.svelte';
+  import { clapState, type ClapSetupStatus, type ClapStartupPhase } from '$lib/state/clap.svelte';
+  import { checkClapSetupState } from '$lib/database/queries';
   import { settings } from '$lib/state/settings.svelte';
   import { showToast, showConfirm } from '$lib/state/ui.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { openPath } from '@tauri-apps/plugin-opener';
-  import ClapSetupDialog from '$lib/components/ClapSetupDialog.svelte';
 
-  let showSetupDialog = $state(false);
+  let isFirstTimeSetup = $state(false);
+  let showDownloadStep = $state(false);
 
   const statusLabel: Record<ClapSetupStatus, string> = {
     'not-configured': 'Not set up',
@@ -24,6 +25,51 @@
     error: 'bg-error',
   };
 
+  const phaseOrder: ClapStartupPhase[] = [
+    'downloading-uv',
+    'starting-process',
+    'waiting-for-server',
+    'loading-model',
+    'ready',
+  ];
+
+  type StepDisplayStatus = 'idle' | 'running' | 'done' | 'error';
+
+  let steps = $derived.by(() => {
+    const items: { key: string; label: string; hint: string }[] = [];
+    if (showDownloadStep) {
+      items.push({ key: 'downloading-uv', label: 'Downloading package manager', hint: '~30 MB' });
+    }
+    items.push(
+      {
+        key: 'starting-process',
+        label: 'Setting up Python environment',
+        hint: isFirstTimeSetup ? 'first run downloads ~3–8 GB' : '',
+      },
+      { key: 'loading-model', label: 'Loading model', hint: '' },
+    );
+    return items;
+  });
+
+  function getPhaseIndex(phase: ClapStartupPhase | null): number {
+    if (!phase) return -1;
+    const mapped = phase === 'waiting-for-server' ? 'starting-process' : phase;
+    return phaseOrder.indexOf(mapped);
+  }
+
+  function stepStatus(stepKey: string): StepDisplayStatus {
+    const currentPhase = clapState.startupPhase;
+    const currentIdx = getPhaseIndex(currentPhase);
+    const stepIdx = phaseOrder.indexOf(stepKey as ClapStartupPhase);
+
+    const effectiveCurrentKey =
+      currentPhase === 'waiting-for-server' ? 'starting-process' : currentPhase;
+
+    if (stepKey === effectiveCurrentKey) return 'running';
+    if (stepIdx < currentIdx) return 'done';
+    return 'idle';
+  }
+
   function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB'];
@@ -32,7 +78,30 @@
   }
 
   async function handleSetup() {
-    showSetupDialog = true;
+    try {
+      const state = await checkClapSetupState();
+      showDownloadStep = !state.uv_installed;
+      isFirstTimeSetup = !state.cache_exists;
+    } catch {
+      showDownloadStep = true;
+      isFirstTimeSetup = true;
+    }
+
+    if (isFirstTimeSetup) {
+      const confirmed = await showConfirm(
+        'Setting up semantic search requires downloading Python and the AI model (~3–8 GB depending on your GPU). This is a one-time download — future starts will be instant.',
+        'Set Up Semantic Search',
+        'Download & Set Up',
+      );
+      if (!confirmed) return;
+    }
+
+    clapState.setup().then((ok) => {
+      if (ok) {
+        showToast('Semantic search is ready', 'success');
+        clapState.refreshCacheSize();
+      }
+    });
   }
 
   async function handleClearCache() {
@@ -49,16 +118,6 @@
     } catch (error) {
       showToast('Failed to clear cache: ' + error, 'error');
     }
-  }
-
-  function handleSetupComplete() {
-    showSetupDialog = false;
-    showToast('Semantic search is ready', 'success');
-    clapState.refreshCacheSize();
-  }
-
-  function handleSetupCancel() {
-    showSetupDialog = false;
   }
 
   async function handleViewLogs() {
@@ -94,9 +153,9 @@
           </div>
         </div>
 
-        <!-- Setup / Info -->
+        <!-- Not configured / Error -->
         {#if clapState.setupStatus === 'not-configured' || clapState.setupStatus === 'error'}
-          <div class="flex items-center justify-between pt-3 border-t border-default">
+          <div class="flex items-center justify-between pt-3 border-t border-default gap-4">
             <div class="text-sm text-secondary">
               {#if clapState.setupError}
                 <span class="text-error">{clapState.setupError}</span>
@@ -106,13 +165,78 @@
             </div>
             <button
               onclick={handleSetup}
-              class="px-4 py-2 text-sm font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors"
+              class="shrink-0 px-4 py-2 text-sm font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors"
             >
-              {clapState.setupStatus === 'error' ? 'Retry Setup' : 'Set Up'}
+              {clapState.setupStatus === 'error' ? 'Retry' : 'Set Up'}
             </button>
           </div>
+
+        <!-- Setting up: inline progress -->
+        {:else if clapState.setupStatus === 'setting-up'}
+          <div class="pt-3 border-t border-default space-y-3">
+            {#if isFirstTimeSetup}
+              <p class="text-xs text-tertiary">
+                First-time setup downloads Python and the AI model. Keep this app open — closing it
+                will cancel the download.
+              </p>
+            {/if}
+            {#each steps as item (item.key)}
+              {@const status = stepStatus(item.key)}
+              <div class="flex items-center gap-3">
+                <div class="w-5 h-5 flex items-center justify-center shrink-0">
+                  {#if status === 'done'}
+                    <svg
+                      class="w-5 h-5 text-success"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M5 13l4 4L19 7"
+                      />
+                    </svg>
+                  {:else if status === 'running'}
+                    <div
+                      class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin"
+                    ></div>
+                  {:else if status === 'error'}
+                    <svg
+                      class="w-5 h-5 text-error"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  {:else}
+                    <div class="w-4 h-4 rounded-full border-2 border-default"></div>
+                  {/if}
+                </div>
+                <span class="text-sm flex-1 {status === 'idle' ? 'text-tertiary' : 'text-primary'}">
+                  {item.label}
+                </span>
+                {#if item.hint}
+                  <span class="text-xs text-tertiary">{item.hint}</span>
+                {/if}
+              </div>
+            {/each}
+            {#if clapState.startupDetail}
+              <div class="rounded bg-primary px-2 py-1.5">
+                <p class="text-xs text-tertiary font-mono truncate">{clapState.startupDetail}</p>
+              </div>
+            {/if}
+          </div>
+
+        <!-- Ready: device/model info -->
         {:else if clapState.setupStatus === 'ready'}
-          <!-- Runtime Info -->
           <div class="pt-3 border-t border-default space-y-2">
             <div class="flex items-center justify-between text-sm">
               <span class="text-tertiary">Device</span>
@@ -125,6 +249,8 @@
               <span class="text-secondary font-mono text-xs">{clapState.model ?? 'Unknown'}</span>
             </div>
           </div>
+
+        <!-- Offline: restart button -->
         {:else if clapState.setupStatus === 'offline'}
           <div class="flex items-center justify-between pt-3 border-t border-default">
             <span class="text-sm text-secondary">CLAP server not running</span>
@@ -203,7 +329,3 @@
     </section>
   </div>
 </div>
-
-{#if showSetupDialog}
-  <ClapSetupDialog onComplete={handleSetupComplete} onCancel={handleSetupCancel} />
-{/if}
