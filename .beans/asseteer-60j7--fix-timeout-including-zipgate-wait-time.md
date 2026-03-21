@@ -1,11 +1,11 @@
 ---
 # asseteer-60j7
 title: Separate cache/gate wait from processing timeouts for all nested-ZIP processors
-status: todo
+status: completed
 type: bug
 priority: high
 created_at: 2026-03-21T09:36:39Z
-updated_at: 2026-03-21T09:36:39Z
+updated_at: 2026-03-21T11:20:05Z
 parent: asseteer-k1go
 ---
 
@@ -81,13 +81,24 @@ Note: when `tokio::time::timeout` fires, it drops the future but the `spawn_bloc
 
 ## Implementation plan
 
-- [ ] Refactor `process_audio()`: load bytes outside timeout, wrap only Symphonia probing
-- [ ] Refactor `process_image()`: load bytes outside timeout, wrap only image decode + thumbnail
-- [ ] Refactor `generate_thumbnail_for_asset()`: same pattern
-- [ ] Consider adding nested ZIP timeout distinction for image processing (currently always 30s)
-- [ ] Verify existing tests still pass
+- [x] Refactor `process_audio()`: load bytes outside timeout, wrap only Symphonia probing
+- [x] Refactor `process_image()`: load bytes outside timeout, wrap only image decode + thumbnail
+- [x] Refactor `generate_thumbnail_for_asset()`: same pattern
+- [x] Add nested ZIP timeout distinction for image processing (was always 30s, now uses NESTED_ZIP_PROCESSING_TIMEOUT)
+- [x] Verify existing tests still pass (9/9 passed)
 
 ## Testing notes
 
 - Existing tests in `src-tauri/src/task_system/` should still pass
 - Hard to unit test gate contention, but the timeout logic change is straightforward
+
+## Summary of Changes
+
+Refactored all three nested-ZIP processing paths in `processor.rs` to separate byte loading (gate/cache wait) from the processing timeout:
+
+- **`process_image()`**: Bytes loaded in a separate `spawn_blocking` with no timeout, then image decode + thumbnail generation wrapped in a timeout. Added nested ZIP timeout distinction (was always 30s).
+- **`generate_thumbnail_for_asset()`**: Same pattern — bytes loaded first, then decode + resize + encode under timeout. Added nested ZIP timeout distinction.
+- **`process_audio()`**: Bytes loaded (with existing slow-load warning) in a separate `spawn_blocking`, then Symphonia probing under timeout.
+- Reduced `NESTED_ZIP_PROCESSING_TIMEOUT` from 120s to 60s since it no longer includes gate wait time.
+
+All 9 existing tests pass.

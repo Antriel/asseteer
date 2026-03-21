@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 /// Timeout for processing a single asset (30 seconds)
 const PROCESSING_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Timeout for nested ZIP assets (2 minutes — cache fills can take tens of seconds)
-const NESTED_ZIP_PROCESSING_TIMEOUT: Duration = Duration::from_secs(120);
+/// Timeout for nested ZIP assets (processing only — gate/cache wait is excluded)
+const NESTED_ZIP_PROCESSING_TIMEOUT: Duration = Duration::from_secs(60);
 
 
 /// Result of processing an asset
@@ -39,17 +39,23 @@ pub async fn process_asset(asset: &Asset, db: &SqlitePool, pre_generate_thumbnai
 /// Process an image asset. Extracts dimensions; optionally generates thumbnail inline.
 async fn process_image(asset: &Asset, db: &SqlitePool, pre_generate_thumbnails: bool) -> ProcessingResult {
     let asset_id = asset.id;
+    let uses_nested_zip = zip_cache::is_nested_zip_asset(asset);
 
+    // Load bytes outside the processing timeout — gate/cache wait is not counted
     let asset_clone = asset.clone();
+    let bytes = match tokio::task::spawn_blocking(move || {
+        zip_cache::load_asset_bytes_cached(&asset_clone)
+    }).await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(e)) => return ProcessingResult { asset_id, success: false, error: Some(e) },
+        Err(e) => return ProcessingResult { asset_id, success: false, error: Some(format!("Task join error: {}", e)) },
+    };
 
-    // Run CPU-intensive work in blocking thread with timeout
+    // Timeout covers only CPU-intensive processing (decode + optional thumbnail)
+    let timeout = if uses_nested_zip { NESTED_ZIP_PROCESSING_TIMEOUT } else { PROCESSING_TIMEOUT };
     let result = tokio::time::timeout(
-        PROCESSING_TIMEOUT,
+        timeout,
         tokio::task::spawn_blocking(move || {
-            // Load image bytes (cached for nested ZIPs)
-            let bytes = zip_cache::load_asset_bytes_cached(&asset_clone)?;
-
-            // Load image from memory
             let img = image::load_from_memory(&bytes)
                 .map_err(|e| format!("Failed to decode image: {}", e))?;
 
@@ -139,12 +145,21 @@ async fn process_image(asset: &Asset, db: &SqlitePool, pre_generate_thumbnails: 
 pub async fn generate_thumbnail_for_asset(
     asset: &Asset,
 ) -> Result<(i32, i32, Vec<u8>), String> {
-    let asset_clone = asset.clone();
+    let uses_nested_zip = zip_cache::is_nested_zip_asset(asset);
 
+    // Load bytes outside the processing timeout — gate/cache wait is not counted
+    let asset_clone = asset.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        zip_cache::load_asset_bytes_cached(&asset_clone)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))??;
+
+    // Timeout covers only CPU-intensive processing (decode + resize + encode)
+    let timeout = if uses_nested_zip { NESTED_ZIP_PROCESSING_TIMEOUT } else { PROCESSING_TIMEOUT };
     tokio::time::timeout(
-        PROCESSING_TIMEOUT,
+        timeout,
         tokio::task::spawn_blocking(move || {
-            let bytes = zip_cache::load_asset_bytes_cached(&asset_clone)?;
             let img = image::load_from_memory(&bytes)
                 .map_err(|e| format!("Failed to decode image: {}", e))?;
             let (width, height) = img.dimensions();
@@ -166,17 +181,16 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
 
     let asset_id = asset.id;
     let uses_nested_zip = zip_cache::is_nested_zip_asset(asset);
-    let asset_clone = asset.clone();
 
     /// Warn threshold: log if audio asset load takes longer than this
     const AUDIO_LOAD_WARN_MS: u128 = 10000;
     /// Warn threshold: log if audio probe takes longer than this
     const AUDIO_PROBE_WARN_MS: u128 = 5000;
 
-    let blocking_task = tokio::task::spawn_blocking(move || {
+    // Load bytes outside the processing timeout — gate/cache wait is not counted
+    let asset_clone = asset.clone();
+    let bytes = match tokio::task::spawn_blocking(move || {
         let load_started = Instant::now();
-
-        // Load audio bytes (cached for nested ZIPs)
         let bytes = zip_cache::load_asset_bytes_cached(&asset_clone)?;
 
         let load_ms = load_started.elapsed().as_millis();
@@ -191,17 +205,24 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
             );
         }
 
-        // Create a cursor from the bytes for reading
+        Ok::<_, String>(bytes)
+    }).await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(e)) => return ProcessingResult { asset_id, success: false, error: Some(e) },
+        Err(e) => return ProcessingResult { asset_id, success: false, error: Some(format!("Task join error: {}", e)) },
+    };
+
+    // Timeout covers only CPU-intensive processing (audio probing)
+    let format_ext = asset.format.clone();
+    let blocking_task = tokio::task::spawn_blocking(move || {
         let cursor = std::io::Cursor::new(bytes);
         let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
-        // Set up hint from file extension
         let mut hint = Hint::new();
-        hint.with_extension(&asset_clone.format);
+        hint.with_extension(&format_ext);
 
         let probe_started = Instant::now();
 
-        // Probe the media format
         let probed = symphonia::default::get_probe()
             .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
             .map_err(|e| format!("Failed to probe audio format: {}", e))?;
@@ -209,8 +230,8 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
         let probe_ms = probe_started.elapsed().as_millis();
         if probe_ms > AUDIO_PROBE_WARN_MS {
             eprintln!(
-                "[AudioProcess] WARN slow probe asset_id={} file='{}' probe_ms={}",
-                asset_clone.id, asset_clone.filename, probe_ms
+                "[AudioProcess] WARN slow probe asset_id={} probe_ms={}",
+                asset_id, probe_ms
             );
         }
 
@@ -219,7 +240,6 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
             .default_track()
             .ok_or_else(|| "No audio track found".to_string())?;
 
-        // Extract codec parameters
         let codec_params = &track.codec_params;
         let sample_rate = codec_params.sample_rate.unwrap_or(0) as i32;
         let channels = codec_params
@@ -227,7 +247,6 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
             .map(|c| c.count() as i32)
             .unwrap_or(0);
 
-        // Calculate duration in milliseconds
         let duration_ms = if let Some(n_frames) = codec_params.n_frames {
             if sample_rate > 0 {
                 (n_frames as f64 / sample_rate as f64 * 1000.0) as i64
