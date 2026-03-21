@@ -6,7 +6,7 @@
   import { clapState } from '$lib/state/clap.svelte';
   import { exploreState } from '$lib/state/explore.svelte';
   import { getDatabase } from '$lib/database/connection';
-  import { getAssetTypeCounts } from '$lib/database/queries';
+  import { getAssetTypeCounts, getPendingClapCount } from '$lib/database/queries';
   import type { CategoryProgress } from '$lib/types';
 
   import TabBar from '$lib/components/shared/TabBar.svelte';
@@ -19,6 +19,7 @@
   import Spinner from '$lib/components/shared/Spinner.svelte';
 
   let assetCounts = $state({ images: 0, audio: 0 });
+  let pendingClapCount = $state(0);
   let unlistenFns: UnlistenFn[] = [];
 
   async function refreshAssetCounts() {
@@ -26,10 +27,14 @@
     assetCounts = await getAssetTypeCounts(db);
   }
 
+  async function refreshPendingClapCount() {
+    pendingClapCount = await getPendingClapCount();
+  }
+
   onMount(async () => {
     console.log('[Library] onMount started');
     console.time('[Library] refreshAssetCounts');
-    await refreshAssetCounts();
+    await Promise.all([refreshAssetCounts(), refreshPendingClapCount()]);
     console.timeEnd('[Library] refreshAssetCounts');
 
     // Load assets for the current tab (persists across navigation)
@@ -65,8 +70,12 @@
       'processing-complete-audio',
       handleProcessingComplete,
     );
+    const unlistenClapComplete = await listen<CategoryProgress>(
+      'processing-complete-clap',
+      refreshPendingClapCount,
+    );
 
-    unlistenFns.push(unlistenScan, unlistenImageComplete, unlistenAudioComplete);
+    unlistenFns.push(unlistenScan, unlistenImageComplete, unlistenAudioComplete, unlistenClapComplete);
   });
 
   onDestroy(() => {
@@ -212,6 +221,24 @@
             <p class="text-primary font-medium">No {viewState.activeTab} in this folder</p>
             <p class="text-sm text-secondary">
               This folder doesn't contain any {viewState.activeTab}
+            </p>
+          {:else if isSemanticModeEnabled && pendingClapCount === assetCounts.audio}
+            <p class="text-primary font-medium">No embeddings generated yet</p>
+            <p class="text-sm text-secondary text-center">
+              None of your {assetCounts.audio.toLocaleString()} audio files have been processed for semantic
+              search. Head to the <a
+                href="/processing"
+                class="text-accent-muted hover:underline">Processing tab</a
+              > to generate embeddings.
+            </p>
+          {:else if isSemanticModeEnabled && pendingClapCount > 0}
+            <p class="text-primary font-medium">No matching audio</p>
+            <p class="text-sm text-secondary text-center">
+              {(assetCounts.audio - pendingClapCount).toLocaleString()} of {assetCounts.audio.toLocaleString()}
+              audio files have embeddings. Try adjusting your query, or process more in the <a
+                href="/processing"
+                class="text-accent-muted hover:underline">Processing tab</a
+              >.
             </p>
           {:else}
             <p class="text-primary font-medium">No matching {viewState.activeTab}</p>
