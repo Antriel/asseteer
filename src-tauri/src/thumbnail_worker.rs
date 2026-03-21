@@ -372,51 +372,57 @@ async fn find_missing_thumbnails(pool: &SqlitePool, ids: &[i64]) -> Vec<i64> {
     if ids.is_empty() {
         return vec![];
     }
-    let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
-    let query = format!(
-        "SELECT a.id FROM assets a
-         LEFT JOIN image_metadata im ON a.id = im.asset_id
-         WHERE a.id IN ({}) AND a.asset_type = 'image'
-         AND (im.asset_id IS NULL OR im.thumbnail_data IS NULL)
-         AND NOT (im.width IS NOT NULL AND im.width <= 128 AND im.height IS NOT NULL AND im.height <= 128)
-         AND NOT (a.zip_entry IS NOT NULL AND a.zip_compression = 'store' AND a.zip_entry NOT LIKE '%.zip/%')",
-        placeholders.join(",")
-    );
-    let mut q = sqlx::query_as::<_, (i64,)>(&query);
-    for id in ids {
-        q = q.bind(id);
-    }
-    match q.fetch_all(pool).await {
-        Ok(rows) => rows.into_iter().map(|(id,)| id).collect(),
-        Err(e) => {
-            eprintln!("Failed to query missing thumbnails: {}", e);
-            vec![]
+    let mut result = Vec::new();
+    for chunk in ids.chunks(999) {
+        let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
+        let query = format!(
+            "SELECT a.id FROM assets a
+             LEFT JOIN image_metadata im ON a.id = im.asset_id
+             WHERE a.id IN ({}) AND a.asset_type = 'image'
+             AND (im.asset_id IS NULL OR im.thumbnail_data IS NULL)
+             AND NOT (im.width IS NOT NULL AND im.width <= 128 AND im.height IS NOT NULL AND im.height <= 128)
+             AND NOT (a.zip_entry IS NOT NULL AND a.zip_compression = 'store' AND a.zip_entry NOT LIKE '%.zip/%')",
+            placeholders.join(",")
+        );
+        let mut q = sqlx::query_as::<_, (i64,)>(&query);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        match q.fetch_all(pool).await {
+            Ok(rows) => result.extend(rows.into_iter().map(|(id,)| id)),
+            Err(e) => {
+                eprintln!("Failed to query missing thumbnails: {}", e);
+            }
         }
     }
+    result
 }
 
 async fn load_assets(pool: &SqlitePool, ids: &[i64]) -> Vec<Asset> {
     if ids.is_empty() {
         return vec![];
     }
-    let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
-    let query = format!(
-        "SELECT a.*, sf.path as folder_path FROM assets a
-         JOIN source_folders sf ON a.folder_id = sf.id
-         WHERE a.id IN ({})",
-        placeholders.join(",")
-    );
-    let mut q = sqlx::query_as::<_, Asset>(&query);
-    for id in ids {
-        q = q.bind(id);
-    }
-    match q.fetch_all(pool).await {
-        Ok(assets) => assets,
-        Err(e) => {
-            eprintln!("Failed to load assets: {}", e);
-            vec![]
+    let mut result = Vec::new();
+    for chunk in ids.chunks(999) {
+        let placeholders: Vec<String> = chunk.iter().map(|_| "?".to_string()).collect();
+        let query = format!(
+            "SELECT a.*, sf.path as folder_path FROM assets a
+             JOIN source_folders sf ON a.folder_id = sf.id
+             WHERE a.id IN ({})",
+            placeholders.join(",")
+        );
+        let mut q = sqlx::query_as::<_, Asset>(&query);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        match q.fetch_all(pool).await {
+            Ok(assets) => result.extend(assets),
+            Err(e) => {
+                eprintln!("Failed to load assets: {}", e);
+            }
         }
     }
+    result
 }
 
 fn now_millis() -> u64 {
