@@ -17,6 +17,7 @@
   import AssetList from '$lib/components/AssetList.svelte';
   import ImageLightbox from '$lib/components/modals/ImageLightbox.svelte';
   import Spinner from '$lib/components/shared/Spinner.svelte';
+  import { SearchIcon, InboxIcon } from '$lib/components/icons';
 
   let assetCounts = $state({ images: 0, audio: 0 });
   let pendingClapCount = $state(0);
@@ -141,19 +142,7 @@
       {:else if !hasAnyFilter && activeAssets.length === 0}
         <!-- Empty state: No search query and no folder selected -->
         <div class="flex flex-col items-center justify-center h-full gap-4">
-          <svg
-            class="w-16 h-16 text-tertiary"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.5"
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-            />
-          </svg>
+          <SearchIcon size="xl" class="text-tertiary" />
           <p class="text-primary font-medium">Search your {viewState.activeTab}</p>
           <p class="text-sm text-secondary">
             {#if assetsState.totalMatchingCount > 0}
@@ -167,19 +156,7 @@
       {:else if activeAssets.length === 0}
         <!-- Empty state: Filter active but no results -->
         <div class="flex flex-col items-center justify-center h-full gap-4">
-          <svg
-            class="w-16 h-16 text-tertiary"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="1.5"
-              d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
-            />
-          </svg>
+          <InboxIcon size="xl" class="text-tertiary" />
           {#if assetsState.folderLocation && hasActiveSearch}
             <p class="text-primary font-medium">No results found</p>
             <p class="text-sm text-secondary text-center">

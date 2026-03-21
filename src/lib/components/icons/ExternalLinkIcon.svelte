@@ -1,6 +1,6 @@
 <script lang="ts">
   interface Props {
-    size?: 'sm' | 'md' | 'lg' | 'xl';
+    size?: 'sm' | 'md' | 'lg';
     class?: string;
   }
 
@@ -10,7 +10,6 @@
     sm: 'w-4 h-4',
     md: 'w-5 h-5',
     lg: 'w-6 h-6',
-    xl: 'w-16 h-16',
   };
 </script>
 
@@ -19,6 +18,6 @@
     stroke-linecap="round"
     stroke-linejoin="round"
     stroke-width="2"
-    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+    d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
   />
 </svg>

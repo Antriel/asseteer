@@ -4,7 +4,7 @@
   import AudioPlayer from './AudioPlayer.svelte';
   import VirtualList from './shared/VirtualList.svelte';
   import AssetContextMenu from './shared/AssetContextMenu.svelte';
-  import { AudioIcon, FolderIcon, SearchIcon } from './icons';
+  import { AudioIcon, FolderIcon, SearchIcon, ExternalLinkIcon, SimilarIcon } from './icons';
   import Badge from './shared/Badge.svelte';
   import { viewState } from '$lib/state/view.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
@@ -200,9 +200,7 @@
           onclick={() => findSimilar(selectedAsset!)}
           title="Find similar sounds"
         >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
+          <SimilarIcon size="sm" />
         </button>
         <button
           class="w-8 h-8 flex items-center justify-center text-secondary hover:text-accent border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
@@ -216,14 +214,7 @@
           onclick={() => openDirectory(selectedAsset!)}
           title="Open in file explorer"
         >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-            />
-          </svg>
+          <ExternalLinkIcon size="sm" />
         </button>
       </div>
       <AudioPlayer
@@ -344,9 +335,7 @@
         class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
         onclick={() => findSimilar(contextMenu!.asset)}
       >
-        <svg class="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-        </svg>
+        <SimilarIcon size="sm" class="text-purple-500" />
         Find Similar Sounds
       </button>
     {/snippet}
