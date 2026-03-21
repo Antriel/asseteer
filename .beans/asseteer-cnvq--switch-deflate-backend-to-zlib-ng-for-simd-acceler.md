@@ -55,6 +55,16 @@ Benefits every ZIP operation in the app:
 - Thumbnail generation: extracting image bytes from ZIPs
 - Asset playback/preview: loading asset bytes from ZIPs on demand
 
+## Transitive flate2 effect
+
+The project also depends on `flate2` directly (Cargo.toml line 59, used for tar.gz extraction of the uv binary). The `zip` crate pulls in `flate2` as well. Cargo unifies features additively — enabling `zlib-ng` via the zip crate will affect all `flate2` usage project-wide (the `zlib-ng` backend takes priority over `rust_backend`). This is fine and actually beneficial (faster tar.gz extraction too), but should be verified with a clean build and test run.
+
 ## Files to modify
 
 - `src-tauri/Cargo.toml` — change `deflate` to `deflate-zlib-ng` in zip features (line 38)
+
+## Verification
+
+- [ ] `cargo build` succeeds (zlib-ng compiles from C source via cmake)
+- [ ] `cargo test` passes
+- [ ] Cross-compile check if CI targets multiple platforms (cmake + C compiler required)

@@ -33,30 +33,14 @@ ZipGate wait times escalate through the session as convoy builds:
 
 2. **Only consecutive grouping**: If the asset list has `[zip_a_file1, zip_b_file1, zip_a_file2]`, zip_a gets two separate batches instead of one.
 
-## Suggested fix
+## CLAP processing note
 
-### For Audio/Image processing (already has partial locality awareness)
-
-1. **Sort all assets by nested ZIP key before batching** — group globally, not just consecutive runs
-2. **Remove or significantly increase NESTED_ZIP_BATCH_SIZE** — process ALL items from a nested ZIP as a single batch. The ZipGate already ensures only one key is active at a time, so a batch of 40 items from the same ZIP is fine. The batch size cap was meant to limit memory, but the actual bytes are loaded one at a time within the batch.
-
-### For CLAP processing (NO locality awareness currently)
-
-CLAP uses simple `assets.chunks(CLAP_BATCH_SIZE)` with no ZIP grouping at all (line 138-146). Within each CLAP batch, `process_clap_embedding_batch()` calls `zip_cache::load_asset_bytes_cached()` for each zip asset (processor.rs:337). If a batch of 8 contains assets from 3 different nested ZIPs, the cache thrashes 3 times within that single batch.
-
-CLAP batches should also be grouped by nested ZIP key. Since CLAP concurrency is 1 (single worker), this is straightforward — just sort/group assets before chunking.
-
-## Implementation plan
-
-- [ ] In `build_work_batches()`, sort assets by `nested_zip_group_key()` before iterating
-- [ ] Remove or greatly increase `NESTED_ZIP_BATCH_SIZE` (consider making it unlimited for same-key batches)
-- [ ] Add ZIP locality grouping for CLAP batch building (sort before `chunks(CLAP_BATCH_SIZE)`)
-- [ ] Consider: within a CLAP batch, load bytes grouped by nested ZIP (load all from same zip before moving to next)
+CLAP has implicit locality from the SQL ORDER BY (`folder_id, rel_path, zip_file, zip_entry` in `process.rs:57-64`), so assets from the same nested ZIP are mostly consecutive in the input. However, `build_work_batches` for CLAP uses blind `chunks(CLAP_BATCH_SIZE)` which doesn't respect ZIP key boundaries — a chunk of 8 can span the boundary between two nested ZIPs, causing cache thrashing within that batch. The fix is to ensure CLAP chunk boundaries align with ZIP key boundaries.
 
 ## Files to modify
 
-- `src-tauri/src/task_system/work_queue.rs` — `build_work_batches()` (lines 131-199), constants at top
-- `src-tauri/src/task_system/processor.rs` — `process_clap_embedding_batch()` (lines 313-420), byte loading loop
+- `src-tauri/src/task_system/work_queue.rs` — `build_work_batches()` (lines 131-199), dispatch logic, constants
+- `src-tauri/src/task_system/processor.rs` — `process_clap_embedding_batch()` (lines 313-420), byte loading order within a batch
 
 ## Current code reference
 
@@ -65,7 +49,7 @@ CLAP batches should also be grouped by nested ZIP key. Since CLAP concurrency is
 const CLAP_BATCH_SIZE: usize = 8;
 const NESTED_ZIP_BATCH_SIZE: usize = 8;
 
-// CLAP batching — no locality awareness
+// CLAP batching — chunks without respecting ZIP key boundaries
 ProcessingCategory::Clap => assets
     .chunks(CLAP_BATCH_SIZE)
     .map(|chunk| WorkBatch { ... })
@@ -88,8 +72,7 @@ for asset in assets {
 }
 ```
 
-
-## Revised design: Staged dispatch (supersedes "Suggested fix" above)
+## Design: Staged dispatch
 
 ### Why simple sorting isn't enough
 

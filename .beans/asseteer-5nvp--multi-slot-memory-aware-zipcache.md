@@ -19,6 +19,15 @@ The current ZipCache (`zip_cache.rs`) is a single-slot cache: only one decompres
 - Future multi-category parallel processing
 - Very large bundles with many small nested ZIPs where round-robin between a few would benefit from keeping 2-3 hot
 
+## Bug: Cross-category cache interference
+
+When ANY category completes or is stopped, `zip_cache::clear()` is called globally (`work_queue.rs:477` and `work_queue.rs:530`). This means if Audio processing finishes while CLAP is still running and using the cache, the cache gets cleared. Active `Arc<Vec<u8>>` clones survive (no crash), but the next CLAP cache access forces a full re-decompression.
+
+This must be addressed as part of the multi-slot cache work:
+- With per-entry reference counting and pinning, `clear()` should only evict unpinned entries
+- Or: `clear()` should check if any other category is still running before evicting
+- The staged dispatcher (asseteer-fbpx) should also be aware of this — when one category finishes, it shouldn't nuke another category's active cache entries
+
 ## Current architecture
 
 ```rust
@@ -109,25 +118,11 @@ struct MultiSlotCache {
 - Possibly `src-tauri/src/task_system/work_queue.rs` — if ZipGate behavior changes affect worker coordination
 
 
-## Additional use case: parallel scan/import
+## Future use case: parallel scan/import (not in scope, but informs design)
 
-The memory budget system built for this cache should also be reusable for the scan/import phase. During import, nested ZIPs must be fully decompressed into memory to enumerate their entries (~633 MB average, up to 1.2 GB). Currently this is fully serial (single thread, single nested ZIP at a time). With a shared memory budget, the scan phase could parallelize outer ZIP processing while respecting the same memory limits:
+The memory budget system built for this cache should be designed as a reusable utility that other subsystems can leverage. The scan/import phase is one such consumer: nested ZIPs must be fully decompressed into memory to enumerate their entries (~633 MB average, up to 1.2 GB), currently fully serial. With a shared memory budget, the scan phase could parallelize outer ZIP processing while respecting the same memory limits. This is a separate piece of work, but the memory budget API should be extracted as a standalone module rather than coupled to the ZipCache internals.
 
-- Use the memory budget to decide how many nested ZIPs can be decompressed concurrently (e.g., 2-4 depending on available RAM)
-- The scan phase doesn't need caching (it doesn't re-read the same ZIP), but it needs the same memory accounting
-- Consider extracting the memory budget as a standalone utility that both ZipCache and scan can use
-- `rayon` is already a dependency and could be used with a semaphore governed by the memory budget
-
-### Relevant scan code
-
-In `src-tauri/src/commands/scan.rs`, the scan is single-threaded:
-- `WalkDir` iterates filesystem entries serially (line ~300+)
-- When a `.zip` is found, `discover_zip_streaming()` opens it (line 362)
-- For nested ZIPs inside, `entry.read_to_end(&mut buffer)` decompresses the full nested ZIP into a `Vec<u8>` (line 568-571)
-- Then `ZipArchive::new(cursor)` enumerates its entries (line 574)
-- All of this happens on a single blocking thread
-
-With memory-aware parallelism, multiple outer ZIPs could be scanned concurrently, each decompressing their nested ZIPs in parallel, bounded by available system memory.
+Key scan code reference: `src-tauri/src/commands/scan.rs` — `discover_zip_recursive_streaming()` decompresses nested ZIPs via `entry.read_to_end(&mut buffer)` (line 568-571) on a single blocking thread. `rayon` is already a dependency.
 
 
 ## Revised design: Cache-aware dispatcher (supersedes earlier concurrency model section)
