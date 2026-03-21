@@ -1,11 +1,11 @@
 ---
 # asseteer-cnvq
 title: Switch deflate backend to zlib-ng for SIMD-accelerated decompression
-status: todo
+status: completed
 type: task
 priority: high
 created_at: 2026-03-21T10:04:04Z
-updated_at: 2026-03-21T10:04:04Z
+updated_at: 2026-03-21T11:15:22Z
 parent: asseteer-k1go
 ---
 
@@ -65,6 +65,10 @@ The project also depends on `flate2` directly (Cargo.toml line 59, used for tar.
 
 ## Verification
 
-- [ ] `cargo build` succeeds (zlib-ng compiles from C source via cmake)
-- [ ] `cargo test` passes
-- [ ] Cross-compile check if CI targets multiple platforms (cmake + C compiler required)
+- [x] `cargo build` succeeds (zlib-ng compiles from C source via cmake)
+- [x] `cargo test` passes
+- [x] Cross-compile check if CI targets multiple platforms (cmake + C compiler required)
+
+## Summary of Changes
+
+Switched zip crate deflate backend from `miniz_oxide` (pure Rust, no SIMD) to `zlib-ng` (C with runtime SIMD detection) by changing `deflate` to `deflate-zlib-ng` in `src-tauri/Cargo.toml`. This provides ~2-3x faster decompression for all ZIP operations (scan/import, audio processing, thumbnails, asset playback). Also benefits `flate2` usage (tar.gz extraction) via Cargo feature unification.
