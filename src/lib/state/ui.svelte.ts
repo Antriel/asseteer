@@ -24,10 +24,6 @@ class UIState {
     currentPath: null,
   });
 
-  // Processing state
-  isProcessing = $state(false);
-  processProgress = $state('');
-
   // Toast notifications
   toasts = $state<Toast[]>([]);
 
