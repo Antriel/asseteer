@@ -86,6 +86,7 @@ pub fn make_asset(filename: &str, folder_id: i64, rel_path: &str, asset_type: &s
         rel_path: rel_path.to_string(),
         zip_file: None,
         zip_entry: None,
+        zip_compression: None,
         asset_type: asset_type.to_string(),
         format: format.to_string(),
         file_size: 1024,

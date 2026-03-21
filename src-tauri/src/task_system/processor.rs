@@ -672,6 +672,7 @@ mod tests {
             rel_path: "".into(),
             zip_file: None,
             zip_entry: None,
+            zip_compression: None,
             asset_type: "image".into(),
             format: "png".into(),
             file_size: 0,

@@ -657,7 +657,7 @@ impl WorkQueue {
         state.completed_assets.store(0, Ordering::SeqCst);
         state.failed_assets.store(0, Ordering::SeqCst);
 
-        for batch in Self::build_work_batches(category, generation, assets) {
+        for batch in Self::build_work_batches(category, generation, assets, false) {
             self.work_tx
                 .send(batch)
                 .map_err(|e| format!("Failed to queue: {}", e))?;
@@ -860,7 +860,7 @@ mod tests {
             make_nested_batch_asset("pack_b.zip", "inner_b.zip/five.wav", "five.wav"),
         ];
 
-        let batches = WorkQueue::build_work_batches(ProcessingCategory::Audio, 7, assets);
+        let batches = WorkQueue::build_work_batches(ProcessingCategory::Audio, 7, assets, false);
         let batch_sizes: Vec<usize> = batches.iter().map(|batch| batch.assets.len()).collect();
 
         assert_eq!(batch_sizes, vec![3, 1, 2]);
@@ -880,7 +880,7 @@ mod tests {
             })
             .collect();
 
-        let batches = WorkQueue::build_work_batches(ProcessingCategory::Audio, 3, assets);
+        let batches = WorkQueue::build_work_batches(ProcessingCategory::Audio, 3, assets, false);
         let batch_sizes: Vec<usize> = batches.iter().map(|batch| batch.assets.len()).collect();
 
         assert_eq!(batch_sizes, vec![NESTED_ZIP_BATCH_SIZE, 2]);
