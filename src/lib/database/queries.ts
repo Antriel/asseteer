@@ -65,76 +65,20 @@ function buildFtsCondition(
 }
 
 /**
- * Search for assets with optional full-text search and filtering
+ * Build shared filter conditions for searchAssets and countSearchResults.
+ * Returns conditions, params, and an audioJoin clause (needed by countSearchResults,
+ * which doesn't include ASSET_JOINS automatically).
  */
-export async function searchAssets(
-  db: Database,
-  searchText?: string,
-  assetType?: string,
-  limit: number = 50,
-  offset: number = 0,
-  durationFilter?: DurationFilter,
-  folderLocation?: FolderLocation | null,
-  searchColumn: SearchColumn = 'anywhere',
-): Promise<Asset[]> {
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-
-  // Use dual FTS tables for search
-  if (searchText?.trim()) {
-    buildFtsCondition(searchText, searchColumn, conditions, params);
-  }
-
-  if (assetType) {
-    conditions.push('assets.asset_type = ?');
-    params.push(assetType);
-  }
-
-  if (folderLocation) {
-    addFolderFilterConditions(folderLocation, conditions, params);
-  }
-
-  // Duration filter (only applies to audio assets)
-  if (durationFilter) {
-    if (durationFilter.minMs !== null) {
-      conditions.push('audio_metadata.duration_ms >= ?');
-      params.push(durationFilter.minMs);
-    }
-    if (durationFilter.maxMs !== null) {
-      conditions.push('audio_metadata.duration_ms <= ?');
-      params.push(durationFilter.maxMs);
-    }
-  }
-
-  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-
-  const query = `
-		${ASSET_SELECT}
-		${ASSET_JOINS}
-		${whereClause}
-		ORDER BY assets.filename COLLATE NOCASE ASC
-		LIMIT ? OFFSET ?
-	`;
-
-  params.push(limit, offset);
-  return db.select<Asset[]>(query, params);
-}
-
-/**
- * Count assets matching a search query (same filters as searchAssets, but returns count)
- */
-export async function countSearchResults(
-  db: Database,
+function buildFilterConditions(
   searchText?: string,
   assetType?: string,
   durationFilter?: DurationFilter,
   folderLocation?: FolderLocation | null,
   searchColumn: SearchColumn = 'anywhere',
-): Promise<number> {
+): { conditions: string[]; params: unknown[]; audioJoin: string } {
   const conditions: string[] = [];
   const params: unknown[] = [];
 
-  // Use dual FTS tables for search
   if (searchText?.trim()) {
     buildFtsCondition(searchText, searchColumn, conditions, params);
   }
@@ -163,6 +107,49 @@ export async function countSearchResults(
     }
   }
 
+  return { conditions, params, audioJoin };
+}
+
+/**
+ * Search for assets with optional full-text search and filtering
+ */
+export async function searchAssets(
+  db: Database,
+  searchText?: string,
+  assetType?: string,
+  limit: number = 50,
+  offset: number = 0,
+  durationFilter?: DurationFilter,
+  folderLocation?: FolderLocation | null,
+  searchColumn: SearchColumn = 'anywhere',
+): Promise<Asset[]> {
+  const { conditions, params } = buildFilterConditions(searchText, assetType, durationFilter, folderLocation, searchColumn);
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const query = `
+		${ASSET_SELECT}
+		${ASSET_JOINS}
+		${whereClause}
+		ORDER BY assets.filename COLLATE NOCASE ASC
+		LIMIT ? OFFSET ?
+	`;
+
+  params.push(limit, offset);
+  return db.select<Asset[]>(query, params);
+}
+
+/**
+ * Count assets matching a search query (same filters as searchAssets, but returns count)
+ */
+export async function countSearchResults(
+  db: Database,
+  searchText?: string,
+  assetType?: string,
+  durationFilter?: DurationFilter,
+  folderLocation?: FolderLocation | null,
+  searchColumn: SearchColumn = 'anywhere',
+): Promise<number> {
+  const { conditions, params, audioJoin } = buildFilterConditions(searchText, assetType, durationFilter, folderLocation, searchColumn);
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const query = `SELECT COUNT(*) FROM assets ${audioJoin} ${whereClause}`;
