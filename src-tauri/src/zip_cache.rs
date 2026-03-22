@@ -1,46 +1,101 @@
-//! Global cache for nested ZIP archives.
+//! Multi-slot memory-aware cache for nested ZIP archives.
 //!
-//! Holds one decompressed nested ZIP as shared immutable bytes.
-//! A short mutex/condvar section coordinates cache population so that
-//! only one thread loads a given nested ZIP at a time, while cache hits
-//! can then be read in parallel by opening fresh `ZipArchive`s over the
-//! shared bytes.
+//! Holds multiple decompressed nested ZIPs as shared immutable bytes,
+//! bounded by a memory budget derived from available system RAM.
+//! LRU eviction removes the least-recently-used unpinned entries when
+//! the budget is exceeded. Per-entry reference counting prevents eviction
+//! of entries that are actively being read.
 
 use crate::models::Asset;
 use crate::utils::{load_asset_bytes, resolve_zip_path};
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 use zip::ZipArchive;
 
-struct CachedInnerZip {
-    key: String,
-    bytes: Arc<Vec<u8>>,
+const MB: f64 = 1024.0 * 1024.0;
+const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+
+/// Default estimate for decompressed nested ZIP size before actual size is known.
+/// INVARIANT: must be <= MIN_BUDGET_BYTES. On an empty cache the eviction check is
+/// `0 + DEFAULT_ESTIMATED_SIZE > budget_bytes`; if this were true we'd try to evict
+/// but find nothing to evict, then allow the load anyway — however the load would be
+/// counted as over-budget from the start. Keeping this <= MIN_BUDGET_BYTES guarantees
+/// an empty cache never triggers that over-budget path.
+const DEFAULT_ESTIMATED_SIZE: usize = 1024 * 1024 * 1024; // 1 GB
+
+/// Maximum memory budget cap
+const MAX_BUDGET_BYTES: usize = 8 * 1024 * 1024 * 1024; // 8 GB
+
+/// Minimum memory budget floor (must hold at least one entry).
+/// Must be >= DEFAULT_ESTIMATED_SIZE — see comment on that constant.
+const MIN_BUDGET_BYTES: usize = 1024 * 1024 * 1024; // 1 GB
+
+/// Warn threshold: log if cache wait takes longer than this
+const CACHE_WAIT_WARN_MS: u128 = 5000;
+
+/// Warn threshold: log if decompression takes longer than this
+const CACHE_LOAD_WARN_MS: u128 = 10000;
+
+// --- Cache data structures ---
+
+enum EntryState {
+    /// A thread is actively decompressing this nested ZIP
+    Loading,
+    /// Decompressed bytes are available
+    Ready {
+        bytes: Arc<Vec<u8>>,
+        size_bytes: usize,
+    },
 }
 
-#[derive(Default)]
-struct ActiveKeyState {
-    active_key: Option<String>,
+struct CacheEntry {
+    state: EntryState,
+    /// Number of threads currently using this entry. Cannot evict if > 0.
     active_users: usize,
+    /// LRU tracking: higher value = more recently used
+    last_access: u64,
 }
 
-enum CacheState {
-    Empty,
-    Loading(String),
-    Ready(CachedInnerZip),
+struct ZipCacheInner {
+    entries: HashMap<String, CacheEntry>,
+    access_counter: u64,
+    total_cached_bytes: usize,
+    budget_bytes: usize,
 }
 
-static CACHE: Mutex<CacheState> = Mutex::new(CacheState::Empty);
-static CACHE_READY: Condvar = Condvar::new();
-static ACTIVE_KEY: Mutex<ActiveKeyState> = Mutex::new(ActiveKeyState {
-    active_key: None,
-    active_users: 0,
+static CACHE: Lazy<Mutex<ZipCacheInner>> = Lazy::new(|| {
+    let budget = compute_budget_bytes();
+    Mutex::new(ZipCacheInner {
+        entries: HashMap::new(),
+        access_counter: 0,
+        total_cached_bytes: 0,
+        budget_bytes: budget,
+    })
 });
-static ACTIVE_KEY_READY: Condvar = Condvar::new();
 
-struct ActiveKeyGuard {
+/// Woken whenever an entry transitions (Loading → Ready, entry evicted/removed)
+static CACHE_CHANGED: Condvar = Condvar::new();
+
+/// RAII guard that decrements an entry's active_users on drop.
+struct ActiveEntryGuard {
     key: String,
 }
+
+impl Drop for ActiveEntryGuard {
+    fn drop(&mut self) {
+        if let Ok(mut cache) = CACHE.lock() {
+            if let Some(entry) = cache.entries.get_mut(&self.key) {
+                entry.active_users = entry.active_users.saturating_sub(1);
+            }
+            CACHE_CHANGED.notify_all();
+        }
+    }
+}
+
+// --- Public API ---
 
 /// Load asset bytes, using a shared cache for nested ZIP archives.
 ///
@@ -61,9 +116,9 @@ pub fn load_asset_bytes_cached(asset: &Asset) -> Result<Vec<u8>, String> {
 
     let outer_zip_path = resolve_zip_path(asset);
     let key = compose_cache_key(&outer_zip_path, nested_zip_path);
-    let _active_key_guard = acquire_active_nested_zip_key(&key)?;
-    let cached_zip = get_cached_nested_zip_bytes(&outer_zip_path, nested_zip_path)?;
-    load_entry_from_shared_zip_bytes(&cached_zip, inner_entry, nested_zip_path)
+
+    let (cached_bytes, _guard) = get_or_load_cached_bytes(&key, &outer_zip_path, nested_zip_path)?;
+    load_entry_from_shared_zip_bytes(&cached_bytes, inner_entry, nested_zip_path)
 }
 
 /// Group key used by scheduling to keep adjacent files from the same nested ZIP together.
@@ -77,131 +132,269 @@ pub fn is_nested_zip_asset(asset: &Asset) -> bool {
     nested_zip_group_key(asset).is_some()
 }
 
-/// Warn threshold: log if waiting longer than this for active key
-const GATE_WAIT_WARN_MS: u128 = 5000;
+/// Evict all cache entries that have no active users.
+/// Safe to call while other categories are still processing — pinned entries survive.
+pub fn evict_unpinned() {
+    if let Ok(mut cache) = CACHE.lock() {
+        let keys_to_evict: Vec<String> = cache
+            .entries
+            .iter()
+            .filter(|(_, e)| e.active_users == 0 && matches!(e.state, EntryState::Ready { .. }))
+            .map(|(k, _)| k.clone())
+            .collect();
 
-fn acquire_active_nested_zip_key(key: &str) -> Result<ActiveKeyGuard, String> {
-    let wait_started = Instant::now();
-    let mut guard = ACTIVE_KEY
-        .lock()
-        .map_err(|e| format!("Active-key lock poisoned: {}", e))?;
-
-    loop {
-        match &guard.active_key {
-            Some(active_key) if active_key == key => {
-                guard.active_users += 1;
-                let waited = wait_started.elapsed().as_millis();
-                if waited > GATE_WAIT_WARN_MS {
-                    eprintln!(
-                        "[ZipGate] WARN slow JOIN key='{}' waited_ms={} active_users={}",
-                        key, waited, guard.active_users
+        for key in &keys_to_evict {
+            if let Some(entry) = cache.entries.remove(key) {
+                if let EntryState::Ready { size_bytes, .. } = entry.state {
+                    cache.total_cached_bytes -= size_bytes;
+                    println!(
+                        "[ZipCache] EVICT key='{}' size_mb={:.1} reason=unpinned_cleanup",
+                        key,
+                        size_bytes as f64 / MB
                     );
                 }
-                return Ok(ActiveKeyGuard {
-                    key: key.to_string(),
-                });
-            }
-            Some(_active_key) => {
-                guard = ACTIVE_KEY_READY
-                    .wait(guard)
-                    .map_err(|e| format!("Active-key lock poisoned: {}", e))?;
-            }
-            None => {
-                guard.active_key = Some(key.to_string());
-                guard.active_users = 1;
-                let waited = wait_started.elapsed().as_millis();
-                if waited > GATE_WAIT_WARN_MS {
-                    eprintln!(
-                        "[ZipGate] WARN slow ACTIVATE key='{}' waited_ms={}",
-                        key, waited
-                    );
-                }
-                return Ok(ActiveKeyGuard {
-                    key: key.to_string(),
-                });
             }
         }
+
+        // Remove stale Loading entries with no active users
+        cache.entries.retain(|_, e| {
+            !(matches!(e.state, EntryState::Loading) && e.active_users == 0)
+        });
+
+        CACHE_CHANGED.notify_all();
     }
 }
 
-/// Warn threshold: log if cache wait or load takes longer than this
-const CACHE_WAIT_WARN_MS: u128 = 5000;
-const CACHE_LOAD_WARN_MS: u128 = 10000;
+/// Hard clear: evict everything. Only call when ALL processing is stopped.
+#[allow(dead_code)]
+pub fn clear() {
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.entries.clear();
+        cache.total_cached_bytes = 0;
+        CACHE_CHANGED.notify_all();
+    }
+}
 
-fn get_cached_nested_zip_bytes(
+/// Current memory budget in bytes.
+pub fn budget_bytes() -> usize {
+    CACHE.lock().map(|c| c.budget_bytes).unwrap_or(0)
+}
+
+/// Total bytes currently cached.
+#[allow(dead_code)]
+pub fn cached_bytes() -> usize {
+    CACHE.lock().map(|c| c.total_cached_bytes).unwrap_or(0)
+}
+
+/// Number of entries currently in the cache.
+#[allow(dead_code)]
+pub fn entry_count() -> usize {
+    CACHE.lock().map(|c| c.entries.len()).unwrap_or(0)
+}
+
+// --- Core cache logic ---
+
+/// Get cached bytes for a key, or load them if not cached.
+/// Returns the shared bytes and an RAII guard that keeps the entry pinned.
+fn get_or_load_cached_bytes(
+    key: &str,
     outer_zip_path: &str,
     nested_zip_path: &str,
-) -> Result<Arc<Vec<u8>>, String> {
-    let key = compose_cache_key(outer_zip_path, nested_zip_path);
+) -> Result<(Arc<Vec<u8>>, ActiveEntryGuard), String> {
     let wait_started = Instant::now();
 
     loop {
-        let mut guard = CACHE
+        let mut cache = CACHE
             .lock()
             .map_err(|e| format!("Cache lock poisoned: {}", e))?;
 
-        match &*guard {
-            CacheState::Ready(cached) if cached.key == key => {
+        // Two-phase check: first extract data (immutable), then mutate.
+        // This avoids borrow-checker conflicts from simultaneous field access.
+        let state = cache.entries.get(key).map(|e| match &e.state {
+            EntryState::Ready { bytes, .. } => Ok(bytes.clone()),
+            EntryState::Loading => Err(()),
+        });
+
+        match state {
+            Some(Ok(bytes)) => {
+                // Cache hit — bump access counter and active users
+                cache.access_counter += 1;
+                let access = cache.access_counter;
+                let entry = cache.entries.get_mut(key).unwrap();
+                entry.active_users += 1;
+                entry.last_access = access;
+
                 let waited = wait_started.elapsed().as_millis();
                 if waited > CACHE_WAIT_WARN_MS {
                     eprintln!(
-                        "[ZipCache] WARN slow HIT key='{}' waited_ms={} size_mb={:.1}",
-                        key, waited, cached.bytes.len() as f64 / (1024.0 * 1024.0)
+                        "[ZipCache] WARN slow HIT key='{}' waited_ms={} entries={} cached_mb={:.0}",
+                        key,
+                        waited,
+                        cache.entries.len(),
+                        cache.total_cached_bytes as f64 / MB
                     );
                 }
-                return Ok(cached.bytes.clone());
+
+                return Ok((bytes, ActiveEntryGuard {
+                    key: key.to_string(),
+                }));
             }
-            CacheState::Loading(loading_key) if loading_key == &key => {
-                guard = CACHE_READY
-                    .wait(guard)
-                    .map_err(|e| format!("Cache lock poisoned: {}", e))?;
-                drop(guard);
+            Some(Err(())) => {
+                // Another thread is loading this key — wait for state change
+                drop(
+                    CACHE_CHANGED
+                        .wait(cache)
+                        .map_err(|e| format!("Cache lock poisoned: {}", e))?,
+                );
+                continue;
             }
-            CacheState::Loading(_) => {
-                guard = CACHE_READY
-                    .wait(guard)
-                    .map_err(|e| format!("Cache lock poisoned: {}", e))?;
-                drop(guard);
-            }
-            CacheState::Empty | CacheState::Ready(_) => {
-                *guard = CacheState::Loading(key.clone());
-                drop(guard);
+            None => {
+                // Cache miss — evict if needed, insert Loading placeholder
+                evict_for_budget(&mut cache, DEFAULT_ESTIMATED_SIZE);
+
+                cache.access_counter += 1;
+                let access = cache.access_counter;
+                cache.entries.insert(
+                    key.to_string(),
+                    CacheEntry {
+                        state: EntryState::Loading,
+                        active_users: 1,
+                        last_access: access,
+                    },
+                );
+                drop(cache);
                 break;
             }
         }
     }
 
+    // Decompress outside the lock (expensive I/O)
     let load_started = Instant::now();
     let load_result = load_nested_zip_bytes_uncached(outer_zip_path, nested_zip_path);
-    let mut guard = CACHE
+
+    let mut cache = CACHE
         .lock()
         .map_err(|e| format!("Cache lock poisoned: {}", e))?;
 
     match load_result {
         Ok(bytes) => {
+            let size_bytes = bytes.len();
             let shared = Arc::new(bytes);
             let load_ms = load_started.elapsed().as_millis();
-            let size_mb = shared.len() as f64 / (1024.0 * 1024.0);
+
+            // Transition Loading → Ready
+            if let Some(entry) = cache.entries.get_mut(key) {
+                entry.state = EntryState::Ready {
+                    bytes: shared.clone(),
+                    size_bytes,
+                };
+            }
+            cache.total_cached_bytes += size_bytes;
+
+            // If actual size exceeded our estimate, evict more if needed
+            if size_bytes > DEFAULT_ESTIMATED_SIZE {
+                evict_for_budget(&mut cache, 0);
+            }
+
             if load_ms > CACHE_LOAD_WARN_MS {
                 eprintln!(
-                    "[ZipCache] WARN slow LOAD key='{}' load_ms={} size_mb={:.1}",
-                    key, load_ms, size_mb
+                    "[ZipCache] WARN slow LOAD key='{}' size_mb={:.1} load_ms={} entries={} cached_mb={:.0}",
+                    key,
+                    size_bytes as f64 / MB,
+                    load_ms,
+                    cache.entries.len(),
+                    cache.total_cached_bytes as f64 / MB
+                );
+            } else {
+                println!(
+                    "[ZipCache] LOAD key='{}' size_mb={:.1} load_ms={} entries={} cached_mb={:.0}/{:.0}",
+                    key,
+                    size_bytes as f64 / MB,
+                    load_ms,
+                    cache.entries.len(),
+                    cache.total_cached_bytes as f64 / MB,
+                    cache.budget_bytes as f64 / MB
                 );
             }
-            *guard = CacheState::Ready(CachedInnerZip {
-                key,
-                bytes: shared.clone(),
-            });
-            CACHE_READY.notify_all();
-            Ok(shared)
+
+            CACHE_CHANGED.notify_all();
+            Ok((shared, ActiveEntryGuard {
+                key: key.to_string(),
+            }))
         }
         Err(err) => {
-            *guard = CacheState::Empty;
-            CACHE_READY.notify_all();
+            // Remove the Loading placeholder
+            cache.entries.remove(key);
+            CACHE_CHANGED.notify_all();
             Err(err)
         }
     }
 }
+
+/// Evict LRU unpinned entries until `total_cached_bytes + additional` fits within budget.
+/// Called while holding the cache lock.
+fn evict_for_budget(cache: &mut ZipCacheInner, additional: usize) {
+    while cache.total_cached_bytes + additional > cache.budget_bytes {
+        // Find the oldest Ready entry with no active users
+        let victim = cache
+            .entries
+            .iter()
+            .filter(|(_, e)| matches!(e.state, EntryState::Ready { .. }) && e.active_users == 0)
+            .min_by_key(|(_, e)| e.last_access)
+            .map(|(k, _)| k.clone());
+
+        match victim {
+            Some(victim_key) => {
+                if let Some(entry) = cache.entries.remove(&victim_key) {
+                    if let EntryState::Ready { size_bytes, .. } = entry.state {
+                        cache.total_cached_bytes -= size_bytes;
+                        println!(
+                            "[ZipCache] EVICT key='{}' size_mb={:.1} reason=budget",
+                            victim_key,
+                            size_bytes as f64 / MB
+                        );
+                    }
+                }
+            }
+            None => break, // all entries pinned — allow temporary over-budget
+        }
+    }
+}
+
+// --- Memory budget ---
+
+fn compute_budget_bytes() -> usize {
+    let available = get_available_memory_bytes();
+    let budget = available / 2;
+    let clamped = budget.clamp(MIN_BUDGET_BYTES, MAX_BUDGET_BYTES);
+    println!(
+        "[ZipCache] Memory budget: {:.1} GB (available: {:.1} GB)",
+        clamped as f64 / GB,
+        available as f64 / GB,
+    );
+    clamped
+}
+
+#[cfg(windows)]
+fn get_available_memory_bytes() -> usize {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    unsafe {
+        let mut mem: MEMORYSTATUSEX = std::mem::zeroed();
+        mem.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+        if GlobalMemoryStatusEx(&mut mem) != 0 {
+            mem.ullAvailPhys as usize
+        } else {
+            4 * 1024 * 1024 * 1024 // fallback: assume 4 GB
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn get_available_memory_bytes() -> usize {
+    4 * 1024 * 1024 * 1024 // default: 4 GB
+}
+
+// --- Nested ZIP path parsing (unchanged) ---
 
 fn load_nested_zip_bytes_uncached(
     outer_zip_path: &str,
@@ -220,15 +413,21 @@ fn load_nested_zip_bytes_from_archive<R: Read + Seek>(
     nested_zip_path: &str,
     context: &str,
 ) -> Result<Vec<u8>, String> {
-    if let Some((nested_zip_name, remaining_path)) = split_first_nested_zip_segment(nested_zip_path) {
+    if let Some((nested_zip_name, remaining_path)) =
+        split_first_nested_zip_segment(nested_zip_path)
+    {
         let nested_bytes = read_entry_bytes(&mut archive, nested_zip_name, context)?;
         let nested_context = format!("{}/{}", context, nested_zip_name);
         let nested_archive = ZipArchive::new(Cursor::new(nested_bytes))
             .map_err(|e| format!("Failed to open nested zip {}: {}", nested_context, e))?;
         load_nested_zip_bytes_from_archive(nested_archive, remaining_path, &nested_context)
     } else {
-        read_entry_bytes(&mut archive, nested_zip_path, context)
-            .map_err(|e| format!("Failed to read nested zip {} from {}: {}", nested_zip_path, context, e))
+        read_entry_bytes(&mut archive, nested_zip_path, context).map_err(|e| {
+            format!(
+                "Failed to read nested zip {} from {}: {}",
+                nested_zip_path, context, e
+            )
+        })
     }
 }
 
@@ -293,28 +492,6 @@ fn find_last_nested_zip_boundary(path: &str) -> Option<usize> {
 
 fn compose_cache_key(outer_zip_path: &str, nested_zip_path: &str) -> String {
     format!("{}::{}", outer_zip_path, nested_zip_path)
-}
-
-impl Drop for ActiveKeyGuard {
-    fn drop(&mut self) {
-        if let Ok(mut guard) = ACTIVE_KEY.lock() {
-            if guard.active_key.as_deref() == Some(self.key.as_str()) {
-                guard.active_users = guard.active_users.saturating_sub(1);
-                if guard.active_users == 0 {
-                    guard.active_key = None;
-                    ACTIVE_KEY_READY.notify_all();
-                }
-            }
-        }
-    }
-}
-
-/// Clear the cache. Call when processing is done or stopped to free memory.
-pub fn clear() {
-    if let Ok(mut guard) = CACHE.lock() {
-        *guard = CacheState::Empty;
-        CACHE_READY.notify_all();
-    }
 }
 
 #[cfg(test)]
@@ -390,8 +567,53 @@ mod tests {
         }
 
         (
-            outer_zip_path.file_name().unwrap().to_string_lossy().into_owned(),
+            outer_zip_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
             format!("{}/{}/{}", level1_name, level2_name, final_entry),
+            "test.wav".to_string(),
+        )
+    }
+
+    /// Create a simple outer ZIP containing a named inner ZIP with a WAV file inside.
+    fn create_single_nested_zip(
+        dir: &std::path::Path,
+        outer_name: &str,
+        inner_name: &str,
+    ) -> (String, String, String) {
+        let wav_path = create_test_wav(dir, &format!("wav_{}", outer_name));
+        let wav_bytes = std::fs::read(wav_path).unwrap();
+        let entry_name = "audio/test.wav";
+
+        // Create inner ZIP containing the WAV
+        let mut inner_bytes = Vec::new();
+        {
+            let cursor = Cursor::new(&mut inner_bytes);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file(entry_name, options).unwrap();
+            zip.write_all(&wav_bytes).unwrap();
+            zip.finish().unwrap();
+        }
+
+        // Create outer ZIP containing the inner ZIP
+        let outer_path = dir.join(outer_name);
+        {
+            let file = std::fs::File::create(&outer_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file(inner_name, options).unwrap();
+            zip.write_all(&inner_bytes).unwrap();
+            zip.finish().unwrap();
+        }
+
+        (
+            outer_name.to_string(),
+            format!("{}/{}", inner_name, entry_name),
             "test.wav".to_string(),
         )
     }
@@ -486,5 +708,225 @@ mod tests {
     #[test]
     fn test_clear_does_not_panic() {
         clear();
+    }
+
+    #[test]
+    fn test_multi_entry_cache() {
+        // Don't clear — tests run in parallel and share global state.
+        // Instead verify both entries load correctly and both are cached.
+        let dir = tempfile::tempdir().unwrap();
+        let folder_path = dir.path().to_string_lossy().replace('\\', "/");
+
+        let (zip_a, entry_a, fname_a) =
+            create_single_nested_zip(dir.path(), "outer_a.zip", "inner_a.zip");
+        let (zip_b, entry_b, fname_b) =
+            create_single_nested_zip(dir.path(), "outer_b.zip", "inner_b.zip");
+
+        let asset_a = make_nested_zip_asset(&folder_path, &zip_a, &entry_a, &fname_a, "wav");
+        let asset_b = make_nested_zip_asset(&folder_path, &zip_b, &entry_b, &fname_b, "wav");
+
+        let count_before = entry_count();
+
+        // Load both — both should be cached simultaneously
+        let bytes_a = load_asset_bytes_cached(&asset_a).unwrap();
+        let bytes_b = load_asset_bytes_cached(&asset_b).unwrap();
+
+        assert!(!bytes_a.is_empty());
+        assert!(!bytes_b.is_empty());
+        assert_eq!(&bytes_a[0..4], b"RIFF");
+        assert_eq!(&bytes_b[0..4], b"RIFF");
+
+        // Both new entries should have been added
+        assert!(entry_count() >= count_before + 2);
+        assert!(cached_bytes() > 0);
+    }
+
+    #[test]
+    fn test_lru_eviction_on_budget() {
+        // Test eviction logic directly on a local struct to avoid
+        // interference from parallel tests sharing the global cache.
+        let mut cache = ZipCacheInner {
+            entries: HashMap::new(),
+            access_counter: 0,
+            total_cached_bytes: 0,
+            budget_bytes: 300,
+        };
+
+        // Insert entry A (200 bytes, older)
+        cache.access_counter += 1;
+        cache.entries.insert(
+            "key_a".into(),
+            CacheEntry {
+                state: EntryState::Ready {
+                    bytes: Arc::new(vec![0u8; 200]),
+                    size_bytes: 200,
+                },
+                active_users: 0,
+                last_access: cache.access_counter,
+            },
+        );
+        cache.total_cached_bytes = 200;
+
+        // Insert entry B (200 bytes, newer)
+        cache.access_counter += 1;
+        cache.entries.insert(
+            "key_b".into(),
+            CacheEntry {
+                state: EntryState::Ready {
+                    bytes: Arc::new(vec![0u8; 200]),
+                    size_bytes: 200,
+                },
+                active_users: 0,
+                last_access: cache.access_counter,
+            },
+        );
+        cache.total_cached_bytes = 400;
+
+        // Over budget (400 > 300) — evict LRU
+        evict_for_budget(&mut cache, 0);
+
+        // A (older) should be evicted, B should remain
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache.entries.contains_key("key_b"));
+        assert_eq!(cache.total_cached_bytes, 200);
+    }
+
+    #[test]
+    fn test_pinned_entry_survives_eviction() {
+        let mut cache = ZipCacheInner {
+            entries: HashMap::new(),
+            access_counter: 0,
+            total_cached_bytes: 0,
+            budget_bytes: 300,
+        };
+
+        // Entry A: pinned (active_users=1), older
+        cache.access_counter += 1;
+        cache.entries.insert(
+            "pinned".into(),
+            CacheEntry {
+                state: EntryState::Ready {
+                    bytes: Arc::new(vec![0u8; 200]),
+                    size_bytes: 200,
+                },
+                active_users: 1, // pinned!
+                last_access: cache.access_counter,
+            },
+        );
+
+        // Entry B: unpinned, newer
+        cache.access_counter += 1;
+        cache.entries.insert(
+            "unpinned".into(),
+            CacheEntry {
+                state: EntryState::Ready {
+                    bytes: Arc::new(vec![0u8; 200]),
+                    size_bytes: 200,
+                },
+                active_users: 0,
+                last_access: cache.access_counter,
+            },
+        );
+        cache.total_cached_bytes = 400;
+
+        // Need to evict for 100 more bytes — only unpinned can be evicted
+        evict_for_budget(&mut cache, 100);
+
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache.entries.contains_key("pinned"));
+        assert_eq!(cache.total_cached_bytes, 200);
+    }
+
+    #[test]
+    fn test_evict_unpinned_on_local_cache() {
+        let mut cache = ZipCacheInner {
+            entries: HashMap::new(),
+            access_counter: 0,
+            total_cached_bytes: 0,
+            budget_bytes: 10000,
+        };
+
+        // Insert two unpinned entries
+        cache.entries.insert(
+            "idle_a".into(),
+            CacheEntry {
+                state: EntryState::Ready {
+                    bytes: Arc::new(vec![0u8; 100]),
+                    size_bytes: 100,
+                },
+                active_users: 0,
+                last_access: 1,
+            },
+        );
+        cache.entries.insert(
+            "idle_b".into(),
+            CacheEntry {
+                state: EntryState::Ready {
+                    bytes: Arc::new(vec![0u8; 100]),
+                    size_bytes: 100,
+                },
+                active_users: 0,
+                last_access: 2,
+            },
+        );
+        // Insert one pinned entry
+        cache.entries.insert(
+            "active".into(),
+            CacheEntry {
+                state: EntryState::Ready {
+                    bytes: Arc::new(vec![0u8; 100]),
+                    size_bytes: 100,
+                },
+                active_users: 1,
+                last_access: 3,
+            },
+        );
+        cache.total_cached_bytes = 300;
+
+        // Simulate evict_unpinned: remove all Ready entries with active_users == 0
+        let keys_to_evict: Vec<String> = cache
+            .entries
+            .iter()
+            .filter(|(_, e)| e.active_users == 0 && matches!(e.state, EntryState::Ready { .. }))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in &keys_to_evict {
+            if let Some(entry) = cache.entries.remove(key) {
+                if let EntryState::Ready { size_bytes, .. } = entry.state {
+                    cache.total_cached_bytes -= size_bytes;
+                }
+            }
+        }
+
+        // Only the pinned entry should remain
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache.entries.contains_key("active"));
+        assert_eq!(cache.total_cached_bytes, 100);
+    }
+
+    #[test]
+    fn test_budget_bytes_returns_reasonable_value() {
+        // Force lazy init
+        drop(CACHE.lock());
+        let budget = budget_bytes();
+        assert!(budget >= MIN_BUDGET_BYTES);
+        assert!(budget <= MAX_BUDGET_BYTES);
+    }
+
+    #[test]
+    fn test_cache_hit_returns_same_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder_path = dir.path().to_string_lossy().replace('\\', "/");
+
+        let (zip_file, zip_entry, filename) =
+            create_single_nested_zip(dir.path(), "hit_test.zip", "inner.zip");
+        let asset = make_nested_zip_asset(&folder_path, &zip_file, &zip_entry, &filename, "wav");
+
+        // Load twice — second should be a cache hit returning identical data
+        let bytes1 = load_asset_bytes_cached(&asset).unwrap();
+        let bytes2 = load_asset_bytes_cached(&asset).unwrap();
+
+        assert_eq!(bytes1, bytes2);
+        assert_eq!(&bytes1[0..4], b"RIFF");
     }
 }

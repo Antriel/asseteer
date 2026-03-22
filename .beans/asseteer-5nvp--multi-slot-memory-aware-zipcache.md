@@ -1,11 +1,11 @@
 ---
 # asseteer-5nvp
 title: Multi-slot memory-aware ZipCache
-status: todo
+status: completed
 type: feature
 priority: normal
 created_at: 2026-03-21T09:37:45Z
-updated_at: 2026-03-21T10:29:59Z
+updated_at: 2026-03-21T12:33:36Z
 parent: asseteer-k1go
 blocked_by:
     - asseteer-fbpx
@@ -174,3 +174,33 @@ trait CacheBudget {
 ```
 
 The asseteer-fbpx staged dispatch should use a simple version of this interface (single-slot: `can_load` returns true only when no key is active), making the upgrade to multi-slot a matter of swapping the implementation.
+
+
+## Implementation Checklist
+
+- [x] Phase 1: Cache data structure rewrite (zip_cache.rs)
+- [x] Phase 2: Fix cross-category interference (work_queue.rs clear → evict_unpinned)
+- [x] Phase 3: Multi-group dispatcher (work_queue.rs concurrent dispatch)
+- [x] Phase 4: Cargo.toml (Win32_System_SystemInformation feature)
+- [x] Phase 5: Logging
+- [x] Tests pass (62/62)
+
+
+## Summary of Changes
+
+### zip_cache.rs — Major rewrite
+- **Multi-slot HashMap cache**: Replaced single-slot `CacheState` enum with `HashMap<String, CacheEntry>` supporting multiple simultaneous entries
+- **Per-entry state machine**: `EntryState::Loading` / `EntryState::Ready` with per-entry `active_users` ref counting and LRU `last_access` counter
+- **Memory budget**: Queries `GlobalMemoryStatusEx` on Windows for available RAM, sets budget to 50% of available (clamped to 1–8 GB range)
+- **LRU eviction**: `evict_for_budget()` removes least-recently-used unpinned entries when budget exceeded
+- **Unified lock model**: Replaced 4 globals (CACHE + CACHE_READY + ACTIVE_KEY + ACTIVE_KEY_READY) with 2 (CACHE + CACHE_CHANGED) via `once_cell::sync::Lazy`
+- **ActiveEntryGuard**: Per-entry RAII guard replacing global ActiveKeyGuard
+- **New public API**: `evict_unpinned()`, `budget_bytes()`, `cached_bytes()`, `entry_count()`
+- **4 new tests**: multi-entry, LRU eviction, pinned entry protection, evict_unpinned
+
+### work_queue.rs — Dispatcher upgrade + cross-category fix
+- **Concurrent multi-group dispatch**: Replaced sequential `for group in zip_groups` with `JoinSet` + `Semaphore` bounded by memory budget (~1 concurrent group per GB)
+- **Cross-category fix**: Replaced `zip_cache::clear()` with `zip_cache::evict_unpinned()` at category completion and stop — pinned entries used by other running categories are preserved
+
+### Cargo.toml
+- Added `Win32_System_SystemInformation` feature to existing `windows-sys` dependency for `GlobalMemoryStatusEx`

@@ -344,13 +344,27 @@ impl WorkQueue {
                 .map_err(|e| format!("Failed to queue non-ZIP batch: {}", e))?;
         }
 
-        // Spawn staged dispatcher for ZIP groups (one key group at a time)
+        // Spawn staged dispatcher for ZIP groups (concurrent, bounded by memory budget)
         if !plan.zip_groups.is_empty() {
             let zip_tx = self.zip_tx.clone();
             let stop_signal = state.stop_signal.clone();
             let gen = state.generation.clone();
 
             let dispatcher = tokio::spawn(async move {
+                // Allow multiple ZIP key groups in flight simultaneously,
+                // bounded by how many fit in the memory budget (~1 per GB).
+                let max_concurrent = std::cmp::max(
+                    1,
+                    zip_cache::budget_bytes() / (1024 * 1024 * 1024),
+                );
+                println!(
+                    "[WorkQueue] Dispatcher: max {} concurrent ZIP groups (budget {:.1} GB)",
+                    max_concurrent,
+                    zip_cache::budget_bytes() as f64 / (1024.0 * 1024.0 * 1024.0)
+                );
+                let sem = Arc::new(Semaphore::new(max_concurrent));
+                let mut join_set = tokio::task::JoinSet::new();
+
                 for group in plan.zip_groups {
                     if stop_signal.load(Ordering::SeqCst)
                         || gen.load(Ordering::SeqCst) != generation
@@ -358,18 +372,40 @@ impl WorkQueue {
                         break;
                     }
 
-                    let completion = Arc::new(BatchGroupCompletion::new(group.batches.len()));
+                    let permit = match sem.clone().acquire_owned().await {
+                        Ok(p) => p,
+                        Err(_) => break, // semaphore closed
+                    };
+                    let zip_tx = zip_tx.clone();
+                    let stop = stop_signal.clone();
+                    let gen_clone = gen.clone();
 
-                    for mut batch in group.batches {
-                        batch.group_completion = Some(completion.clone());
-                        if zip_tx.send(batch).is_err() {
-                            return; // channel closed
+                    join_set.spawn(async move {
+                        let _permit = permit; // held until this group finishes
+
+                        if stop.load(Ordering::SeqCst)
+                            || gen_clone.load(Ordering::SeqCst) != generation
+                        {
+                            return;
                         }
-                    }
 
-                    // Wait for all batches in this group to complete
-                    completion.done.notified().await;
+                        let completion =
+                            Arc::new(BatchGroupCompletion::new(group.batches.len()));
+
+                        for mut batch in group.batches {
+                            batch.group_completion = Some(completion.clone());
+                            if zip_tx.send(batch).is_err() {
+                                return; // channel closed
+                            }
+                        }
+
+                        // Wait for all batches in this group to complete
+                        completion.done.notified().await;
+                    });
                 }
+
+                // Wait for all dispatched groups to finish
+                while join_set.join_next().await.is_some() {}
             });
 
             let mut dh = self.dispatcher_handle.write().await;
@@ -626,8 +662,9 @@ impl WorkQueue {
                         crate::clap::cache::invalidate();
                     }
 
-                    // Free cached nested ZIP memory
-                    zip_cache::clear();
+                    // Free unused cached nested ZIP memory (preserves pinned entries
+                    // that other categories may still be using)
+                    zip_cache::evict_unpinned();
 
                     // Mark as not running
                     state.is_running.store(false, Ordering::SeqCst);
@@ -679,8 +716,9 @@ impl WorkQueue {
                 crate::clap::cache::invalidate();
             }
 
-            // Free cached nested ZIP memory
-            zip_cache::clear();
+            // Free unused cached nested ZIP memory (preserves pinned entries
+            // that other categories may still be using)
+            zip_cache::evict_unpinned();
         }
 
         // Abort the staged dispatcher if running
