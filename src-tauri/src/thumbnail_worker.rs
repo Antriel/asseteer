@@ -2,16 +2,15 @@
 //!
 //! The frontend sends request/cancel messages via Tauri commands.
 //! A single background task drains a channel, generates thumbnails
-//! (parallel for filesystem, sequential per ZIP), and emits
+//! (all assets in parallel — ZipCache enforces memory budget), and emits
 //! `thumbnail-ready` / `thumbnail-stats` events.
 
 use crate::models::Asset;
 use crate::task_system::processor::generate_thumbnail_for_asset;
-use crate::utils::{resolve_zip_path, now_millis};
+use crate::utils::now_millis;
 use serde::Serialize;
 use sqlx::SqlitePool;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::HashSet;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 
@@ -69,8 +68,8 @@ impl ThumbnailWorkerHandle {
 // Worker setup
 // ---------------------------------------------------------------------------
 
-/// Max filesystem images decoded concurrently.
-const MAX_CONCURRENT_FS: usize = 3;
+/// Thumbnails to pop per worker-loop iteration.
+const BATCH_SIZE: usize = 48;
 
 /// Start the thumbnail worker. Call once during app setup.
 pub fn start_worker(app: &AppHandle, pool: SqlitePool) -> ThumbnailWorkerHandle {
@@ -235,7 +234,7 @@ async fn worker_loop(
         let _ = app.emit("thumbnail-stats", state.stats());
 
         // Pop a batch
-        let batch = state.pop_batch(MAX_CONCURRENT_FS * 2);
+        let batch = state.pop_batch(BATCH_SIZE);
         if batch.is_empty() {
             continue;
         }
@@ -262,63 +261,31 @@ async fn worker_loop(
         // Load asset records (with folder_path from JOIN)
         let assets = load_assets(&pool, &missing_ids).await;
 
-        // Separate filesystem vs ZIP assets
-        // Group ZIP assets by resolved zip path (folder_path + rel_path + zip_file)
-        let mut zip_groups: HashMap<String, Vec<Asset>> = HashMap::new();
-        let mut fs_assets: Vec<Asset> = Vec::new();
+        state.processing = assets.len();
 
-        for asset in assets {
-            if asset.zip_entry.is_some() {
-                let zip_key = resolve_zip_path(&asset);
-                zip_groups.entry(zip_key).or_default().push(asset);
-            } else {
-                fs_assets.push(asset);
-            }
-        }
+        // Drain pending messages before spawning to pick up last-moment cancellations
+        drain_messages(&mut rx, &mut state);
 
-        state.processing = fs_assets.len() + zip_groups.values().map(|v| v.len()).sum::<usize>();
-
-        // Process filesystem images concurrently with semaphore
-        let sem = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_FS));
+        // Spawn all assets in parallel — both filesystem and nested-ZIP.
+        // No semaphore needed: ZipCache enforces its own memory budget via
+        // Condvar, so concurrent nested-ZIP loads are automatically throttled.
         let mut handles = Vec::new();
-
-        for asset in fs_assets {
+        for asset in assets {
+            if state.is_cancelled(asset.id) {
+                state.in_flight.remove(&asset.id);
+                state.processing = state.processing.saturating_sub(1);
+                continue;
+            }
             let pool_c = pool.clone();
-            let sem_c = sem.clone();
             let app_c = app.clone();
-
             handles.push(tauri::async_runtime::spawn(async move {
-                let _permit = sem_c.acquire().await.unwrap();
                 let success = process_single_thumbnail(&asset, &pool_c).await;
                 let _ = app_c.emit("thumbnail-ready", ThumbnailReady { asset_id: asset.id, success });
                 (asset.id, success)
             }));
         }
 
-        // Process ZIP groups sequentially (one entry at a time to limit memory)
-        for (_zip_path, zip_assets) in &zip_groups {
-            for asset in zip_assets {
-                if state.is_cancelled(asset.id) {
-                    state.in_flight.remove(&asset.id);
-                    state.processing = state.processing.saturating_sub(1);
-                    continue;
-                }
-
-                // Drain messages between ZIP entries to pick up cancellations
-                drain_messages(&mut rx, &mut state);
-
-                let success = process_single_thumbnail(asset, &pool).await;
-                if success {
-                    state.record_success(asset.id);
-                } else {
-                    state.record_failure(asset.id);
-                }
-                state.processing = state.processing.saturating_sub(1);
-                let _ = app.emit("thumbnail-ready", ThumbnailReady { asset_id: asset.id, success });
-            }
-        }
-
-        // Collect filesystem results
+        // Collect results
         for h in handles {
             if let Ok((id, success)) = h.await {
                 if success {
