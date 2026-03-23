@@ -52,7 +52,6 @@
   let editingId = $state<number | null>(null);
   let editLabel = $state('');
   let editInput = $state<HTMLInputElement | null>(null);
-  let scanProgress = $state('');
   let unlisten: UnlistenFn | null = null;
   let rescanUnlisten: UnlistenFn | null = null;
 
@@ -62,6 +61,12 @@
 
   onMount(async () => {
     await loadFolders();
+    // Re-subscribe if a scan is already in progress (navigated away and back)
+    if (uiState.isScanning && !unlisten) {
+      unlisten = await listen<ScanProgressEvent>('scan-progress', (event) => {
+        applyScanProgress(event.payload);
+      });
+    }
   });
 
   onDestroy(() => {
@@ -156,6 +161,30 @@
     }
   }
 
+  function applyScanProgress(e: ScanProgressEvent) {
+    uiState.scanDetails = {
+      phase: e.phase as typeof uiState.scanDetails.phase,
+      filesFound: e.files_found,
+      filesInserted: e.files_inserted,
+      filesTotal: e.files_total,
+      zipsScanned: e.zips_scanned,
+      currentPath: e.current_path ?? uiState.scanDetails.currentPath,
+    };
+    if (e.phase === 'discovering') {
+      const zipInfo = e.zips_scanned > 0 ? ` (${e.zips_scanned} zips)` : '';
+      uiState.scanProgress = `Discovering... ${e.files_found} found${zipInfo}`;
+    } else if (e.phase === 'inserting' || e.phase === 'scanning') {
+      if (e.files_total > 0) {
+        const pct = Math.round((e.files_inserted / e.files_total) * 100);
+        uiState.scanProgress = `Saving... ${e.files_inserted}/${e.files_total} (${pct}%)`;
+      } else {
+        uiState.scanProgress = `Scanning... ${e.files_found} found`;
+      }
+    } else {
+      uiState.scanProgress = `Done! ${e.files_found} assets.`;
+    }
+  }
+
   // Add folder
   async function addFolder() {
     try {
@@ -166,7 +195,7 @@
       });
       if (!selected || typeof selected !== 'string') return;
 
-      scanProgress = 'Starting scan...';
+      uiState.scanProgress = 'Starting scan...';
       uiState.isScanning = true;
       uiState.resetScanDetails();
 
@@ -176,28 +205,7 @@
       }
 
       unlisten = await listen<ScanProgressEvent>('scan-progress', (event) => {
-        const e = event.payload;
-        uiState.scanDetails = {
-          phase: e.phase as typeof uiState.scanDetails.phase,
-          filesFound: e.files_found,
-          filesInserted: e.files_inserted,
-          filesTotal: e.files_total,
-          zipsScanned: e.zips_scanned,
-          currentPath: e.current_path ?? uiState.scanDetails.currentPath,
-        };
-        if (e.phase === 'discovering') {
-          const zipInfo = e.zips_scanned > 0 ? ` (${e.zips_scanned} zips)` : '';
-          scanProgress = `Discovering... ${e.files_found} found${zipInfo}`;
-        } else if (e.phase === 'inserting' || e.phase === 'scanning') {
-          if (e.files_total > 0) {
-            const pct = Math.round((e.files_inserted / e.files_total) * 100);
-            scanProgress = `Saving... ${e.files_inserted}/${e.files_total} (${pct}%)`;
-          } else {
-            scanProgress = `Scanning... ${e.files_found} found`;
-          }
-        } else {
-          scanProgress = `Done! ${e.files_found} assets.`;
-        }
+        applyScanProgress(event.payload);
       });
 
       await invoke('add_folder', { path: selected });
@@ -211,7 +219,7 @@
       showToast('Failed to add folder: ' + error, 'error');
     } finally {
       uiState.isScanning = false;
-      scanProgress = '';
+      uiState.scanProgress = '';
       if (unlisten) {
         unlisten();
         unlisten = null;
@@ -354,11 +362,11 @@
     </div>
 
     <!-- Scanning indicator (for add folder) -->
-    {#if uiState.isScanning && scanProgress}
+    {#if uiState.isScanning && uiState.scanProgress}
       <div class="mb-4 rounded-lg border border-default bg-secondary p-4 flex items-center gap-3">
         <Spinner size="sm" />
         <div class="flex flex-col min-w-0">
-          <span class="text-sm text-secondary">{scanProgress}</span>
+          <span class="text-sm text-secondary">{uiState.scanProgress}</span>
           {#if uiState.scanDetails.currentPath}
             <span class="text-xs text-tertiary overflow-hidden whitespace-nowrap text-ellipsis block" style="direction: rtl;" title={uiState.scanDetails.currentPath}>
               {uiState.scanDetails.currentPath}
