@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { loadAssetBlobUrl } from '$lib/utils/assetBlob';
   import { type Asset, getAssetFilePath } from '$lib/types';
@@ -75,7 +76,11 @@
       }
     } else {
       void cacheReset.version; // re-run when cache is cleared so we re-request
-      requestThumbnail(asset.id);
+      // untrack prevents cache.has() inside requestThumbnail from creating a
+      // reactive dependency on the SvelteMap — without this, every cache.set()
+      // (each thumbnail completion) would re-run ALL components' effects and
+      // trigger a cancel+re-request cascade that grows the queue to 1000+.
+      untrack(() => requestThumbnail(asset.id));
       return () => cancelThumbnail(asset.id);
     }
   });

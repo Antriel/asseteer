@@ -1,11 +1,11 @@
 ---
 # asseteer-tqhr
 title: Thumbnail queue count keeps growing for nested-ZIP images without scrolling
-status: in-progress
+status: completed
 type: bug
 priority: normal
 created_at: 2026-03-21T12:07:25Z
-updated_at: 2026-03-23T09:19:42Z
+updated_at: 2026-03-23T11:17:12Z
 ---
 
 
@@ -42,3 +42,26 @@ Additionally, `thumbnail-ready` handler deleted from `requested` before `cache.s
 - Added `clear_thumbnail_queue` Tauri command
 - `clearThumbnailCache()` now calls `invoke('clear_thumbnail_queue')` to sync frontend+backend
 - Moved `requested.delete(asset_id)` to AFTER `cache.set`/`failed.add` in `thumbnail-ready` handler
+
+
+## Debug & Root Cause (March 2026)
+
+Added extensive logging to diagnose the growing count. Captured logs showed **1980 total requests from only 64 unique asset IDs** — the same IDs being recycled ~30 times each.
+
+### Root cause: SvelteMap coarse-grained reactivity cascade
+
+Svelte 5's `SvelteMap` is **coarse-grained**: any `cache.set()` call (regardless of key) invalidates ALL reactive consumers that ever called `cache.has()` or `cache.get()` on that map.
+
+The `$effect` in `ImageThumbnail.svelte` called `requestThumbnail(asset.id)`, which internally calls `cache.has(assetId)`. This created a reactive dependency on the `cache` SvelteMap for every component.
+
+**The cascade:**
+1. Thumbnail X completes → `cache.set(X, url)` fires
+2. SvelteMap notifies ALL 64 components' effects (coarse, not per-key)
+3. Each effect runs its cleanup: `cancelThumbnail(assetId)` → removes from `requested`
+4. Each effect re-runs its body: `requestThumbnail(assetId)` → re-adds to queue (since `requested` was just cleared)
+5. Backend receives 63 new requests; those whose `in_flight` slot is free (already completed) get added to `pending`
+6. Repeat for every thumbnail completion → pending grows to 1100+
+
+### Fix applied
+
+Wrapped `requestThumbnail(asset.id)` in `untrack()` in `ImageThumbnail.svelte`. This prevents `cache.has()` inside `requestThumbnail` from creating a reactive SvelteMap dependency, so the effect only runs on mount, `isSmallImage` change, or `cacheReset.version` change (explicit cache clear). The cancel+re-request cascade no longer fires on every thumbnail completion.
