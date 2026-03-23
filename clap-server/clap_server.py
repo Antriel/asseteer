@@ -63,15 +63,19 @@ def _win_path(path_str: str) -> str:
 
 # Global model instance (loaded once at startup)
 clap_model: ClapTester | None = None
+# Max audio duration (seconds) the model actually uses — anything beyond is truncated
+# by the feature extractor, so loading more is wasted CPU (especially for resampling).
+clap_max_duration_s: float = 10.0  # updated from model config at startup
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load model on startup, cleanup on shutdown"""
-    global clap_model
+    global clap_model, clap_max_duration_s
     logger.info("Loading CLAP model...")
     clap_model = ClapTester(model_name="laion/clap-htsat-fused")
-    logger.info(f"Model loaded on {clap_model.device}")
+    clap_max_duration_s = getattr(clap_model.processor.feature_extractor, 'max_length_s', 10.0)
+    logger.info(f"Model loaded on {clap_model.device} (max_duration={clap_max_duration_s}s)")
     yield
     logger.info("Shutting down CLAP server...")
 
@@ -227,6 +231,15 @@ async def embed_audio_upload(audio: UploadFile = File(...)):
     return EmbeddingResponse(embedding=embedding)
 
 
+def _trim_to_middle(audio_data: np.ndarray, sr: int) -> np.ndarray:
+    """Trim audio to the middle `clap_max_duration_s` seconds."""
+    max_samples = int(clap_max_duration_s * sr)
+    if len(audio_data) > max_samples:
+        start = (len(audio_data) - max_samples) // 2
+        return audio_data[start:start + max_samples]
+    return audio_data
+
+
 def _decode_audio_bytes(content: bytes, filename: str, target_sr: int) -> tuple:
     """Decode audio bytes to (samples, sample_rate).
 
@@ -241,7 +254,7 @@ def _decode_audio_bytes(content: bytes, filename: str, target_sr: int) -> tuple:
     ffmpeg_err_msg = None
 
     try:
-        return librosa.load(io.BytesIO(content), sr=target_sr, mono=True)
+        return librosa.load(io.BytesIO(content), sr=target_sr, mono=True, duration=clap_max_duration_s)
     except Exception as e:
         soundfile_err_msg = str(e)
         logger.info(f"soundfile/BytesIO failed for '{filename}', trying miniaudio: {e}")
@@ -250,7 +263,7 @@ def _decode_audio_bytes(content: bytes, filename: str, target_sr: int) -> tuple:
         import miniaudio
         decoded = miniaudio.decode(content, output_format=miniaudio.SampleFormat.FLOAT32, nchannels=1, sample_rate=target_sr)
         audio_data = np.frombuffer(decoded.samples, dtype=np.float32)
-        return audio_data, target_sr
+        return _trim_to_middle(audio_data, target_sr), target_sr
     except Exception as e:
         miniaudio_err_msg = str(e)
         logger.info(f"miniaudio failed for '{filename}', trying ffmpeg pipe: {e}")
@@ -273,7 +286,7 @@ def _decode_audio_bytes(content: bytes, filename: str, target_sr: int) -> tuple:
         audio_data = np.frombuffer(proc.stdout, dtype=np.float32)
         if len(audio_data) == 0:
             raise RuntimeError(f"ffmpeg produced no audio output (stderr: {stderr_out})")
-        return audio_data, target_sr
+        return _trim_to_middle(audio_data, target_sr), target_sr
     except Exception as e:
         ffmpeg_err_msg = str(e)
         logger.info(f"ffmpeg pipe failed for '{filename}', trying temp file: {e}")
@@ -303,7 +316,7 @@ def _decode_audio_bytes(content: bytes, filename: str, target_sr: int) -> tuple:
             audio_data = np.frombuffer(proc.stdout, dtype=np.float32)
             if len(audio_data) == 0:
                 raise RuntimeError(f"ffmpeg produced no audio output (stderr: {stderr_out})")
-            return audio_data, target_sr
+            return _trim_to_middle(audio_data, target_sr), target_sr
         finally:
             os.unlink(tmp_path)
     except Exception as e:
@@ -313,6 +326,22 @@ def _decode_audio_bytes(content: bytes, filename: str, target_sr: int) -> tuple:
             f"soundfile: {soundfile_err_msg}; miniaudio: {miniaudio_err_msg}; "
             f"ffmpeg pipe: {ffmpeg_err_msg}; ffmpeg file: {e}"
         ) from e
+
+
+def _middle_offset(path: str) -> float:
+    """Return offset (seconds) to load the middle portion of an audio file.
+
+    Uses soundfile for fast header reads (WAV/FLAC/OGG). Falls back to 0 for
+    formats soundfile can't read (MP3/M4A) — beginning is fine as a fallback.
+    """
+    try:
+        import soundfile as sf
+        info = sf.info(path)
+        if info.duration > clap_max_duration_s:
+            return (info.duration - clap_max_duration_s) / 2
+    except Exception:
+        pass
+    return 0.0
 
 
 def _batch_encode(audio_arrays: list[np.ndarray], target_sr: int) -> np.ndarray:
@@ -351,7 +380,7 @@ def _process_audio_bytes(content: bytes, filename: str) -> list[float]:
 
 
 @app.post("/embed/audio/batch", response_model=BatchEmbeddingResponse)
-def embed_audio_batch(request: BatchAudioPathRequest):
+async def embed_audio_batch(request: BatchAudioPathRequest):
     """
     Generate audio embeddings for multiple file paths in a single batched forward pass.
 
@@ -364,21 +393,31 @@ def embed_audio_batch(request: BatchAudioPathRequest):
     if not request.audio_paths:
         raise HTTPException(status_code=400, detail="audio_paths cannot be empty")
 
-    logger.info(f"Batch encoding {len(request.audio_paths)} audio files")
+    import asyncio
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, _process_batch_paths, request.audio_paths
+    )
+    return result
+
+
+def _process_batch_paths(audio_paths: list[str]) -> BatchEmbeddingResponse:
+    """Process multiple audio file paths into embeddings (blocking, runs in thread pool)."""
+    logger.info(f"Batch encoding {len(audio_paths)} audio files")
 
     target_sr = clap_model.processor.feature_extractor.sampling_rate
 
     # Load all audio files, track which ones succeeded
     loaded = []  # (index, audio_array)
-    results = [None] * len(request.audio_paths)
+    results = [None] * len(audio_paths)
 
-    for i, audio_path in enumerate(request.audio_paths):
+    for i, audio_path in enumerate(audio_paths):
         path = Path(_win_path(audio_path))
         if not path.exists():
             results[i] = BatchEmbeddingItem(path=audio_path, error=f"File not found: {audio_path}")
             continue
         try:
-            audio_data, sr = librosa.load(str(path), sr=target_sr, mono=True)
+            offset = _middle_offset(str(path))
+            audio_data, sr = librosa.load(str(path), sr=target_sr, mono=True, offset=offset, duration=clap_max_duration_s)
             loaded.append((i, audio_data))
         except Exception as e:
             results[i] = BatchEmbeddingItem(path=audio_path, error=str(e))
@@ -399,11 +438,11 @@ def embed_audio_batch(request: BatchAudioPathRequest):
         emb = embeddings[batch_idx]
         emb = emb / np.linalg.norm(emb)
         results[orig_idx] = BatchEmbeddingItem(
-            path=request.audio_paths[orig_idx],
+            path=audio_paths[orig_idx],
             embedding=emb.tolist(),
         )
 
-    logger.info(f"Batch embedding complete: {len(loaded)} succeeded, {len(request.audio_paths) - len(loaded)} failed")
+    logger.info(f"Batch embedding complete: {len(loaded)} succeeded, {len(audio_paths) - len(loaded)} failed")
 
     return BatchEmbeddingResponse(results=[r for r in results if r is not None])
 

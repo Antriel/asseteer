@@ -15,7 +15,7 @@ use tokio::sync::{Notify, RwLock, Semaphore};
 use tokio::time::{interval, Duration};
 
 const BATCH_UPDATE_INTERVAL_SEC: u64 = 2;
-const CLAP_BATCH_SIZE: usize = 8;
+const CLAP_BATCH_SIZE: usize = 16;
 const NESTED_ZIP_BATCH_SIZE: usize = 8;
 
 /// Tracks completion of a group of ZIP batches for staged dispatch.
@@ -163,10 +163,11 @@ impl WorkQueue {
     async fn ensure_category_state(&self, category: ProcessingCategory) -> CategoryState {
         let mut states = self.category_states.write().await;
         states.entry(category).or_insert_with(|| {
-            // CLAP uses single worker (model inference is internally parallelized)
+            // CLAP uses 2 workers: while batch 1 is in GPU forward pass, batch 2
+            // preprocesses audio on CPU (server handles concurrency via thread pool)
             // Image/Audio use many workers (CPU-bound work benefits from parallelism)
             let max_concurrent = match category {
-                ProcessingCategory::Clap => 1,
+                ProcessingCategory::Clap => 2,
                 ProcessingCategory::Image | ProcessingCategory::Audio => 100, // effectively unlimited
             };
             CategoryState::new(max_concurrent)
@@ -523,7 +524,7 @@ impl WorkQueue {
                     break;
                 };
 
-                // For CLAP, process as a batch (writes directly — concurrency=1, no contention)
+                // For CLAP, process as a batch (writes directly — SQLite serializes)
                 if category == ProcessingCategory::Clap {
                     let batch_len = batch_assets.len();
                     {
@@ -544,7 +545,7 @@ impl WorkQueue {
                         } else {
                             state.failed_assets.fetch_add(1, Ordering::SeqCst);
                             if let Some(error_msg) = &result.error {
-                                // CLAP errors written directly (concurrency=1)
+                                // CLAP errors written directly (SQLite serializes)
                                 let _ = sqlx::query(
                                     "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
                                      VALUES (?, ?, ?, ?, 0)",

@@ -1,13 +1,14 @@
 ---
 # asseteer-q6z5
 title: Speed up CLAP processing throughput
-status: todo
+status: completed
 type: feature
 priority: high
 created_at: 2026-03-22T08:31:22Z
-updated_at: 2026-03-22T08:31:48Z
+updated_at: 2026-03-23T12:20:02Z
 parent: asseteer-526f
 ---
+
 
 CLAP processing is ~100x slower than metadata processing. The main bottleneck is low GPU/CPU utilization due to serial request handling and idle time between batches. This bean tracks improvements to CLAP throughput without requiring a second server process.
 
@@ -62,10 +63,17 @@ GPU spends most of its time waiting for the next batch. The Python server (FastA
 - `src-tauri/src/task_system/processor.rs` — `process_clap_embedding_batch()`
 
 ## Implementation Checklist
-- [ ] Benchmark current throughput as baseline (files/sec, GPU utilization)
-- [ ] Benchmark increased batch sizes (16, 32) on GPU and CPU
-- [ ] Determine batch size strategy (adaptive vs conservative default)
-- [ ] Make server batch endpoint concurrent via `run_in_executor`
-- [ ] Bump Rust CLAP concurrency to 2
-- [ ] Benchmark combined improvements
-- [ ] Adjust HTTP timeouts if batch size increases (currently 120s)
+- [x] Benchmark current throughput as baseline (files/sec, GPU utilization)
+- [x] Benchmark increased batch sizes (16, 32) on GPU and CPU
+- [x] Determine batch size strategy (adaptive vs conservative default)
+- [x] Make server batch endpoint concurrent via `run_in_executor`
+- [x] Bump Rust CLAP concurrency to 2
+- [x] Benchmark combined improvements
+- [x] Adjust HTTP timeouts if batch size increases (currently 120s) — 120s still sufficient at batch=16
+
+## Summary of Changes
+
+- **Option B (concurrent requests)**: Made `/embed/audio/batch` async with `run_in_executor`, bumped Rust CLAP concurrency from 1 to 2. Allows CPU preprocessing of batch N+1 to overlap with GPU inference of batch N.
+- **Option A (batch size)**: Bumped `CLAP_BATCH_SIZE` from 8 to 16.
+- **Duration cap**: Added `duration=max_length_s` (~10s) to all `librosa.load()` calls — avoids loading/resampling entire large files when CLAP only uses a fixed window. File-path endpoint takes the middle segment; byte-buffer backends trim to middle after decode.
+- Combined result: significant throughput improvement on both small and large file packs.
