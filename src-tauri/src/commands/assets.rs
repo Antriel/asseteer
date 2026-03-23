@@ -52,3 +52,10 @@ pub async fn cancel_thumbnails(
     }
     Ok(())
 }
+
+/// Clear entire thumbnail worker queue (frontend cache was reset).
+#[tauri::command]
+pub async fn clear_thumbnail_queue(state: State<'_, AppState>) -> Result<(), String> {
+    state.thumbnail_worker.clear_all();
+    Ok(())
+}

@@ -79,6 +79,7 @@ pub fn run() {
             commands::assets::get_asset_bytes,
             commands::assets::request_thumbnails,
             commands::assets::cancel_thumbnails,
+            commands::assets::clear_thumbnail_queue,
             commands::scan::add_folder,
             commands::folders::list_folders,
             commands::folders::remove_folder,

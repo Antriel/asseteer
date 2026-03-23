@@ -1,11 +1,11 @@
 ---
 # asseteer-z8dp
 title: 'Processing progress: current filename disappears mid-processing'
-status: in-progress
+status: completed
 type: bug
 priority: normal
 created_at: 2026-03-21T12:07:18Z
-updated_at: 2026-03-23T08:49:49Z
+updated_at: 2026-03-23T08:55:46Z
 ---
 
 

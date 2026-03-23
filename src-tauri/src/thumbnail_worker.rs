@@ -24,6 +24,9 @@ use tokio::sync::mpsc;
 pub enum ThumbnailMsg {
     Request(Vec<i64>),
     Cancel(Vec<i64>),
+    /// Clear entire queue — sent when frontend clears its thumbnail cache
+    /// (e.g. on folder navigation / asset reload).
+    ClearAll,
 }
 
 /// Emitted per-thumbnail when generation completes.
@@ -55,6 +58,10 @@ impl ThumbnailWorkerHandle {
 
     pub fn cancel(&self, ids: Vec<i64>) {
         let _ = self.tx.send(ThumbnailMsg::Cancel(ids));
+    }
+
+    pub fn clear_all(&self) {
+        let _ = self.tx.send(ThumbnailMsg::ClearAll);
     }
 }
 
@@ -168,6 +175,17 @@ impl WorkerState {
             failed: self.failed,
             rate: recent as f64 / 5.0,
         }
+    }
+
+    /// Clear all pending/in-flight work. Called when frontend clears its cache.
+    fn clear_all(&mut self) {
+        self.pending.clear();
+        self.cancelled.clear();
+        self.in_flight.clear();
+        self.processing = 0;
+        self.loaded = 0;
+        self.failed = 0;
+        self.recent_timestamps.clear();
     }
 
     fn trim_timestamps(&mut self) {
@@ -320,6 +338,7 @@ fn apply_msg(state: &mut WorkerState, msg: ThumbnailMsg) {
     match msg {
         ThumbnailMsg::Request(ids) => state.add_requests(ids),
         ThumbnailMsg::Cancel(ids) => state.add_cancels(ids),
+        ThumbnailMsg::ClearAll => state.clear_all(),
     }
 }
 

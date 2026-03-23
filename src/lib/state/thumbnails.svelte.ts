@@ -55,15 +55,21 @@ async function ensureListeners() {
   // Listen for individual thumbnail completions
   await listen<{ asset_id: number; success: boolean }>('thumbnail-ready', async (event) => {
     const { asset_id, success } = event.payload;
-    requested.delete(asset_id);
+    // Keep in `requested` until cache/failed is populated to prevent re-requests
+    // during the async DB read window (reactive cascades from asset.width/height
+    // patches could re-trigger effects before cache.set completes).
 
     if (!success) {
       failed.add(asset_id);
+      requested.delete(asset_id);
       return;
     }
 
     // Already cached (e.g. from a previous generation)?
-    if (cache.has(asset_id)) return;
+    if (cache.has(asset_id)) {
+      requested.delete(asset_id);
+      return;
+    }
 
     // Read the thumbnail blob from DB
     try {
@@ -78,6 +84,7 @@ async function ensureListeners() {
     } catch {
       failed.add(asset_id);
     }
+    requested.delete(asset_id);
   });
 
   // Listen for periodic stats from the backend worker
@@ -175,6 +182,7 @@ function flushCancels() {
 
 /**
  * Clear all cached thumbnails. Call when the asset list changes.
+ * Also clears the backend worker queue so stale requests don't accumulate.
  */
 export function clearThumbnailCache(): void {
   for (const url of cache.values()) {
@@ -195,4 +203,9 @@ export function clearThumbnailCache(): void {
   }
   thumbnailMetrics.reset();
   cacheReset.version++;
+  // Tell backend worker to drop its pending queue too — without this,
+  // old requests stay queued and inflate the "Loading thumbnails" count.
+  invoke('clear_thumbnail_queue').catch((e: unknown) => {
+    console.error('Failed to clear thumbnail queue:', e);
+  });
 }
