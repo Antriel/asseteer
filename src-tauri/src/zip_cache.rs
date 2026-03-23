@@ -63,6 +63,9 @@ struct ZipCacheInner {
     entries: HashMap<String, CacheEntry>,
     access_counter: u64,
     total_cached_bytes: usize,
+    /// Estimated bytes reserved for entries currently being decompressed (Loading state).
+    /// Used to prevent concurrent loads from exceeding the budget.
+    in_flight_bytes: usize,
     budget_bytes: usize,
 }
 
@@ -72,6 +75,7 @@ static CACHE: Lazy<Mutex<ZipCacheInner>> = Lazy::new(|| {
         entries: HashMap::new(),
         access_counter: 0,
         total_cached_bytes: 0,
+        in_flight_bytes: 0,
         budget_bytes: budget,
     })
 });
@@ -117,7 +121,8 @@ pub fn load_asset_bytes_cached(asset: &Asset) -> Result<Vec<u8>, String> {
     let outer_zip_path = resolve_zip_path(asset);
     let key = compose_cache_key(&outer_zip_path, nested_zip_path);
 
-    let (cached_bytes, _guard) = get_or_load_cached_bytes(&key, &outer_zip_path, nested_zip_path)?;
+    let (cached_bytes, _guard) =
+        get_or_load_cached_bytes(&key, &outer_zip_path, nested_zip_path, DEFAULT_ESTIMATED_SIZE)?;
     load_entry_from_shared_zip_bytes(&cached_bytes, inner_entry, nested_zip_path)
 }
 
@@ -174,12 +179,16 @@ pub struct CacheEntryGuard {
 ///
 /// Returns shared bytes and a guard that keeps the entry pinned until dropped.
 /// Used by scan/discovery to bound memory usage across parallel decompression tasks.
+/// `size_hint` is the expected decompressed size (e.g. from ZIP entry metadata);
+/// used for accurate budget reservation of in-flight loads.
 pub fn load_for_scan(
     outer_zip_path: &str,
     nested_zip_entry: &str,
+    size_hint: u64,
 ) -> Result<(Arc<Vec<u8>>, CacheEntryGuard), String> {
     let key = compose_cache_key(outer_zip_path, nested_zip_entry);
-    let (bytes, guard) = get_or_load_cached_bytes(&key, outer_zip_path, nested_zip_entry)?;
+    let (bytes, guard) =
+        get_or_load_cached_bytes(&key, outer_zip_path, nested_zip_entry, size_hint as usize)?;
     Ok((bytes, CacheEntryGuard { _inner: guard }))
 }
 
@@ -214,11 +223,19 @@ pub fn entry_count() -> usize {
 
 /// Get cached bytes for a key, or load them if not cached.
 /// Returns the shared bytes and an RAII guard that keeps the entry pinned.
+/// `estimated_size` is the expected decompressed size, used for budget reservation
+/// of in-flight loads. Pass 0 to use DEFAULT_ESTIMATED_SIZE.
 fn get_or_load_cached_bytes(
     key: &str,
     outer_zip_path: &str,
     nested_zip_path: &str,
+    estimated_size: usize,
 ) -> Result<(Arc<Vec<u8>>, ActiveEntryGuard), String> {
+    let estimated_size = if estimated_size == 0 {
+        DEFAULT_ESTIMATED_SIZE
+    } else {
+        estimated_size
+    };
     let wait_started = Instant::now();
 
     loop {
@@ -267,9 +284,22 @@ fn get_or_load_cached_bytes(
                 continue;
             }
             None => {
-                // Cache miss — evict if needed, insert Loading placeholder
-                evict_for_budget(&mut cache, DEFAULT_ESTIMATED_SIZE);
+                // Cache miss — evict if needed, then check budget including in-flight loads
+                evict_for_budget(&mut cache, estimated_size);
 
+                let effective_usage = cache.total_cached_bytes + cache.in_flight_bytes;
+                if effective_usage + estimated_size > cache.budget_bytes {
+                    // Budget full (including in-flight loads) — wait for space
+                    drop(
+                        CACHE_CHANGED
+                            .wait(cache)
+                            .map_err(|e| format!("Cache lock poisoned: {}", e))?,
+                    );
+                    continue;
+                }
+
+                // Reserve budget for this load
+                cache.in_flight_bytes += estimated_size;
                 cache.access_counter += 1;
                 let access = cache.access_counter;
                 cache.entries.insert(
@@ -300,38 +330,39 @@ fn get_or_load_cached_bytes(
             let shared = Arc::new(bytes);
             let load_ms = load_started.elapsed().as_millis();
 
-            // Transition Loading → Ready
+            // Transition Loading → Ready: release reservation, add actual size
             if let Some(entry) = cache.entries.get_mut(key) {
                 entry.state = EntryState::Ready {
                     bytes: shared.clone(),
                     size_bytes,
                 };
             }
+            cache.in_flight_bytes = cache.in_flight_bytes.saturating_sub(estimated_size);
             cache.total_cached_bytes += size_bytes;
 
-            // If actual size exceeded our estimate, evict more if needed
-            if size_bytes > DEFAULT_ESTIMATED_SIZE {
-                evict_for_budget(&mut cache, 0);
-            }
+            // Evict if over budget (actual size may differ from estimate)
+            evict_for_budget(&mut cache, 0);
 
             if load_ms > CACHE_LOAD_WARN_MS {
                 eprintln!(
-                    "[ZipCache] WARN slow LOAD key='{}' size_mb={:.1} load_ms={} entries={} cached_mb={:.0}",
-                    key,
-                    size_bytes as f64 / MB,
-                    load_ms,
-                    cache.entries.len(),
-                    cache.total_cached_bytes as f64 / MB
-                );
-            } else {
-                println!(
-                    "[ZipCache] LOAD key='{}' size_mb={:.1} load_ms={} entries={} cached_mb={:.0}/{:.0}",
+                    "[ZipCache] WARN slow LOAD key='{}' size_mb={:.1} load_ms={} entries={} cached_mb={:.0} in_flight_mb={:.0}",
                     key,
                     size_bytes as f64 / MB,
                     load_ms,
                     cache.entries.len(),
                     cache.total_cached_bytes as f64 / MB,
-                    cache.budget_bytes as f64 / MB
+                    cache.in_flight_bytes as f64 / MB
+                );
+            } else {
+                println!(
+                    "[ZipCache] LOAD key='{}' size_mb={:.1} load_ms={} entries={} cached_mb={:.0}/{:.0} in_flight_mb={:.0}",
+                    key,
+                    size_bytes as f64 / MB,
+                    load_ms,
+                    cache.entries.len(),
+                    cache.total_cached_bytes as f64 / MB,
+                    cache.budget_bytes as f64 / MB,
+                    cache.in_flight_bytes as f64 / MB
                 );
             }
 
@@ -341,18 +372,19 @@ fn get_or_load_cached_bytes(
             }))
         }
         Err(err) => {
-            // Remove the Loading placeholder
+            // Remove the Loading placeholder, release reservation
             cache.entries.remove(key);
+            cache.in_flight_bytes = cache.in_flight_bytes.saturating_sub(estimated_size);
             CACHE_CHANGED.notify_all();
             Err(err)
         }
     }
 }
 
-/// Evict LRU unpinned entries until `total_cached_bytes + additional` fits within budget.
+/// Evict LRU unpinned entries until total usage (cached + in-flight + additional) fits within budget.
 /// Called while holding the cache lock.
 fn evict_for_budget(cache: &mut ZipCacheInner, additional: usize) {
-    while cache.total_cached_bytes + additional > cache.budget_bytes {
+    while cache.total_cached_bytes + cache.in_flight_bytes + additional > cache.budget_bytes {
         // Find the oldest Ready entry with no active users
         let victim = cache
             .entries
@@ -767,6 +799,7 @@ mod tests {
             entries: HashMap::new(),
             access_counter: 0,
             total_cached_bytes: 0,
+            in_flight_bytes: 0,
             budget_bytes: 300,
         };
 
@@ -815,6 +848,7 @@ mod tests {
             entries: HashMap::new(),
             access_counter: 0,
             total_cached_bytes: 0,
+            in_flight_bytes: 0,
             budget_bytes: 300,
         };
 
@@ -861,6 +895,7 @@ mod tests {
             entries: HashMap::new(),
             access_counter: 0,
             total_cached_bytes: 0,
+            in_flight_bytes: 0,
             budget_bytes: 10000,
         };
 

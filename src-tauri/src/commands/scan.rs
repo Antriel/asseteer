@@ -548,6 +548,7 @@ fn discover_nested_zip_parallel<'scope>(
     scope: &rayon::Scope<'scope>,
     outer_zip_path: &str,
     cache_path: &str,
+    size_hint: u64,
     folder_id: i64,
     rel_path: &str,
     zip_filename: &str,
@@ -559,7 +560,7 @@ fn discover_nested_zip_parallel<'scope>(
     fatal_error: &'scope Mutex<Option<String>>,
 ) {
     // Load through ZipCache for memory bounding and cache warming
-    let (bytes, _guard) = match crate::zip_cache::load_for_scan(outer_zip_path, cache_path) {
+    let (bytes, _guard) = match crate::zip_cache::load_for_scan(outer_zip_path, cache_path, size_hint) {
         Ok(v) => v,
         Err(e) => {
             eprintln!(
@@ -657,8 +658,8 @@ fn enumerate_zip_entries_parallel<'scope, R: Read + Seek>(
 
                 scope.spawn(move |scope| {
                     discover_nested_zip_parallel(
-                        scope, &outer, &nested_cache_path, folder_id,
-                        &rel, &zfn, zip_mtime, &nested_prefix,
+                        scope, &outer, &nested_cache_path, entry_size,
+                        folder_id, &rel, &zfn, zip_mtime, &nested_prefix,
                         &tx_nested, progress, search_excludes, fatal_error,
                     );
                 });
