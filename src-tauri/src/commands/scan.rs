@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
@@ -265,6 +265,11 @@ async fn update_session_status(
 
 /// Stream-discover all supported asset files, sending chunks through the channel.
 /// Runs on a blocking thread via spawn_blocking.
+///
+/// Uses rayon::scope to parallelize ZIP decompression: the filesystem walk runs on
+/// the calling thread while each outer ZIP file is processed in a rayon task. Nested
+/// ZIPs within each outer ZIP are also spawned as separate rayon tasks, each opening
+/// its own file handle. Memory is bounded via ZipCache's LRU eviction budget.
 pub(crate) fn discover_files_streaming(
     app: &AppHandle,
     root_path: &Path,
@@ -274,9 +279,6 @@ pub(crate) fn discover_files_streaming(
     event_name: &str,
     search_excludes: &std::collections::HashSet<String>,
 ) -> Result<(), String> {
-    let mut chunk = Vec::with_capacity(CHUNK_SIZE);
-    let mut last_emit = Instant::now();
-
     // Initial progress event
     let _ = app.emit(
         event_name,
@@ -290,135 +292,143 @@ pub(crate) fn discover_files_streaming(
         },
     );
 
-    for entry in WalkDir::new(root_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
+    // Collect the first fatal error from any rayon task (e.g. channel closed)
+    let fatal_error: Mutex<Option<String>> = Mutex::new(None);
 
-        if !path.is_file() {
-            continue;
-        }
+    rayon::scope(|s| {
+        // Rebind as a reference so move closures capture &Mutex (Copy) not Mutex
+        let fatal_error = &fatal_error;
+        let mut chunk = Vec::with_capacity(CHUNK_SIZE);
+        let mut last_emit = Instant::now();
 
-        let filename = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
+        for entry in WalkDir::new(root_path)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
 
-        // Skip macOS metadata files (._filename) and hidden files
-        if filename.starts_with("._") || filename.starts_with('.') {
-            continue;
-        }
+            if !path.is_file() {
+                continue;
+            }
 
-        if let Some(ext) = path.extension() {
-            let ext_str = ext.to_string_lossy().to_lowercase();
+            let filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
 
-            if let Some(asset_type) = detect_asset_type(path) {
-                let metadata = entry.metadata().map_err(|e| e.to_string())?;
+            // Skip macOS metadata files (._filename) and hidden files
+            if filename.starts_with("._") || filename.starts_with('.') {
+                continue;
+            }
 
-                // Compute rel_path: directory portion relative to root, forward slashes
-                let rel_path = compute_rel_path(root_path, path);
+            if let Some(ext) = path.extension() {
+                let ext_str = ext.to_string_lossy().to_lowercase();
 
-                // Get actual filesystem mtime
-                let fs_modified_at = metadata
-                    .modified()
-                    .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-                    .unwrap_or(0);
+                if let Some(asset_type) = detect_asset_type(path) {
+                    let metadata = match entry.metadata() {
+                        Ok(m) => m,
+                        Err(e) => {
+                            eprintln!("Warning: Failed to read metadata for {}: {}", path.display(), e);
+                            continue;
+                        }
+                    };
 
-                let searchable_path = compute_searchable_path(&rel_path, None, None, search_excludes);
-                chunk.push(DiscoveredAsset {
-                    filename: filename.to_string(),
-                    folder_id,
-                    rel_path,
-                    zip_file: None,
-                    zip_entry: None,
-                    zip_compression: None,
-                    searchable_path,
-                    format: ext_str.to_string(),
-                    asset_type,
-                    file_size: metadata.len() as i64,
-                    fs_modified_at,
-                });
-                progress.files_found.fetch_add(1, Ordering::Relaxed);
+                    let rel_path = compute_rel_path(root_path, path);
+                    let fs_modified_at = metadata
+                        .modified()
+                        .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+                        .unwrap_or(0);
 
-                if chunk.len() >= CHUNK_SIZE {
-                    let batch = std::mem::replace(&mut chunk, Vec::with_capacity(CHUNK_SIZE));
-                    tx.blocking_send(batch)
-                        .map_err(|_| "Insert task stopped".to_string())?;
-                }
-            } else if ext_str == "zip" {
-                // Compute rel_path and zip_file for ZIP entries
-                let zip_rel_path = compute_rel_path(root_path, path);
-                let zip_filename = filename.to_string();
+                    let searchable_path = compute_searchable_path(&rel_path, None, None, search_excludes);
+                    chunk.push(DiscoveredAsset {
+                        filename: filename.to_string(),
+                        folder_id,
+                        rel_path,
+                        zip_file: None,
+                        zip_entry: None,
+                        zip_compression: None,
+                        searchable_path,
+                        format: ext_str.to_string(),
+                        asset_type,
+                        file_size: metadata.len() as i64,
+                        fs_modified_at,
+                    });
+                    progress.files_found.fetch_add(1, Ordering::Relaxed);
 
-                // Get ZIP file mtime for all entries inside
-                let zip_mtime = entry.metadata()
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-                    .unwrap_or(0);
-
-                match discover_zip_streaming(
-                    path,
-                    folder_id,
-                    &zip_rel_path,
-                    &zip_filename,
-                    zip_mtime,
-                    &tx,
-                    progress,
-                    &mut chunk,
-                    search_excludes,
-                ) {
-                    Ok(()) => {
-                        progress.zips_scanned.fetch_add(1, Ordering::Relaxed);
-                        // Flush chunk after each zip so inserts aren't delayed
-                        if !chunk.is_empty() {
-                            let batch =
-                                std::mem::replace(&mut chunk, Vec::with_capacity(CHUNK_SIZE));
-                            tx.blocking_send(batch)
-                                .map_err(|_| "Insert task stopped".to_string())?;
+                    if chunk.len() >= CHUNK_SIZE {
+                        let batch = std::mem::replace(&mut chunk, Vec::with_capacity(CHUNK_SIZE));
+                        if tx.blocking_send(batch).is_err() {
+                            set_fatal_error(&fatal_error, "Insert task stopped".to_string());
+                            return;
                         }
                     }
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: Failed to process zip file {}: {}",
-                            path.display(),
-                            e
+                } else if ext_str == "zip" {
+                    let zip_path = path.to_path_buf();
+                    let zip_rel_path = compute_rel_path(root_path, path);
+                    let zip_filename = filename.to_string();
+                    let zip_mtime = entry.metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
+                        .unwrap_or(0);
+                    let tx_zip = tx.clone();
+
+                    s.spawn(move |s| {
+                        discover_zip_parallel(
+                            s, &zip_path, folder_id, &zip_rel_path, &zip_filename,
+                            zip_mtime, &tx_zip, progress, search_excludes, &fatal_error,
                         );
-                    }
+                    });
                 }
+            }
+
+            // Emit progress periodically from walk
+            if last_emit.elapsed().as_millis() >= EMIT_INTERVAL_MS {
+                let found = progress.files_found.load(Ordering::Relaxed);
+                let inserted = progress.files_inserted.load(Ordering::Relaxed);
+                let zips = progress.zips_scanned.load(Ordering::Relaxed);
+                let _ = app.emit(
+                    event_name,
+                    ScanProgress {
+                        phase: "scanning".to_string(),
+                        files_found: found,
+                        files_inserted: inserted,
+                        files_total: 0,
+                        zips_scanned: zips,
+                        current_path: Some(path.to_string_lossy().to_string()),
+                    },
+                );
+                last_emit = Instant::now();
             }
         }
 
-        // Emit progress periodically from discovery side
-        if last_emit.elapsed().as_millis() >= EMIT_INTERVAL_MS {
-            let found = progress.files_found.load(Ordering::Relaxed);
-            let inserted = progress.files_inserted.load(Ordering::Relaxed);
-            let zips = progress.zips_scanned.load(Ordering::Relaxed);
-            let _ = app.emit(
-                event_name,
-                ScanProgress {
-                    phase: "scanning".to_string(),
-                    files_found: found,
-                    files_inserted: inserted,
-                    files_total: 0,
-                    zips_scanned: zips,
-                    current_path: Some(path.to_string_lossy().to_string()),
-                },
-            );
-            last_emit = Instant::now();
+        // Send remaining regular file assets
+        if !chunk.is_empty() {
+            if tx.blocking_send(chunk).is_err() {
+                set_fatal_error(&fatal_error, "Insert task stopped".to_string());
+            }
         }
-    }
+    });
+    // rayon::scope blocks until all tasks (walk + all ZIP tasks) complete
 
-    // Send any remaining assets
-    if !chunk.is_empty() {
-        tx.blocking_send(chunk)
-            .map_err(|_| "Insert task stopped".to_string())?;
+    // Check for fatal errors from any task
+    let error = fatal_error.into_inner().map_err(|e| format!("Lock poisoned: {}", e))?;
+    if let Some(err) = error {
+        return Err(err);
     }
 
     progress.discovery_complete.store(true, Ordering::Release);
     Ok(())
+}
+
+/// Set a fatal error, keeping only the first one.
+fn set_fatal_error(fatal_error: &Mutex<Option<String>>, msg: String) {
+    if let Ok(mut e) = fatal_error.lock() {
+        if e.is_none() {
+            *e = Some(msg);
+        }
+    }
 }
 
 /// Compute the relative directory path from root to the file's parent directory.
@@ -494,61 +504,131 @@ pub(crate) fn compute_searchable_path(
     result.join(" ")
 }
 
-/// Discover assets inside a zip file, streaming chunks through the channel
-fn discover_zip_streaming(
+/// Process an outer ZIP file in a rayon task: enumerate entries, spawn nested ZIP tasks.
+fn discover_zip_parallel<'scope>(
+    scope: &rayon::Scope<'scope>,
     zip_path: &Path,
     folder_id: i64,
     rel_path: &str,
     zip_filename: &str,
     zip_mtime: i64,
     tx: &mpsc::Sender<Vec<DiscoveredAsset>>,
-    progress: &ScanProgressState,
-    chunk: &mut Vec<DiscoveredAsset>,
-    search_excludes: &std::collections::HashSet<String>,
-) -> Result<(), String> {
-    let file =
-        File::open(zip_path).map_err(|e| format!("Failed to open zip: {}", e))?;
+    progress: &'scope ScanProgressState,
+    search_excludes: &'scope std::collections::HashSet<String>,
+    fatal_error: &'scope Mutex<Option<String>>,
+) {
+    let file = match File::open(zip_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Warning: Failed to open zip {}: {}", zip_path.display(), e);
+            return;
+        }
+    };
+    let mut archive = match ZipArchive::new(file) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("Warning: Failed to read zip archive {}: {}", zip_path.display(), e);
+            return;
+        }
+    };
 
-    let archive =
-        ZipArchive::new(file).map_err(|e| format!("Failed to read zip archive: {}", e))?;
+    let outer_zip_path_str = zip_path.to_string_lossy().replace('\\', "/");
 
-    discover_zip_recursive_streaming(
-        archive, folder_id, rel_path, zip_filename, zip_mtime,
-        "", tx, progress, chunk, search_excludes,
-    )
+    enumerate_zip_entries_parallel(
+        scope, &mut archive, &outer_zip_path_str, "",
+        folder_id, rel_path, zip_filename, zip_mtime, "",
+        tx, progress, search_excludes, fatal_error,
+    );
+
+    progress.zips_scanned.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Recursively discover assets in a zip archive, streaming results
-fn discover_zip_recursive_streaming<R: Read + Seek>(
-    mut archive: ZipArchive<R>,
+/// Process a nested ZIP via ZipCache (memory-bounded), spawning tasks for deeper nesting.
+fn discover_nested_zip_parallel<'scope>(
+    scope: &rayon::Scope<'scope>,
+    outer_zip_path: &str,
+    cache_path: &str,
     folder_id: i64,
     rel_path: &str,
     zip_filename: &str,
     zip_mtime: i64,
     prefix: &str,
     tx: &mpsc::Sender<Vec<DiscoveredAsset>>,
-    progress: &ScanProgressState,
-    chunk: &mut Vec<DiscoveredAsset>,
-    search_excludes: &std::collections::HashSet<String>,
-) -> Result<(), String> {
-    // First pass: collect entry info (indices needed to avoid borrow conflicts)
-    let mut entries_info: Vec<(usize, String, u64, &'static str)> = Vec::new();
+    progress: &'scope ScanProgressState,
+    search_excludes: &'scope std::collections::HashSet<String>,
+    fatal_error: &'scope Mutex<Option<String>>,
+) {
+    // Load through ZipCache for memory bounding and cache warming
+    let (bytes, _guard) = match crate::zip_cache::load_for_scan(outer_zip_path, cache_path) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!(
+                "Warning: Failed to load nested zip {}/{}: {}",
+                outer_zip_path, cache_path, e
+            );
+            return;
+        }
+    };
 
+    let mut archive = match ZipArchive::new(Cursor::new(bytes.as_slice())) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!(
+                "Warning: Failed to open nested zip {}/{}: {}",
+                outer_zip_path, cache_path, e
+            );
+            return;
+        }
+    };
+
+    enumerate_zip_entries_parallel(
+        scope, &mut archive, outer_zip_path, cache_path,
+        folder_id, rel_path, zip_filename, zip_mtime, prefix,
+        tx, progress, search_excludes, fatal_error,
+    );
+}
+
+/// Shared enumeration logic for both outer and nested ZIPs.
+/// Enumerates entries, sends media assets through the channel, and spawns rayon
+/// tasks for any nested ZIP entries found.
+fn enumerate_zip_entries_parallel<'scope, R: Read + Seek>(
+    scope: &rayon::Scope<'scope>,
+    archive: &mut ZipArchive<R>,
+    outer_zip_path: &str,
+    cache_path: &str,
+    folder_id: i64,
+    rel_path: &str,
+    zip_filename: &str,
+    zip_mtime: i64,
+    prefix: &str,
+    tx: &mpsc::Sender<Vec<DiscoveredAsset>>,
+    progress: &'scope ScanProgressState,
+    search_excludes: &'scope std::collections::HashSet<String>,
+    fatal_error: &'scope Mutex<Option<String>>,
+) {
+    // First pass: collect entry metadata to avoid borrow conflicts with archive
+    let mut entries: Vec<(String, u64, &'static str)> = Vec::new();
     for i in 0..archive.len() {
-        let entry = archive
-            .by_index(i)
-            .map_err(|e| format!("Failed to read zip entry: {}", e))?;
-
-        if !entry.is_dir() {
-            let compression = compression_method_str(entry.compression());
-            entries_info.push((i, entry.name().to_string(), entry.size(), compression));
+        if let Ok(entry) = archive.by_index(i) {
+            if !entry.is_dir() {
+                entries.push((
+                    entry.name().to_string(),
+                    entry.size(),
+                    compression_method_str(entry.compression()),
+                ));
+            }
         }
     }
 
-    // Second pass: process entries
-    for (idx, entry_name, entry_size, entry_compression) in entries_info {
-        let entry_path_buf = PathBuf::from(&entry_name);
+    // Second pass: process entries (archive no longer borrowed)
+    let mut chunk = Vec::with_capacity(CHUNK_SIZE);
 
+    for (entry_name, entry_size, entry_compression) in entries {
+        if fatal_error.lock().map_or(false, |e| e.is_some()) {
+            return;
+        }
+
+        let entry_path_buf = PathBuf::from(&entry_name);
         let filename = entry_path_buf
             .file_name()
             .unwrap_or_default()
@@ -563,49 +643,30 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
             let ext_str = ext.to_string_lossy().to_lowercase();
 
             if ext_str == "zip" {
-                // Read nested zip into memory (unavoidable for zip format)
-                let mut entry = archive
-                    .by_index(idx)
-                    .map_err(|e| format!("Failed to read nested zip entry: {}", e))?;
+                // Compute paths for the nested ZIP task
+                let nested_cache_path = if cache_path.is_empty() {
+                    entry_name.clone()
+                } else {
+                    format!("{}/{}", cache_path, entry_name)
+                };
+                let nested_prefix = format!("{}{}/", prefix, entry_name);
+                let outer = outer_zip_path.to_string();
+                let tx_nested = tx.clone();
+                let rel = rel_path.to_string();
+                let zfn = zip_filename.to_string();
 
-                let mut buffer = Vec::new();
-                entry
-                    .read_to_end(&mut buffer)
-                    .map_err(|e| format!("Failed to read nested zip content: {}", e))?;
-
-                let cursor = Cursor::new(buffer);
-                match ZipArchive::new(cursor) {
-                    Ok(nested_archive) => {
-                        let nested_prefix = format!("{}{}/", prefix, entry_name);
-
-                        if let Err(e) = discover_zip_recursive_streaming(
-                            nested_archive,
-                            folder_id,
-                            rel_path,
-                            zip_filename,
-                            zip_mtime,
-                            &nested_prefix,
-                            tx,
-                            progress,
-                            chunk,
-                            search_excludes,
-                        ) {
-                            eprintln!(
-                                "Warning: Failed to process nested zip {}{}: {}",
-                                prefix, entry_name, e
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: Failed to open nested zip {}{}: {}",
-                            prefix, entry_name, e
-                        );
-                    }
-                }
+                scope.spawn(move |scope| {
+                    discover_nested_zip_parallel(
+                        scope, &outer, &nested_cache_path, folder_id,
+                        &rel, &zfn, zip_mtime, &nested_prefix,
+                        &tx_nested, progress, search_excludes, fatal_error,
+                    );
+                });
             } else if let Some(asset_type) = detect_asset_type_from_ext(&ext_str) {
                 let full_entry_path = format!("{}{}", prefix, entry_name);
-                let searchable_path = compute_searchable_path(rel_path, Some(zip_filename), Some(&full_entry_path), search_excludes);
+                let searchable_path = compute_searchable_path(
+                    rel_path, Some(zip_filename), Some(&full_entry_path), search_excludes,
+                );
 
                 chunk.push(DiscoveredAsset {
                     filename: filename.to_string(),
@@ -623,15 +684,22 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
                 progress.files_found.fetch_add(1, Ordering::Relaxed);
 
                 if chunk.len() >= CHUNK_SIZE {
-                    let batch = std::mem::replace(chunk, Vec::with_capacity(CHUNK_SIZE));
-                    tx.blocking_send(batch)
-                        .map_err(|_| "Insert task stopped".to_string())?;
+                    let batch = std::mem::replace(&mut chunk, Vec::with_capacity(CHUNK_SIZE));
+                    if tx.blocking_send(batch).is_err() {
+                        set_fatal_error(fatal_error, "Insert task stopped".to_string());
+                        return;
+                    }
                 }
             }
         }
     }
 
-    Ok(())
+    // Flush remaining assets in this task's chunk
+    if !chunk.is_empty() {
+        if tx.blocking_send(chunk).is_err() {
+            set_fatal_error(fatal_error, "Insert task stopped".to_string());
+        }
+    }
 }
 
 /// Insert a chunk of assets in a single transaction

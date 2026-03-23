@@ -1,11 +1,11 @@
 ---
 # asseteer-ga18
 title: Parallelize nested ZIP decompression during scan/import
-status: todo
+status: completed
 type: feature
 priority: normal
 created_at: 2026-03-21T12:40:32Z
-updated_at: 2026-03-23T00:00:00Z
+updated_at: 2026-03-23T09:46:41Z
 parent: asseteer-k1go
 ---
 
@@ -162,3 +162,29 @@ Each rayon task maintains its own `Vec<DiscoveredAsset>` chunk buffer. When full
 - Verify insertion order doesn't matter (assets are identified by path, not insertion order)
 - Edge cases: folder with 100+ small ZIPs, folder with 1 huge ZIP, empty ZIPs, deeply nested ZIPs
 - Verify cached nested ZIP bytes are usable by processing phase (no double-decompression for small imports)
+
+
+## Summary of Changes
+
+Parallelized the scan/discovery phase using `rayon::scope` so ZIP decompression runs concurrently, bounded by the shared ZipCache memory budget.
+
+### Changes made:
+
+**`src-tauri/src/zip_cache.rs`**:
+- Added `CacheEntryGuard` (public opaque RAII guard for cache entries)
+- Added `load_for_scan()` — public API for scan to load nested ZIP bytes through the memory-budgeted cache, returning shared bytes and a pinned guard
+
+**`src-tauri/src/commands/scan.rs`**:
+- Rewrote `discover_files_streaming()` to use `rayon::scope`: the filesystem walk runs on the calling thread while each outer ZIP spawns a rayon task
+- Added `discover_zip_parallel()` — processes an outer ZIP in a rayon task, spawning nested ZIP tasks
+- Added `discover_nested_zip_parallel()` — loads nested ZIP bytes through ZipCache (memory-bounded), enumerates entries, spawns deeper nesting tasks
+- Added `enumerate_zip_entries_parallel()` — shared enumeration logic for both outer and nested ZIPs, spawning rayon tasks for nested ZIPs found within
+- Removed sequential `discover_zip_streaming()` and `discover_zip_recursive_streaming()`
+- Added `set_fatal_error()` helper for thread-safe error propagation
+
+### Key design points:
+- **Parallelism at nested ZIP level**: each nested ZIP task opens its own file handle to the outer ZIP, enabling true parallel I/O on SSDs
+- **Memory bounding via ZipCache**: nested ZIP decompression goes through ZipCache's LRU eviction, sharing the same budget as processing
+- **Cache warming**: nested ZIP bytes cached during scan may still be warm when processing starts
+- **Pipelined**: ZIPs start decompressing as soon as discovered during the walk, rather than waiting for the walk to finish
+- **Zero API changes**: `discover_files_streaming` signature unchanged, rescan.rs works without modification

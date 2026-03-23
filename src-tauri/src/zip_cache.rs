@@ -165,6 +165,24 @@ pub fn evict_unpinned() {
     }
 }
 
+/// Opaque guard that keeps a cached entry pinned. Drop to release for eviction.
+pub struct CacheEntryGuard {
+    _inner: ActiveEntryGuard,
+}
+
+/// Load nested ZIP bytes through the memory-budgeted cache for scan enumeration.
+///
+/// Returns shared bytes and a guard that keeps the entry pinned until dropped.
+/// Used by scan/discovery to bound memory usage across parallel decompression tasks.
+pub fn load_for_scan(
+    outer_zip_path: &str,
+    nested_zip_entry: &str,
+) -> Result<(Arc<Vec<u8>>, CacheEntryGuard), String> {
+    let key = compose_cache_key(outer_zip_path, nested_zip_entry);
+    let (bytes, guard) = get_or_load_cached_bytes(&key, outer_zip_path, nested_zip_entry)?;
+    Ok((bytes, CacheEntryGuard { _inner: guard }))
+}
+
 /// Hard clear: evict everything. Only call when ALL processing is stopped.
 #[allow(dead_code)]
 pub fn clear() {
