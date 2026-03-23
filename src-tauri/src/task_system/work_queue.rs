@@ -1,6 +1,7 @@
 /// Work queue with worker pool for processing assets
 use crate::models::{Asset, ProcessingCategory};
-use crate::task_system::processor::{process_asset, process_clap_embedding_batch};
+use crate::task_system::db_writer::{DbBatchWriter, ProcessingOutput};
+use crate::task_system::processor::{process_asset_cpu, process_clap_embedding_batch};
 use crate::utils::unix_now;
 use crate::zip_cache;
 use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
@@ -55,23 +56,7 @@ struct BatchPlan {
 }
 
 
-async fn record_processing_error(
-    asset_id: i64,
-    category: &ProcessingCategory,
-    error_msg: &str,
-    db: &SqlitePool,
-) {
-    let _ = sqlx::query(
-        "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
-         VALUES (?, ?, ?, ?, 0)",
-    )
-    .bind(asset_id)
-    .bind(category.as_str())
-    .bind(error_msg)
-    .bind(unix_now())
-    .execute(db)
-    .await;
-}
+// Error recording is now handled by DbBatchWriter
 
 /// Progress statistics for a processing category
 #[derive(Debug, Clone, Serialize)]
@@ -144,6 +129,8 @@ pub struct WorkQueue {
     category_states: Arc<RwLock<HashMap<ProcessingCategory, CategoryState>>>,
     worker_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
     dispatcher_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    /// Batched database writer shared by all workers (created lazily on first start)
+    db_writer: RwLock<Option<DbBatchWriter>>,
 }
 
 impl WorkQueue {
@@ -159,7 +146,17 @@ impl WorkQueue {
             category_states: Arc::new(RwLock::new(HashMap::new())),
             worker_handles: Arc::new(RwLock::new(Vec::new())),
             dispatcher_handle: Arc::new(RwLock::new(None)),
+            db_writer: RwLock::new(None),
         }
+    }
+
+    /// Get or create the batch writer, returning a clone of the sender.
+    async fn ensure_db_writer(&self, db: &SqlitePool) -> DbBatchWriter {
+        let mut writer = self.db_writer.write().await;
+        if writer.is_none() {
+            *writer = Some(DbBatchWriter::new(db.clone()));
+        }
+        writer.as_ref().unwrap().clone()
     }
 
     /// Get or create category state
@@ -422,23 +419,26 @@ impl WorkQueue {
             let num_workers = std::cmp::max(2, num_cpus::get().saturating_sub(1));
             println!("[WorkQueue] Starting {} workers (detected {} CPUs)", num_workers, num_cpus::get());
 
+            let batch_writer = self.ensure_db_writer(&db).await;
+
             // Spawn workers
             for worker_id in 0..num_workers {
-                let handle = self.spawn_worker(worker_id, db.clone()).await;
+                let handle = self.spawn_worker(worker_id, db.clone(), batch_writer.clone()).await;
                 handles.push(handle);
             }
         }
         drop(handles);
 
         // Spawn progress emitter task for this category
-        self.spawn_progress_emitter(category, app_handle.clone()).await;
+        let batch_writer_for_emitter = self.ensure_db_writer(&db).await;
+        self.spawn_progress_emitter(category, app_handle.clone(), batch_writer_for_emitter).await;
 
         Ok(())
     }
 
     /// Spawn a worker task that processes assets from both channels.
     /// Workers check the ZIP channel first (priority) then fall back to non-ZIP.
-    async fn spawn_worker(&self, _worker_id: usize, db: SqlitePool) -> tokio::task::JoinHandle<()> {
+    async fn spawn_worker(&self, _worker_id: usize, db: SqlitePool, batch_writer: DbBatchWriter) -> tokio::task::JoinHandle<()> {
         let zip_rx = self.zip_rx.clone();
         let nonzip_rx = self.nonzip_rx.clone();
         let category_states = self.category_states.clone();
@@ -523,7 +523,7 @@ impl WorkQueue {
                     break;
                 };
 
-                // For CLAP, process as a batch
+                // For CLAP, process as a batch (writes directly — concurrency=1, no contention)
                 if category == ProcessingCategory::Clap {
                     let batch_len = batch_assets.len();
                     {
@@ -544,11 +544,22 @@ impl WorkQueue {
                         } else {
                             state.failed_assets.fetch_add(1, Ordering::SeqCst);
                             if let Some(error_msg) = &result.error {
-                                record_processing_error(result.asset_id, &category, error_msg, &db).await;
+                                // CLAP errors written directly (concurrency=1)
+                                let _ = sqlx::query(
+                                    "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
+                                     VALUES (?, ?, ?, ?, 0)",
+                                )
+                                .bind(result.asset_id)
+                                .bind(category.as_str())
+                                .bind(error_msg)
+                                .bind(unix_now())
+                                .execute(&db)
+                                .await;
                             }
                         }
                     }
                 } else {
+                    // Image/Audio: CPU-only processing, DB writes batched via DbBatchWriter
                     for asset in batch_assets {
                         while state.pause_signal.load(Ordering::SeqCst)
                             && !state.stop_signal.load(Ordering::SeqCst)
@@ -565,26 +576,27 @@ impl WorkQueue {
                             *current = Some(asset.filename.clone());
                         }
 
-                        let result = process_asset(&asset, &db, pre_generate_thumbnails).await;
+                        let output = process_asset_cpu(&asset, pre_generate_thumbnails).await;
 
                         {
                             let mut current = state.current_file.write().await;
                             *current = None;
                         }
 
-                        if result.success {
-                            state.completed_assets.fetch_add(1, Ordering::SeqCst);
-                        } else {
-                            state.failed_assets.fetch_add(1, Ordering::SeqCst);
-                            eprintln!(
-                                "[Worker] Failed to process asset {}: {:?}",
-                                asset.filename, result.error
-                            );
-
-                            if let Some(error_msg) = &result.error {
-                                record_processing_error(asset.id, &category, error_msg, &db).await;
+                        match &output {
+                            ProcessingOutput::Failure { error, .. } => {
+                                state.failed_assets.fetch_add(1, Ordering::SeqCst);
+                                eprintln!(
+                                    "[Worker] Failed to process asset {}: {}",
+                                    asset.filename, error
+                                );
+                            }
+                            _ => {
+                                state.completed_assets.fetch_add(1, Ordering::SeqCst);
                             }
                         }
+
+                        batch_writer.send(output).await;
                     }
                 }
 
@@ -597,7 +609,7 @@ impl WorkQueue {
     }
 
     /// Spawn a task that periodically emits progress events for a category
-    async fn spawn_progress_emitter(&self, category: ProcessingCategory, app_handle: AppHandle) {
+    async fn spawn_progress_emitter(&self, category: ProcessingCategory, app_handle: AppHandle, batch_writer: DbBatchWriter) {
         let state = self.ensure_category_state(category).await;
         let category_str = category.as_str().to_string();
 
@@ -652,6 +664,9 @@ impl WorkQueue {
 
                 // Check if all work is done for this category
                 if completed + failed >= total && total > 0 {
+                    // Flush any remaining batched writes before reporting completion
+                    batch_writer.flush().await;
+
                     println!(
                         "[Progress Emitter] Category '{}' complete: {}/{} assets processed",
                         category_str, completed, total
@@ -890,9 +905,10 @@ impl WorkQueue {
         let mut handles = self.worker_handles.write().await;
         handles.retain(|h| !h.is_finished());
         if handles.is_empty() {
+            let batch_writer = self.ensure_db_writer(&db).await;
             let num_workers = 2; // fewer workers in tests
             for worker_id in 0..num_workers {
-                let handle = self.spawn_worker(worker_id, db.clone()).await;
+                let handle = self.spawn_worker(worker_id, db.clone(), batch_writer.clone()).await;
                 handles.push(handle);
             }
         }
@@ -904,8 +920,13 @@ impl WorkQueue {
     }
 
     /// Sets `is_running = false` when all items in a category are processed.
+    /// Also flushes the batch writer to ensure all DB writes complete.
     async fn spawn_completion_monitor(&self, category: ProcessingCategory) {
         let state = self.ensure_category_state(category).await;
+        let batch_writer = {
+            let w = self.db_writer.read().await;
+            w.clone()
+        };
         tokio::spawn(async move {
             loop {
                 if state.stop_signal.load(Ordering::SeqCst) {
@@ -915,6 +936,10 @@ impl WorkQueue {
                 let completed = state.completed_assets.load(Ordering::SeqCst);
                 let failed = state.failed_assets.load(Ordering::SeqCst);
                 if total > 0 && completed + failed >= total {
+                    // Flush batched writes before marking complete
+                    if let Some(ref writer) = batch_writer {
+                        writer.flush().await;
+                    }
                     state.is_running.store(false, Ordering::SeqCst);
                     break;
                 }

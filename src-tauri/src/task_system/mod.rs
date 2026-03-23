@@ -1,3 +1,4 @@
+pub mod db_writer;
 pub mod processor;
 pub mod work_queue;
 
