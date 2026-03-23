@@ -30,6 +30,9 @@ class ProcessingState {
   // Categories enabled for processing (using SvelteSet for reactivity)
   enabledCategories = $state(new SvelteSet<ProcessingCategory>(['image', 'audio', 'clap']));
 
+  // Categories that have been asked to stop but are still winding down
+  stoppingCategories = $state(new SvelteSet<ProcessingCategory>());
+
   // Pending asset count (from database)
   pendingCount = $state<PendingCount>({ images: 0, audio: 0, clap: 0, total: 0 });
 
@@ -95,6 +98,10 @@ class ProcessingState {
       isPaused: progress.is_paused,
       isRunning: progress.is_running,
     });
+    // Clear stopping state once the category is no longer running
+    if (!progress.is_running) {
+      this.stoppingCategories.delete(category);
+    }
   }
 
   /**
@@ -174,6 +181,7 @@ class ProcessingState {
    * Stop processing for a specific category
    */
   async stop(category: ProcessingCategory, skipPendingRefresh = false) {
+    this.stoppingCategories.add(category);
     try {
       await invoke('stop_processing', { category });
       // State will be updated by backend or can be refreshed
@@ -183,7 +191,14 @@ class ProcessingState {
         await this.refreshPendingCount();
       }
     } catch (error) {
+      const msg = String(error);
+      // Silently ignore if already stopped (e.g. rapid double-click)
+      if (msg.includes('not running')) {
+        this.stoppingCategories.delete(category);
+        return;
+      }
       console.error(`[Processing] Failed to stop ${category}:`, error);
+      this.stoppingCategories.delete(category);
       throw error;
     }
   }

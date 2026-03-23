@@ -30,12 +30,26 @@
   let statusConfig = $derived.by(() => {
     switch (status) {
       case 'running':
+        if (isStopping) {
+          return {
+            label: 'Stopping...',
+            bgClass: 'bg-yellow-100 dark:bg-yellow-900/30',
+            textClass: 'text-yellow-700 dark:text-yellow-300',
+          };
+        }
         return {
           label: 'Running',
           bgClass: 'bg-blue-100 dark:bg-blue-900/30',
           textClass: 'text-blue-700 dark:text-blue-300',
         };
       case 'paused':
+        if (isStopping) {
+          return {
+            label: 'Stopping...',
+            bgClass: 'bg-yellow-100 dark:bg-yellow-900/30',
+            textClass: 'text-yellow-700 dark:text-yellow-300',
+          };
+        }
         return {
           label: 'Paused',
           bgClass: 'bg-orange-100 dark:bg-orange-900/30',
@@ -56,11 +70,14 @@
     }
   });
 
+  // Stopping wind-down state
+  let isStopping = $derived(processingState.stoppingCategories.has(category));
+
   // Button visibility
   let canStart = $derived(status === 'idle' && !disabled);
-  let canPause = $derived(status === 'running');
-  let canResume = $derived(status === 'paused');
-  let canStop = $derived(status === 'running' || status === 'paused');
+  let canPause = $derived(status === 'running' && !isStopping);
+  let canResume = $derived(status === 'paused' && !isStopping);
+  let canStop = $derived((status === 'running' || status === 'paused') && !isStopping);
 
   // Event handlers
   async function handleStart() {
@@ -141,7 +158,11 @@
         </button>
       {/if}
 
-      {#if canStop}
+      {#if isStopping}
+        <span class="px-3 py-1.5 text-sm font-medium text-yellow-700 dark:text-yellow-300 bg-yellow-100 dark:bg-yellow-900/30 rounded">
+          Stopping...
+        </span>
+      {:else if canStop}
         <button
           onclick={handleStop}
           class="px-3 py-1.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded transition-colors"
