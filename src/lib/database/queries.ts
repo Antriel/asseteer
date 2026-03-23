@@ -232,12 +232,17 @@ export async function getPendingAssetCounts(
   db: Database,
   preGenerateThumbnails = false,
 ): Promise<AssetPendingCounts> {
-  // Count images without metadata, or missing thumbnail when thumbnails are enabled
+  // Count images without metadata, or missing thumbnail when thumbnails are enabled.
+  // Exclude images ≤128px when checking thumbnails — they don't need thumbnails
+  // (the original is already small enough to serve as its own thumbnail).
   const imagesResult = await db.select<Array<{ 'COUNT(*)': number }>>(
     preGenerateThumbnails
       ? `SELECT COUNT(*) FROM assets a
 		 LEFT JOIN image_metadata im ON a.id = im.asset_id
-		 WHERE a.asset_type = 'image' AND (im.asset_id IS NULL OR im.thumbnail_data IS NULL)`
+		 WHERE a.asset_type = 'image' AND (im.asset_id IS NULL
+		   OR (im.thumbnail_data IS NULL
+		       AND NOT (im.width IS NOT NULL AND im.width <= 128
+		               AND im.height IS NOT NULL AND im.height <= 128)))`
       : `SELECT COUNT(*) FROM assets a
 		 LEFT JOIN image_metadata im ON a.id = im.asset_id
 		 WHERE a.asset_type = 'image' AND im.asset_id IS NULL`,

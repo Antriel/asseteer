@@ -124,7 +124,7 @@
     <div class="w-px h-5 bg-tertiary mx-4"></div>
     <div class="flex items-center gap-2 text-xs text-tertiary">
       <div class="w-2 h-2 rounded-full bg-accent animate-pulse"></div>
-      <span>Thumbnails: {thumbnailMetrics.queued + thumbnailMetrics.processing} queued</span>
+      <span>Loading thumbnails: {thumbnailMetrics.queued + thumbnailMetrics.processing}</span>
       {#if thumbnailMetrics.rate > 0}
         <span>&middot; {thumbnailMetrics.rate}/s</span>
       {/if}
@@ -171,14 +171,14 @@
             <span class="text-tertiary">{getCategoryLabel(category)}</span>
             <div class="w-12 h-1.5 rounded-full bg-tertiary overflow-hidden">
               <div
-                class="h-full rounded-full transition-all duration-300
+                class="h-full transition-all duration-300
                        {status === 'running'
                   ? 'bg-accent'
                   : status === 'paused'
                     ? 'bg-warning'
                     : status === 'completed'
                       ? 'bg-success'
-                      : 'bg-secondary'}"
+                      : 'bg-accent/40'}"
                 style="width: {percent}%"
               ></div>
             </div>
