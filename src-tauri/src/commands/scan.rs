@@ -272,7 +272,7 @@ pub(crate) fn discover_files_streaming(
     tx: mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
     event_name: &str,
-    search_excludes: &std::collections::HashSet<(Option<String>, String)>,
+    search_excludes: &std::collections::HashSet<String>,
 ) -> Result<(), String> {
     let mut chunk = Vec::with_capacity(CHUNK_SIZE);
     let mut last_emit = Instant::now();
@@ -315,7 +315,7 @@ pub(crate) fn discover_files_streaming(
             let ext_str = ext.to_string_lossy().to_lowercase();
 
             if let Some(asset_type) = detect_asset_type(path) {
-                let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+                let metadata = entry.metadata().map_err(|e| e.to_string())?;
 
                 // Compute rel_path: directory portion relative to root, forward slashes
                 let rel_path = compute_rel_path(root_path, path);
@@ -353,7 +353,7 @@ pub(crate) fn discover_files_streaming(
                 let zip_filename = filename.to_string();
 
                 // Get ZIP file mtime for all entries inside
-                let zip_mtime = std::fs::metadata(path)
+                let zip_mtime = entry.metadata()
                     .ok()
                     .and_then(|m| m.modified().ok())
                     .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
@@ -450,21 +450,23 @@ pub(crate) fn compute_searchable_path(
     rel_path: &str,
     zip_file: Option<&str>,
     zip_entry: Option<&str>,
-    excludes: &std::collections::HashSet<(Option<String>, String)>,
+    excludes: &std::collections::HashSet<String>,
 ) -> String {
     let mut result = Vec::new();
 
+    // Reusable buffer for probing the excludes set without allocating per-lookup.
+    // Format: "{zip_file_or_empty}\0{cumulative_path}"
+    // Filesystem segments use prefix "\0" (empty zip_file).
+    let mut probe = String::from("\0");
+
     // Filesystem segments: walk rel_path, skip excluded cumulative paths
-    let mut cumulative = String::new();
     for segment in rel_path.split('/').filter(|s| !s.is_empty()) {
-        if cumulative.is_empty() {
-            cumulative.push_str(segment);
-        } else {
-            cumulative.push('/');
-            cumulative.push_str(segment);
+        if probe.len() > 1 {
+            probe.push('/');
         }
-        if !excludes.contains(&(None, cumulative.clone())) {
-            result.push(segment.to_string());
+        probe.push_str(segment);
+        if !excludes.contains(probe.as_str()) {
+            result.push(segment);
         }
     }
 
@@ -472,17 +474,18 @@ pub(crate) fn compute_searchable_path(
     if let Some(entry) = zip_entry {
         if let Some(last_slash) = entry.rfind('/') {
             let dir_part = &entry[..last_slash];
-            let zip_key = zip_file.map(|s| s.to_string());
-            let mut cum = String::new();
+            let zip_prefix = zip_file.unwrap_or("");
+            probe.clear();
+            probe.push_str(zip_prefix);
+            probe.push('\0');
+            let base_len = probe.len();
             for segment in dir_part.split('/').filter(|s| !s.is_empty()) {
-                if cum.is_empty() {
-                    cum.push_str(segment);
-                } else {
-                    cum.push('/');
-                    cum.push_str(segment);
+                if probe.len() > base_len {
+                    probe.push('/');
                 }
-                if !excludes.contains(&(zip_key.clone(), cum.clone())) {
-                    result.push(segment.to_string());
+                probe.push_str(segment);
+                if !excludes.contains(probe.as_str()) {
+                    result.push(segment);
                 }
             }
         }
@@ -501,7 +504,7 @@ fn discover_zip_streaming(
     tx: &mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
     chunk: &mut Vec<DiscoveredAsset>,
-    search_excludes: &std::collections::HashSet<(Option<String>, String)>,
+    search_excludes: &std::collections::HashSet<String>,
 ) -> Result<(), String> {
     let file =
         File::open(zip_path).map_err(|e| format!("Failed to open zip: {}", e))?;
@@ -526,7 +529,7 @@ fn discover_zip_recursive_streaming<R: Read + Seek>(
     tx: &mpsc::Sender<Vec<DiscoveredAsset>>,
     progress: &ScanProgressState,
     chunk: &mut Vec<DiscoveredAsset>,
-    search_excludes: &std::collections::HashSet<(Option<String>, String)>,
+    search_excludes: &std::collections::HashSet<String>,
 ) -> Result<(), String> {
     // First pass: collect entry info (indices needed to avoid borrow conflicts)
     let mut entries_info: Vec<(usize, String, u64, &'static str)> = Vec::new();
@@ -683,10 +686,20 @@ pub(crate) async fn insert_asset_chunk(
 }
 
 /// Load folder search excludes as a HashSet of (zip_file, excluded_path) pairs.
+/// Encode an exclude key as `"{zip_file_or_empty}\0{path}"` for O(1) borrowed lookup.
+fn encode_exclude_key(zip_file: Option<&str>, path: &str) -> String {
+    let prefix = zip_file.unwrap_or("");
+    let mut key = String::with_capacity(prefix.len() + 1 + path.len());
+    key.push_str(prefix);
+    key.push('\0');
+    key.push_str(path);
+    key
+}
+
 pub(crate) async fn load_search_excludes(
     pool: &sqlx::SqlitePool,
     folder_id: i64,
-) -> Result<std::collections::HashSet<(Option<String>, String)>, String> {
+) -> Result<std::collections::HashSet<String>, String> {
     let rows: Vec<(Option<String>, String)> = sqlx::query_as(
         "SELECT zip_file, excluded_path FROM folder_search_excludes
          WHERE source_folder_id = ?1",
@@ -695,7 +708,10 @@ pub(crate) async fn load_search_excludes(
     .fetch_all(pool)
     .await
     .map_err(|e| e.to_string())?;
-    Ok(rows.into_iter().collect())
+    Ok(rows
+        .iter()
+        .map(|(zf, path)| encode_exclude_key(zf.as_deref(), path))
+        .collect())
 }
 
 /// Detect asset type from file extension

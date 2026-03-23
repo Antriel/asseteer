@@ -1,11 +1,11 @@
 ---
 # asseteer-o45g
 title: Optimize scan discovery per-file overhead
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-03-23T07:42:34Z
-updated_at: 2026-03-23T07:43:01Z
+updated_at: 2026-03-23T07:52:11Z
 parent: asseteer-k1go
 ---
 
@@ -49,3 +49,13 @@ The HashSet lookup currently requires `(Option<String>, String)` — owned types
 
 - Verify scan produces identical results (same assets discovered, same searchable_path values)
 - Compare scan time before/after on a large non-ZIP folder
+
+## Summary of Changes
+
+Both fixes applied in `src-tauri/src/commands/scan.rs`:
+
+1. **entry.metadata()** — Replaced `std::fs::metadata(path)` with `entry.metadata()` at both call sites (regular files and ZIP files). Eliminates one redundant stat syscall per file.
+
+2. **Zero-alloc HashSet probing** — Changed the excludes set from `HashSet<(Option<String>, String)>` to `HashSet<String>` using a combined `"{zip}\0{path}"` key format. `compute_searchable_path()` now builds probe keys in a reusable `String` buffer and calls `contains(probe.as_str())` — zero allocations per lookup instead of ~5 clones per file. The `result` vec also now holds `&str` borrows instead of owned `String`s.
+
+All 62 tests pass (1 pre-existing flaky test in zip_cache).
