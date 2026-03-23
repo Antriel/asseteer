@@ -70,7 +70,12 @@
       refreshPendingClapCount,
     );
 
-    unlistenFns.push(unlistenScan, unlistenImageComplete, unlistenAudioComplete, unlistenClapComplete);
+    unlistenFns.push(
+      unlistenScan,
+      unlistenImageComplete,
+      unlistenAudioComplete,
+      unlistenClapComplete,
+    );
   });
 
   onDestroy(() => {
@@ -101,7 +106,9 @@
   );
 
   // Whether any filter is active (search, folder, or similarity)
-  let hasAnyFilter = $derived(hasActiveSearch || !!assetsState.folderLocation || !!clapState.similarToAssetId);
+  let hasAnyFilter = $derived(
+    hasActiveSearch || !!assetsState.folderLocation || !!clapState.similarToAssetId,
+  );
 
   // Unified "is loading" - whether a search is in progress
   let isLoading = $derived(isSemanticModeEnabled ? clapState.isSearching : assetsState.isLoading);
@@ -197,19 +204,16 @@
             <p class="text-primary font-medium">No embeddings generated yet</p>
             <p class="text-sm text-secondary text-center">
               None of your {assetCounts.audio.toLocaleString()} audio files have been processed for semantic
-              search. Head to the <a
-                href="/processing"
-                class="text-accent-muted hover:underline">Processing tab</a
-              > to generate embeddings.
+              search. Head to the
+              <a href="/processing" class="text-accent-muted hover:underline">Processing tab</a> to generate
+              embeddings.
             </p>
           {:else if isSemanticModeEnabled && pendingClapCount > 0}
             <p class="text-primary font-medium">No matching audio</p>
             <p class="text-sm text-secondary text-center">
               {(assetCounts.audio - pendingClapCount).toLocaleString()} of {assetCounts.audio.toLocaleString()}
-              audio files have embeddings. Try adjusting your query, or process more in the <a
-                href="/processing"
-                class="text-accent-muted hover:underline">Processing tab</a
-              >.
+              audio files have embeddings. Try adjusting your query, or process more in the
+              <a href="/processing" class="text-accent-muted hover:underline">Processing tab</a>.
             </p>
           {:else}
             <p class="text-primary font-medium">No matching {viewState.activeTab}</p>

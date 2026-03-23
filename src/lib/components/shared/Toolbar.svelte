@@ -10,7 +10,14 @@
   import ViewModeToggle from './ViewModeToggle.svelte';
   import DurationFilter from './DurationFilter.svelte';
   import Spinner from './Spinner.svelte';
-  import { SearchIcon, FolderIcon, CloseIcon, BrainIcon, GearIcon, SimilarIcon } from '$lib/components/icons';
+  import {
+    SearchIcon,
+    FolderIcon,
+    CloseIcon,
+    BrainIcon,
+    GearIcon,
+    SimilarIcon,
+  } from '$lib/components/icons';
 
   let searchInput = $state(assetsState.searchText);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -63,7 +70,12 @@
 
     try {
       // Pass duration filter to semantic search for pre-filtering before similarity computation
-      await clapState.search(query, undefined, assetsState.durationFilter, assetsState.folderLocation);
+      await clapState.search(
+        query,
+        undefined,
+        assetsState.durationFilter,
+        assetsState.folderLocation,
+      );
     } catch (error) {
       showToast(`Semantic search failed: ${error}`, 'error');
       // Fall back to FTS
@@ -73,7 +85,9 @@
   }
 
   // True once we know CLAP has never been set up (no uv, no cache)
-  let clapNotConfigured = $derived(clapState.setupKnown && clapState.setupStatus === 'not-configured');
+  let clapNotConfigured = $derived(
+    clapState.setupKnown && clapState.setupStatus === 'not-configured',
+  );
 
   function toggleSemanticSearch() {
     if (clapNotConfigured) {
@@ -120,7 +134,9 @@
       return loc.relPath.split('/').pop() || loc.relPath;
     }
     // Root folder — find name from explore roots
-    const root = exploreState.roots.find((r) => r.location.type === 'folder' && r.location.folderId === loc.folderId);
+    const root = exploreState.roots.find(
+      (r) => r.location.type === 'folder' && r.location.folderId === loc.folderId,
+    );
     return root?.name || 'Folder';
   });
 
@@ -137,7 +153,13 @@
     untrack(() => {
       if (isSimilarityMode && clapState.similarToAssetId !== null && clapState.similarToFilename) {
         clapState
-          .searchBySimilarity(clapState.similarToAssetId, clapState.similarToFilename, undefined, assetsState.durationFilter, assetsState.folderLocation)
+          .searchBySimilarity(
+            clapState.similarToAssetId,
+            clapState.similarToFilename,
+            undefined,
+            assetsState.durationFilter,
+            assetsState.folderLocation,
+          )
           .catch((e) => showToast(`${e}`, 'error'));
       } else if (isSemanticModeEnabled && clapState.lastSearchQuery.trim()) {
         handleSemanticSearch(clapState.lastSearchQuery);
@@ -244,7 +266,9 @@
         placeholder={placeholderText}
         value={searchInput}
         oninput={handleSearch}
-        class="w-full py-2 px-2 pl-8 {searchInput ? 'pr-8' : 'pr-2'} border border-default rounded-md bg-primary text-primary placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
+        class="w-full py-2 px-2 pl-8 {searchInput
+          ? 'pr-8'
+          : 'pr-2'} border border-default rounded-md bg-primary text-primary placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
         class:!border-purple-500={isSemanticModeEnabled && !isSimilarityMode}
         class:!ring-purple-500={isSemanticModeEnabled && !isSimilarityMode}
       />
@@ -350,7 +374,9 @@
 
   <!-- Similarity search banner -->
   {#if isSimilarityMode}
-    <div class="flex items-center gap-2 px-4 py-1.5 bg-purple-50 dark:bg-purple-900/20 border-b border-purple-200 dark:border-purple-800">
+    <div
+      class="flex items-center gap-2 px-4 py-1.5 bg-purple-50 dark:bg-purple-900/20 border-b border-purple-200 dark:border-purple-800"
+    >
       <SimilarIcon size="sm" class="text-purple-500 flex-shrink-0" />
       <span class="text-sm text-purple-700 dark:text-purple-300">
         Similar to: <strong class="font-semibold">"{clapState.similarToFilename}"</strong>
@@ -360,7 +386,10 @@
         class="flex-shrink-0 p-0.5 rounded hover:bg-purple-100 dark:hover:bg-purple-800/40 transition-colors"
         title="Clear similarity search"
       >
-        <CloseIcon size="sm" class="text-purple-500 hover:text-purple-700 dark:hover:text-purple-300" />
+        <CloseIcon
+          size="sm"
+          class="text-purple-500 hover:text-purple-700 dark:hover:text-purple-300"
+        />
       </button>
     </div>
   {/if}

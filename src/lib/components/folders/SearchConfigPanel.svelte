@@ -60,10 +60,7 @@
   }
 
   /** Build a tree from a flat list of paths */
-  function buildTree(
-    paths: string[],
-    zipFile: string | null,
-  ): TreeNode[] {
+  function buildTree(paths: string[], zipFile: string | null): TreeNode[] {
     const root: TreeNode[] = [];
 
     for (const fullPath of paths) {
@@ -93,12 +90,7 @@
   }
 
   /** Insert a ZIP archive node into the filesystem tree at the right location */
-  function insertZipNode(
-    fsTree: TreeNode[],
-    relPath: string,
-    zipFile: string,
-    zipDirs: string[],
-  ) {
+  function insertZipNode(fsTree: TreeNode[], relPath: string, zipFile: string, zipDirs: string[]) {
     // Find the parent filesystem node for this zip
     let parent = fsTree;
     if (relPath) {
@@ -262,8 +254,18 @@
           title={excluded ? 'Include in search' : 'Exclude from search'}
         >
           {#if !excluded}
-            <svg class="w-2.5 h-2.5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+            <svg
+              class="w-2.5 h-2.5 text-accent"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="3"
+                d="M5 13l4 4L19 7"
+              />
             </svg>
           {/if}
         </button>
@@ -273,8 +275,10 @@
 
       <!-- Name -->
       <button
-        onclick={() => hasChildren ? toggleExpand(node) : toggleExclude(node)}
-        class="truncate text-left hover:text-accent transition-colors {node.isZipArchive ? 'font-medium' : ''}"
+        onclick={() => (hasChildren ? toggleExpand(node) : toggleExclude(node))}
+        class="truncate text-left hover:text-accent transition-colors {node.isZipArchive
+          ? 'font-medium'
+          : ''}"
         class:line-through={excluded}
       >
         {#if node.isZipArchive}
@@ -324,7 +328,9 @@
             No directory structure found (all assets are at the root level).
           </p>
         {:else}
-          <div class="mb-3 max-h-64 overflow-y-auto rounded border border-default bg-secondary/30 py-1 px-1">
+          <div
+            class="mb-3 max-h-64 overflow-y-auto rounded border border-default bg-secondary/30 py-1 px-1"
+          >
             {#each tree as node}
               {@render treeNode(node, 0)}
             {/each}

@@ -40,12 +40,15 @@ function buildFtsCondition(
   if (!trimmed) return;
 
   // Column prefix for FTS5 column targeting
-  const colPrefix = searchColumn === 'filename' ? 'filename:' : searchColumn === 'path' ? 'searchable_path:' : '';
+  const colPrefix =
+    searchColumn === 'filename' ? 'filename:' : searchColumn === 'path' ? 'searchable_path:' : '';
 
   if (trimmed.length < 3) {
     // Short patterns: word table only with wildcard (trigram needs >= 3 chars)
     const wordQuery = `${colPrefix}${trimmed}*`;
-    conditions.push('assets.id IN (SELECT rowid FROM assets_fts_word WHERE assets_fts_word MATCH ?)');
+    conditions.push(
+      'assets.id IN (SELECT rowid FROM assets_fts_word WHERE assets_fts_word MATCH ?)',
+    );
     params.push(wordQuery);
   } else {
     // Longer patterns: UNION both tables
@@ -123,7 +126,13 @@ export async function searchAssets(
   folderLocation?: FolderLocation | null,
   searchColumn: SearchColumn = 'anywhere',
 ): Promise<Asset[]> {
-  const { conditions, params } = buildFilterConditions(searchText, assetType, durationFilter, folderLocation, searchColumn);
+  const { conditions, params } = buildFilterConditions(
+    searchText,
+    assetType,
+    durationFilter,
+    folderLocation,
+    searchColumn,
+  );
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const query = `
@@ -149,7 +158,13 @@ export async function countSearchResults(
   folderLocation?: FolderLocation | null,
   searchColumn: SearchColumn = 'anywhere',
 ): Promise<number> {
-  const { conditions, params, audioJoin } = buildFilterConditions(searchText, assetType, durationFilter, folderLocation, searchColumn);
+  const { conditions, params, audioJoin } = buildFilterConditions(
+    searchText,
+    assetType,
+    durationFilter,
+    folderLocation,
+    searchColumn,
+  );
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
   const query = `SELECT COUNT(*) FROM assets ${audioJoin} ${whereClause}`;
@@ -268,11 +283,7 @@ export async function getPendingAssetCounts(
 /**
  * Build SQL conditions for a FolderLocation filter.
  */
-function addFolderFilterConditions(
-  loc: FolderLocation,
-  conditions: string[],
-  params: unknown[],
-) {
+function addFolderFilterConditions(loc: FolderLocation, conditions: string[], params: unknown[]) {
   conditions.push('assets.folder_id = ?');
   params.push(loc.folderId);
 
@@ -294,7 +305,7 @@ function addFolderFilterConditions(
     if (loc.relPath === '') {
       // Folder root: all assets in this folder
     } else {
-      conditions.push("(assets.rel_path = ? OR assets.rel_path LIKE ?)");
+      conditions.push('(assets.rel_path = ? OR assets.rel_path LIKE ?)');
       params.push(loc.relPath, loc.relPath + '/%');
     }
   }
@@ -408,7 +419,13 @@ export async function getFolderChildren(
       name: row.zip_file,
       childCount: 1, // assume expandable
       assetCount: row.asset_count,
-      location: { type: 'zip', folderId, relPath: row.rel_path, zipFile: row.zip_file, zipPrefix: '' },
+      location: {
+        type: 'zip',
+        folderId,
+        relPath: row.rel_path,
+        zipFile: row.zip_file,
+        zipPrefix: '',
+      },
     });
   }
 
@@ -426,7 +443,9 @@ export async function getFolderChildren(
     const segments = row.rel_path.split('/');
     if (segments.length <= parentDepth) continue;
     const childRelPath = segments.slice(0, parentDepth + 1).join('/');
-    const node = nodes.find((n) => n.location.type === 'folder' && n.location.relPath === childRelPath);
+    const node = nodes.find(
+      (n) => n.location.type === 'folder' && n.location.relPath === childRelPath,
+    );
     if (node && node.childCount === 0) {
       node.childCount = 1; // has at least ZIP children
     }
@@ -471,7 +490,12 @@ export async function getZipDirectoryChildren(
       // Direct file at current level — only show nested ZIPs as nodes
       if (childName.toLowerCase().endsWith('.zip')) {
         if (!childMap.has(childName)) {
-          childMap.set(childName, { assetCount: 0, subDirs: new Set(), hasDirectFiles: false, isNestedZip: true });
+          childMap.set(childName, {
+            assetCount: 0,
+            subDirs: new Set(),
+            hasDirectFiles: false,
+            isNestedZip: true,
+          });
         }
         childMap.get(childName)!.isNestedZip = true;
         childMap.get(childName)!.assetCount++;
@@ -480,7 +504,12 @@ export async function getZipDirectoryChildren(
     }
 
     if (!childMap.has(childName)) {
-      childMap.set(childName, { assetCount: 0, subDirs: new Set(), hasDirectFiles: false, isNestedZip: false });
+      childMap.set(childName, {
+        assetCount: 0,
+        subDirs: new Set(),
+        hasDirectFiles: false,
+        isNestedZip: false,
+      });
     }
     const entry = childMap.get(childName)!;
     entry.assetCount++;
@@ -514,10 +543,7 @@ export async function getZipDirectoryChildren(
 /**
  * Get search excludes for a source folder
  */
-export async function getSearchExcludes(
-  db: Database,
-  folderId: number,
-): Promise<SearchExclude[]> {
+export async function getSearchExcludes(db: Database, folderId: number): Promise<SearchExclude[]> {
   return db.select<SearchExclude[]>(
     `SELECT zip_file, excluded_path
      FROM folder_search_excludes
@@ -531,10 +557,7 @@ export async function getSearchExcludes(
  * Get all distinct rel_path values for a source folder (filesystem directories).
  * Used to build the search config tree.
  */
-export async function getDistinctRelPaths(
-  db: Database,
-  folderId: number,
-): Promise<string[]> {
+export async function getDistinctRelPaths(db: Database, folderId: number): Promise<string[]> {
   const rows = await db.select<Array<{ rel_path: string }>>(
     `SELECT DISTINCT rel_path FROM assets
      WHERE folder_id = ? AND rel_path != ''

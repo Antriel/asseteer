@@ -253,7 +253,12 @@ class ClapState {
     }
 
     try {
-      const results = await searchAudioBySimilarity(assetId, limit + 1, durationFilter, folderLocation);
+      const results = await searchAudioBySimilarity(
+        assetId,
+        limit + 1,
+        durationFilter,
+        folderLocation,
+      );
 
       if (currentVersion === this.searchVersion) {
         this.hasMoreResults = results.length > limit;

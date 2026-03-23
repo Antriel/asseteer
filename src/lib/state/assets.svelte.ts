@@ -189,4 +189,3 @@ listen<{ asset_id: number; success: boolean }>('thumbnail-ready', async (event) 
     // ignore — dimensions will appear on next full reload
   }
 }).catch(console.error);
-

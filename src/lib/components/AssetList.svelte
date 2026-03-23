@@ -90,7 +90,7 @@
     x={contextMenu.x}
     y={contextMenu.y}
     asset={contextMenu.asset}
-    onclose={() => contextMenu = null}
+    onclose={() => (contextMenu = null)}
     onShowInFolder={(a) => showInFolder(a, 'image')}
     onOpenDirectory={openDirectory}
   />

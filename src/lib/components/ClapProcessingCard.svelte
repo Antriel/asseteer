@@ -268,7 +268,9 @@
         {/if}
 
         {#if isStopping}
-          <span class="px-3 py-1.5 text-sm font-medium text-yellow-700 dark:text-yellow-300 bg-yellow-100 dark:bg-yellow-900/30 rounded">
+          <span
+            class="px-3 py-1.5 text-sm font-medium text-yellow-700 dark:text-yellow-300 bg-yellow-100 dark:bg-yellow-900/30 rounded"
+          >
             Stopping...
           </span>
         {:else if canStop}

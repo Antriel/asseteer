@@ -75,7 +75,12 @@
   {#if isLoading}
     <span class="text-xs text-secondary">...</span>
   {:else if displayUrl}
-    <img src={displayUrl} alt="Thumbnail" class="w-full h-full object-contain" style={isSmallImage ? 'image-rendering: pixelated' : ''} />
+    <img
+      src={displayUrl}
+      alt="Thumbnail"
+      class="w-full h-full object-contain"
+      style={isSmallImage ? 'image-rendering: pixelated' : ''}
+    />
   {:else if asset.asset_type === 'audio'}
     <span class="text-xs text-secondary">🎵</span>
   {:else}

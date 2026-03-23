@@ -44,7 +44,13 @@
       const zipParts = (asset.zip_entry ?? '').split('/').filter(Boolean);
       const zipDirParts = zipParts.slice(0, -1);
       const zipPrefix = zipDirParts.length > 0 ? zipDirParts.join('/') + '/' : '';
-      location = { type: 'zip', folderId: asset.folder_id, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix };
+      location = {
+        type: 'zip',
+        folderId: asset.folder_id,
+        relPath: asset.rel_path,
+        zipFile: asset.zip_file,
+        zipPrefix,
+      };
     } else {
       location = { type: 'folder', folderId: asset.folder_id, relPath: asset.rel_path };
     }
@@ -249,14 +255,20 @@
 
     <button class="btn-lightbox-tool" onclick={showInFolder} title="Show in folder">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-        ><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+        ><path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
           d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
         /></svg
       >
     </button>
     <button class="btn-lightbox-tool" onclick={openInExplorer} title="Open in file explorer">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
-        ><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+        ><path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
           d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
         /></svg
       >
@@ -265,14 +277,18 @@
     <span class="w-px h-4 bg-white/20 mx-1"></span>
 
     <button
-      class="px-1.5 py-0.5 text-xs rounded transition-colors {showBounds ? 'bg-white/20 text-white' : 'text-neutral-400 hover:text-white'}"
+      class="px-1.5 py-0.5 text-xs rounded transition-colors {showBounds
+        ? 'bg-white/20 text-white'
+        : 'text-neutral-400 hover:text-white'}"
       onclick={() => (showBounds = !showBounds)}
       title="Toggle image bounds (B)"
     >
       Bounds
     </button>
     <button
-      class="px-1.5 py-0.5 text-xs rounded transition-colors {showMetadata ? 'bg-white/20 text-white' : 'text-neutral-400 hover:text-white'}"
+      class="px-1.5 py-0.5 text-xs rounded transition-colors {showMetadata
+        ? 'bg-white/20 text-white'
+        : 'text-neutral-400 hover:text-white'}"
       onclick={() => (showMetadata = !showMetadata)}
       title="Image details (I)"
     >
@@ -286,19 +302,13 @@
 
     <span class="w-px h-4 bg-white/20 mx-1"></span>
 
-    <button class="btn-lightbox-tool" onclick={zoomOut} title="Zoom out (-)">
-      &minus;
-    </button>
+    <button class="btn-lightbox-tool" onclick={zoomOut} title="Zoom out (-)"> &minus; </button>
     <span class="text-xs text-neutral-300 w-12 text-center tabular-nums">{zoomPercent}%</span>
-    <button class="btn-lightbox-tool" onclick={zoomIn} title="Zoom in (+)">
-      +
-    </button>
+    <button class="btn-lightbox-tool" onclick={zoomIn} title="Zoom in (+)"> + </button>
 
     <span class="w-px h-4 bg-white/20 mx-1"></span>
 
-    <button class="btn-lightbox-tool" onclick={onClose} title="Close (Esc)">
-      &times;
-    </button>
+    <button class="btn-lightbox-tool" onclick={onClose} title="Close (Esc)"> &times; </button>
   </div>
 
   <!-- Canvas area -->
@@ -315,7 +325,10 @@
     {#if onPrev}
       <button
         class="absolute top-1/2 -translate-y-1/2 left-4 btn-lightbox-nav z-10"
-        onclick={(e) => { e.stopPropagation(); onPrev!(); }}
+        onclick={(e) => {
+          e.stopPropagation();
+          onPrev!();
+        }}
         onpointerdown={(e) => e.stopPropagation()}
       >
         &#8249;
@@ -324,7 +337,10 @@
     {#if onNext}
       <button
         class="absolute top-1/2 -translate-y-1/2 right-4 btn-lightbox-nav z-10"
-        onclick={(e) => { e.stopPropagation(); onNext!(); }}
+        onclick={(e) => {
+          e.stopPropagation();
+          onNext!();
+        }}
         onpointerdown={(e) => e.stopPropagation()}
       >
         &#8250;
@@ -338,12 +354,18 @@
     {:else if imageSrc}
       <div class="w-full h-full flex items-center justify-center" style="pointer-events: none;">
         <div
-          style="display: inline-block; transform: translate({panX}px, {panY}px) scale({scale}); transform-origin: center; background: repeating-conic-gradient(#555 0% 25%, #444 0% 50%) 50% / 16px 16px; {showBounds ? 'outline: 2px dashed rgba(120, 180, 255, 0.8); outline-offset: 0px;' : ''}"
+          style="display: inline-block; transform: translate({panX}px, {panY}px) scale({scale}); transform-origin: center; background: repeating-conic-gradient(#555 0% 25%, #444 0% 50%) 50% / 16px 16px; {showBounds
+            ? 'outline: 2px dashed rgba(120, 180, 255, 0.8); outline-offset: 0px;'
+            : ''}"
         >
           <img
             src={imageSrc}
             alt={asset.filename}
-            style="opacity: {hasFittedOnce ? 1 : 0}; transition: opacity 100ms; display: block; image-rendering: {scale >= 4 ? 'pixelated' : 'auto'};"
+            style="opacity: {hasFittedOnce
+              ? 1
+              : 0}; transition: opacity 100ms; display: block; image-rendering: {scale >= 4
+              ? 'pixelated'
+              : 'auto'};"
             class="max-w-none"
             onload={onImageLoad}
             draggable="false"
@@ -359,7 +381,9 @@
 
   <!-- Metadata panel -->
   {#if showMetadata}
-    <div class="absolute top-12 right-3 w-[280px] p-4 bg-black/85 text-white rounded-lg backdrop-blur-sm z-10">
+    <div
+      class="absolute top-12 right-3 w-[280px] p-4 bg-black/85 text-white rounded-lg backdrop-blur-sm z-10"
+    >
       <h3 class="text-sm font-semibold mb-2">Image Details</h3>
       <dl class="space-y-1.5 text-xs">
         <div>
@@ -389,7 +413,9 @@
   {/if}
 
   <!-- Bottom info bar -->
-  <div class="flex items-center justify-between px-3 py-1 bg-black/60 text-xs text-neutral-400 shrink-0">
+  <div
+    class="flex items-center justify-between px-3 py-1 bg-black/60 text-xs text-neutral-400 shrink-0"
+  >
     <span class="truncate">{getAssetDisplayPath(asset)}</span>
     {#if asset.file_size}
       <span class="shrink-0 ml-4">{(asset.file_size / 1024).toFixed(0)} KB</span>

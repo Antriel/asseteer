@@ -125,7 +125,5 @@ export function getAssetDirectoryPath(asset: Asset): string {
     const internalDir = entryParts.slice(0, -1).join('/');
     return internalDir ? `${zipPath}/${internalDir}` : zipPath;
   }
-  return asset.rel_path
-    ? `${asset.folder_path}/${asset.rel_path}`
-    : asset.folder_path;
+  return asset.rel_path ? `${asset.folder_path}/${asset.rel_path}` : asset.folder_path;
 }

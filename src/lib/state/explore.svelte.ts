@@ -113,7 +113,11 @@ class ExploreState {
         if (!this.expandedKeys.get(zipKey)) {
           this.expandedKeys.set(zipKey, true);
           await this.loadChildren(zipKey, {
-            type: 'zip', folderId, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix: '',
+            type: 'zip',
+            folderId,
+            relPath: asset.rel_path,
+            zipFile: asset.zip_file,
+            zipPrefix: '',
           });
         }
 
@@ -127,7 +131,11 @@ class ExploreState {
           if (!this.expandedKeys.get(zipNodeKey)) {
             this.expandedKeys.set(zipNodeKey, true);
             await this.loadChildren(zipNodeKey, {
-              type: 'zip', folderId, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix,
+              type: 'zip',
+              folderId,
+              relPath: asset.rel_path,
+              zipFile: asset.zip_file,
+              zipPrefix,
             });
           }
         }
@@ -136,12 +144,20 @@ class ExploreState {
         if (zipDirParts.length > 0) {
           this.selectedKey = `zip:${folderId}:${asset.rel_path}:${asset.zip_file}:${zipPrefix}`;
           this.selectedLocation = {
-            type: 'zip', folderId, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix,
+            type: 'zip',
+            folderId,
+            relPath: asset.rel_path,
+            zipFile: asset.zip_file,
+            zipPrefix,
           };
         } else {
           this.selectedKey = zipKey;
           this.selectedLocation = {
-            type: 'zip', folderId, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix: '',
+            type: 'zip',
+            folderId,
+            relPath: asset.rel_path,
+            zipFile: asset.zip_file,
+            zipPrefix: '',
           };
         }
       } else {

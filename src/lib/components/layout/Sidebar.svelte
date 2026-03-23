@@ -18,7 +18,11 @@
     }
   });
 
-  function selectFolder(folderId: number, folderKey: string, location: import('$lib/types').FolderLocation) {
+  function selectFolder(
+    folderId: number,
+    folderKey: string,
+    location: import('$lib/types').FolderLocation,
+  ) {
     const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
     assetsState.setFolderFilter(location, assetType);
     exploreState.selectedKey = folderKey;
@@ -160,7 +164,9 @@
   {#if exploreState.roots.length > 0}
     <div class="border-t border-default {collapsed ? 'px-2 py-2' : 'px-2 pt-2 pb-1'}">
       {#if !collapsed}
-        <p class="px-2 pb-1 text-xs font-semibold text-tertiary uppercase tracking-wider">Folders</p>
+        <p class="px-2 pb-1 text-xs font-semibold text-tertiary uppercase tracking-wider">
+          Folders
+        </p>
       {/if}
       <div class="space-y-0.5">
         {#each exploreState.roots as folder (folder.key)}
@@ -176,7 +182,12 @@
           >
             <div class="w-4 h-4 flex items-center justify-center flex-shrink-0">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.5"
+                  d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+                />
               </svg>
             </div>
             {#if !collapsed}

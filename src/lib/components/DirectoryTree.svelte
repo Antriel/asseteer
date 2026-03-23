@@ -52,7 +52,10 @@
   <div
     class="fixed inset-0 z-50"
     onclick={closeContextMenu}
-    oncontextmenu={(e) => { e.preventDefault(); closeContextMenu(); }}
+    oncontextmenu={(e) => {
+      e.preventDefault();
+      closeContextMenu();
+    }}
   >
     <div
       class="absolute bg-elevated border border-default rounded-lg shadow-lg py-1 min-w-[160px]"
@@ -60,10 +63,19 @@
     >
       <button
         class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
-        onclick={() => { const n = contextMenu!.node; closeContextMenu(); openInExplorer(n); }}
+        onclick={() => {
+          const n = contextMenu!.node;
+          closeContextMenu();
+          openInExplorer(n);
+        }}
       >
         <svg class="w-4 h-4 text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+          />
         </svg>
         Open in File Explorer
       </button>

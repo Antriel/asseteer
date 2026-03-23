@@ -14,7 +14,13 @@ export async function showInFolder(asset: Asset, assetType: 'image' | 'audio') {
     const zipParts = (asset.zip_entry ?? '').split('/').filter(Boolean);
     const zipDirParts = zipParts.slice(0, -1);
     const zipPrefix = zipDirParts.length > 0 ? zipDirParts.join('/') + '/' : '';
-    location = { type: 'zip', folderId: asset.folder_id, relPath: asset.rel_path, zipFile: asset.zip_file, zipPrefix };
+    location = {
+      type: 'zip',
+      folderId: asset.folder_id,
+      relPath: asset.rel_path,
+      zipFile: asset.zip_file,
+      zipPrefix,
+    };
   } else {
     location = { type: 'folder', folderId: asset.folder_id, relPath: asset.rel_path };
   }

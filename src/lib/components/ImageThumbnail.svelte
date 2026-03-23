@@ -92,7 +92,12 @@
       <Spinner size="md" />
     </div>
   {:else if displayUrl}
-    <img src={displayUrl} alt="Thumbnail" class="w-full h-full object-contain" style={isSmallImage ? 'image-rendering: pixelated' : ''} />
+    <img
+      src={displayUrl}
+      alt="Thumbnail"
+      class="w-full h-full object-contain"
+      style={isSmallImage ? 'image-rendering: pixelated' : ''}
+    />
   {:else}
     <div class="flex items-center justify-center w-full h-full">
       <span class="text-xs text-secondary">No preview</span>

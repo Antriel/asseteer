@@ -91,7 +91,13 @@
   async function findSimilar(asset: AudioAsset) {
     contextMenu = null;
     try {
-      await clapState.searchBySimilarity(asset.id, asset.filename, undefined, assetsState.durationFilter, assetsState.folderLocation);
+      await clapState.searchBySimilarity(
+        asset.id,
+        asset.filename,
+        undefined,
+        assetsState.durationFilter,
+        assetsState.folderLocation,
+      );
     } catch (error) {
       showToast(`${error}`, 'error');
     }
@@ -204,7 +210,8 @@
         </button>
         <button
           class="w-8 h-8 flex items-center justify-center text-secondary hover:text-accent border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
-          onclick={() => showInFolder(selectedAsset!, viewState.activeTab === 'images' ? 'image' : 'audio')}
+          onclick={() =>
+            showInFolder(selectedAsset!, viewState.activeTab === 'images' ? 'image' : 'audio')}
           title="Show in folder"
         >
           <FolderIcon size="sm" />
@@ -326,7 +333,7 @@
     x={contextMenu.x}
     y={contextMenu.y}
     asset={contextMenu.asset}
-    onclose={() => contextMenu = null}
+    onclose={() => (contextMenu = null)}
     onShowInFolder={(a) => showInFolder(a, viewState.activeTab === 'images' ? 'image' : 'audio')}
     onOpenDirectory={openDirectory}
   >

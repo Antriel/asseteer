@@ -171,7 +171,7 @@
             </button>
           </div>
 
-        <!-- Setting up: inline progress -->
+          <!-- Setting up: inline progress -->
         {:else if clapState.setupStatus === 'setting-up'}
           <div class="pt-3 border-t border-default space-y-3">
             {#if isFirstTimeSetup}
@@ -235,7 +235,7 @@
             {/if}
           </div>
 
-        <!-- Ready: device/model info -->
+          <!-- Ready: device/model info -->
         {:else if clapState.setupStatus === 'ready'}
           <div class="pt-3 border-t border-default space-y-2">
             <div class="flex items-center justify-between text-sm">
@@ -250,7 +250,7 @@
             </div>
           </div>
 
-        <!-- Offline: restart button -->
+          <!-- Offline: restart button -->
         {:else if clapState.setupStatus === 'offline'}
           <div class="flex items-center justify-between pt-3 border-t border-default">
             <span class="text-sm text-secondary">CLAP server not running</span>
@@ -297,7 +297,8 @@
           <div>
             <div class="text-sm font-medium text-primary">Pre-generate thumbnails</div>
             <div class="text-xs text-tertiary mt-0.5">
-              Generate thumbnails during processing instead of lazily on scroll. Slower scan, faster browsing.
+              Generate thumbnails during processing instead of lazily on scroll. Slower scan, faster
+              browsing.
             </div>
           </div>
           <button
