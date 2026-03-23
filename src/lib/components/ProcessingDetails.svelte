@@ -60,9 +60,9 @@
 <div class="flex flex-col gap-3 pt-3 border-t border-default">
   <!-- Current file being processed -->
   {#if currentFile && isRunning}
-    <div class="flex items-center gap-2 text-sm">
-      <span class="text-secondary">Processing:</span>
-      <span class="font-mono text-xs text-primary truncate max-w-xs" title={currentFile}>
+    <div class="flex items-center gap-2 text-sm min-w-0">
+      <span class="text-secondary shrink-0">Processing:</span>
+      <span class="font-mono text-xs text-primary truncate [direction:rtl]" title={currentFile}>
         {currentFile}
       </span>
     </div>

@@ -526,10 +526,15 @@ impl WorkQueue {
 
                 // For CLAP, process as a batch (writes directly — SQLite serializes)
                 if category == ProcessingCategory::Clap {
-                    let batch_len = batch_assets.len();
                     {
                         let mut current = state.current_file.write().await;
-                        *current = Some(format!("batch of {} files", batch_len));
+                        *current = batch_assets.first().map(|a| {
+                            if a.rel_path.is_empty() {
+                                format!("{}/{}", a.folder_path, a.filename)
+                            } else {
+                                format!("{}/{}/{}", a.folder_path, a.rel_path, a.filename)
+                            }
+                        });
                     }
 
                     let results = process_clap_embedding_batch(&batch_assets, &db).await;
@@ -574,7 +579,11 @@ impl WorkQueue {
 
                         {
                             let mut current = state.current_file.write().await;
-                            *current = Some(asset.filename.clone());
+                            *current = Some(if asset.rel_path.is_empty() {
+                                format!("{}/{}", asset.folder_path, asset.filename)
+                            } else {
+                                format!("{}/{}/{}", asset.folder_path, asset.rel_path, asset.filename)
+                            });
                         }
 
                         let output = process_asset_cpu(&asset, pre_generate_thumbnails).await;
