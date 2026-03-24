@@ -12,6 +12,7 @@ export interface ScanProgress {
 class UIState {
   isScanning = $state(false);
   scanProgress = $state('');
+  scanningFolderPath = $state<string | null>(null);
   currentSessionId = $state<number | null>(null);
 
   // Detailed scan progress (persists across navigation)

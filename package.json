@@ -15,7 +15,7 @@
     "format": "prettier --write 'src/**/*.{ts,svelte,js,json}'",
     "tauri": "tauri"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
     "@tauri-apps/api": "^2",

@@ -54,6 +54,7 @@
   let editInput = $state<HTMLInputElement | null>(null);
   let unlisten: UnlistenFn | null = null;
   let rescanUnlisten: UnlistenFn | null = null;
+  let unlistenScanComplete: UnlistenFn | null = null;
 
   // Per-folder rescan state (only one at a time)
   let rescanFolderId = $state<number | null>(null);
@@ -67,6 +68,11 @@
         applyScanProgress(event.payload);
       });
     }
+    // Reload folders when a scan completes — needed when navigating back mid-scan,
+    // since the originating component's loadFolders() won't update our local state.
+    unlistenScanComplete = await listen('scan-complete', async () => {
+      await loadFolders();
+    });
   });
 
   onDestroy(() => {
@@ -77,6 +83,10 @@
     if (rescanUnlisten) {
       rescanUnlisten();
       rescanUnlisten = null;
+    }
+    if (unlistenScanComplete) {
+      unlistenScanComplete();
+      unlistenScanComplete = null;
     }
   });
 
@@ -197,6 +207,7 @@
 
       uiState.scanProgress = 'Starting scan...';
       uiState.isScanning = true;
+      uiState.scanningFolderPath = selected.replace(/\\/g, '/');
       uiState.resetScanDetails();
 
       if (unlisten) {
@@ -220,6 +231,7 @@
     } finally {
       uiState.isScanning = false;
       uiState.scanProgress = '';
+      uiState.scanningFolderPath = null;
       if (unlisten) {
         unlisten();
         unlisten = null;
@@ -415,7 +427,7 @@
     </div>
   {:else}
     <div class="space-y-2">
-      {#each folders as folder (folder.id)}
+      {#each folders.filter((f) => !(uiState.isScanning && uiState.scanningFolderPath === f.path)) as folder (folder.id)}
         <div class="rounded-lg border border-default bg-secondary transition-colors">
           <div class="p-4">
             <div class="flex items-start justify-between gap-4">
