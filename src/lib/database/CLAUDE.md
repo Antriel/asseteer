@@ -41,8 +41,6 @@ const count = await getAssetCount(db);
 |----------|---------|
 | `getSearchExcludes(db, folderId)` | Per-folder search exclusions |
 | `getDistinctRelPaths(db, folderId)` | All rel_paths for folder tree |
-| `getDistinctZipFiles(db, folderId)` | All ZIP files in a folder |
-| `getDistinctZipDirs(db, folderId, relPath, zipFile)` | Directory prefixes inside a ZIP |
 
 **CLAP / semantic search** (use `invoke()`, no `db` parameter):
 

@@ -567,50 +567,6 @@ export async function getDistinctRelPaths(db: Database, folderId: number): Promi
   return rows.map((r) => r.rel_path);
 }
 
-/**
- * Get all distinct zip_entry directory prefixes for a specific zip file in a folder.
- * Used to build the search config tree for ZIP-internal paths.
- */
-export async function getDistinctZipDirs(
-  db: Database,
-  folderId: number,
-  relPath: string,
-  zipFile: string,
-): Promise<string[]> {
-  const rows = await db.select<Array<{ zip_entry: string }>>(
-    `SELECT DISTINCT zip_entry FROM assets
-     WHERE folder_id = ? AND rel_path = ? AND zip_file = ? AND zip_entry IS NOT NULL`,
-    [folderId, relPath, zipFile],
-  );
-  // Extract unique directory prefixes from zip_entry values
-  const dirs = new Set<string>();
-  for (const row of rows) {
-    const parts = row.zip_entry.split('/');
-    // Build cumulative prefixes for all directory segments (skip the filename)
-    let cumulative = '';
-    for (let i = 0; i < parts.length - 1; i++) {
-      cumulative = cumulative ? cumulative + '/' + parts[i] : parts[i];
-      dirs.add(cumulative);
-    }
-  }
-  return [...dirs].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-}
-
-/**
- * Get all distinct zip files within a folder (with their rel_path).
- * Used to show ZIP nodes in the search config tree.
- */
-export async function getDistinctZipFiles(
-  db: Database,
-  folderId: number,
-): Promise<Array<{ rel_path: string; zip_file: string }>> {
-  return db.select<Array<{ rel_path: string; zip_file: string }>>(
-    `SELECT DISTINCT rel_path, zip_file FROM assets
-     WHERE folder_id = ? AND zip_file IS NOT NULL
-     ORDER BY rel_path COLLATE NOCASE, zip_file COLLATE NOCASE`,
-    [folderId],
-  );
-}
 
 // ============================================================================
 // CLAP Semantic Search (uses Tauri commands, not direct SQL)

@@ -1,12 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { getDatabase } from '$lib/database/connection';
-  import {
-    getSearchExcludes,
-    getDistinctRelPaths,
-    getDistinctZipFiles,
-    getDistinctZipDirs,
-  } from '$lib/database/queries';
+  import { getSearchExcludes, getDistinctRelPaths } from '$lib/database/queries';
   import { showToast } from '$lib/state/ui.svelte';
   import type { SearchExclude } from '$lib/types';
   import Spinner from '$lib/components/shared/Spinner.svelte';
@@ -125,10 +120,14 @@
     loading = true;
     try {
       const db = await getDatabase();
-      const [currentExcludes, relPaths, zipFiles] = await Promise.all([
+
+      const [currentExcludes, relPaths, zipDirGroups] = await Promise.all([
         getSearchExcludes(db, folderId),
         getDistinctRelPaths(db, folderId),
-        getDistinctZipFiles(db, folderId),
+        invoke<Array<{ rel_path: string; zip_file: string; dirs: string[] }>>(
+          'get_zip_dir_trees',
+          { folderId },
+        ),
       ]);
 
       // Build the excludes set
@@ -138,12 +137,9 @@
       // Build filesystem tree from rel_paths
       const fsTree = buildTree(relPaths, null);
 
-      // Load ZIP-internal dirs and insert them into the tree
-      for (const { rel_path, zip_file } of zipFiles) {
-        const zipDirs = await getDistinctZipDirs(db, folderId, rel_path, zip_file);
-        if (zipDirs.length > 0) {
-          insertZipNode(fsTree, rel_path, zip_file, zipDirs);
-        }
+      // Insert zip nodes into the tree (dirs already extracted by backend)
+      for (const { rel_path, zip_file, dirs } of zipDirGroups) {
+        insertZipNode(fsTree, rel_path, zip_file, dirs);
       }
 
       // Sort each level
