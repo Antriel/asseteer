@@ -47,6 +47,25 @@ async fn seed_images(pool: &SqlitePool, n: usize) {
         .await
         .unwrap();
     }
+
+    // Populate FTS (INSERT trigger removed for bulk import perf)
+    sqlx::query(
+        "INSERT INTO assets_fts_sub(rowid, filename, searchable_path)
+         SELECT id, filename, searchable_path FROM assets WHERE folder_id = ?",
+    )
+    .bind(folder_id)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO assets_fts_word(rowid, filename, searchable_path)
+         SELECT id, filename, searchable_path FROM assets WHERE folder_id = ?",
+    )
+    .bind(folder_id)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 // ---------------------------------------------------------------------------

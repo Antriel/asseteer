@@ -385,7 +385,16 @@ pub async fn apply_rescan(
         }
     }
 
-    // Insert new assets
+    // Insert new assets (FTS INSERT trigger removed — populate explicitly below)
+    let max_id_before_inserts: i64 = if !preview.added.is_empty() {
+        sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM assets")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        0
+    };
+
     for asset in &preview.added {
         insert_asset_row(&mut tx, asset, now).await?;
 
@@ -404,6 +413,31 @@ pub async fn apply_rescan(
             );
             last_emit = Instant::now();
         }
+    }
+
+    // Populate FTS for newly inserted assets
+    if !preview.added.is_empty() {
+        sqlx::query(
+            "INSERT INTO assets_fts_sub(rowid, filename, searchable_path)
+             SELECT id, filename, searchable_path FROM assets
+             WHERE folder_id = ?1 AND id > ?2",
+        )
+        .bind(folder_id)
+        .bind(max_id_before_inserts)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        sqlx::query(
+            "INSERT INTO assets_fts_word(rowid, filename, searchable_path)
+             SELECT id, filename, searchable_path FROM assets
+             WHERE folder_id = ?1 AND id > ?2",
+        )
+        .bind(folder_id)
+        .bind(max_id_before_inserts)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;

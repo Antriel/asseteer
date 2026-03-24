@@ -92,14 +92,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS assets_fts_word USING fts5(
 )
 "#;
 
+/// FTS triggers for UPDATE and DELETE only.
+/// INSERT trigger removed — bulk FTS population is done explicitly after
+/// scan/rescan to avoid per-row trigram+unicode61 indexing overhead.
 pub const CREATE_FTS_TRIGGERS: &str = r#"
-CREATE TRIGGER IF NOT EXISTS assets_ai AFTER INSERT ON assets BEGIN
-    INSERT INTO assets_fts_sub(rowid, filename, searchable_path)
-    VALUES (new.id, new.filename, new.searchable_path);
-    INSERT INTO assets_fts_word(rowid, filename, searchable_path)
-    VALUES (new.id, new.filename, new.searchable_path);
-END;
-
 CREATE TRIGGER IF NOT EXISTS assets_au AFTER UPDATE ON assets BEGIN
     DELETE FROM assets_fts_sub WHERE rowid = old.id;
     DELETE FROM assets_fts_word WHERE rowid = old.id;

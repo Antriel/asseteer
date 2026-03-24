@@ -53,7 +53,7 @@ pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
-    // Create FTS triggers
+    // Create FTS triggers (UPDATE + DELETE only; INSERT trigger removed for bulk perf)
     for trigger_sql in CREATE_FTS_TRIGGERS.split("END;").filter(|s| !s.trim().is_empty()) {
         let trigger = format!("{} END;", trigger_sql.trim());
         sqlx::query(&trigger)

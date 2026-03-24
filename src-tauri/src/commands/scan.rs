@@ -30,7 +30,7 @@ const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "wav", "ogg", "flac", "m4a", "aac"];
 
 /// Number of assets per chunk sent through the channel
-const CHUNK_SIZE: usize = 200;
+const CHUNK_SIZE: usize = 1000;
 
 /// Minimum interval between progress event emissions
 const EMIT_INTERVAL_MS: u128 = 100;
@@ -111,6 +111,19 @@ pub async fn add_folder(
     // Load folder search excludes
     let search_excludes = load_search_excludes(&state.pool, folder_id).await?;
 
+    // Snapshot max asset id before insertion — used to scope FTS population
+    let max_id_before: i64 =
+        sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM assets")
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    // Suppress WAL auto-checkpoint during bulk insert to reduce write I/O
+    sqlx::query("PRAGMA wal_autocheckpoint=0")
+        .execute(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
     let (tx, mut rx) = mpsc::channel::<Vec<DiscoveredAsset>>(32);
 
     let progress = Arc::new(ScanProgressState {
@@ -166,6 +179,21 @@ pub async fn add_folder(
         .await
         .map_err(|e| format!("Discovery task panicked: {}", e))?
         .map_err(|e| e)?;
+
+    // Bulk-populate FTS indexes for newly inserted assets (INSERT trigger removed
+    // for performance — trigram+unicode61 per-row indexing was the biggest write
+    // amplifier). Scoped by folder_id + max_id to be safe with concurrent scans.
+    populate_fts_for_new_assets(&pool, folder_id, max_id_before).await?;
+
+    // Restore WAL auto-checkpoint and run a passive checkpoint
+    sqlx::query("PRAGMA wal_autocheckpoint=1000")
+        .execute(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
+        .execute(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Emit completion
     let total_found = progress.files_found.load(Ordering::Relaxed);
@@ -751,6 +779,39 @@ pub(crate) async fn insert_asset_chunk(
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Bulk-populate both FTS indexes for newly inserted assets in a folder.
+/// Uses folder_id + min_id_exclusive to scope to only this scan's new assets,
+/// which is safe when multiple scans for different folders run concurrently.
+pub(crate) async fn populate_fts_for_new_assets(
+    pool: &sqlx::SqlitePool,
+    folder_id: i64,
+    min_id_exclusive: i64,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO assets_fts_sub(rowid, filename, searchable_path)
+         SELECT id, filename, searchable_path FROM assets
+         WHERE folder_id = ?1 AND id > ?2",
+    )
+    .bind(folder_id)
+    .bind(min_id_exclusive)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    sqlx::query(
+        "INSERT INTO assets_fts_word(rowid, filename, searchable_path)
+         SELECT id, filename, searchable_path FROM assets
+         WHERE folder_id = ?1 AND id > ?2",
+    )
+    .bind(folder_id)
+    .bind(min_id_exclusive)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
     Ok(())
 }
 
