@@ -1,4 +1,5 @@
 use crate::{database, models::*, AppState};
+use rusqlite;
 use serde::Serialize;
 use serde_json;
 use sqlx;
@@ -7,7 +8,7 @@ use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 use walkdir::WalkDir;
@@ -141,42 +142,93 @@ pub async fn add_folder(
         discover_files_streaming(&discover_app, &root_path_buf, folder_id, tx, &discover_progress, "scan-progress", &search_excludes)
     });
 
-    // Receive chunks and insert them as they arrive
+    // Synchronous bulk insertion via rusqlite on a blocking thread.
+    // Bypasses sqlx async overhead — prepare once, rebind+step+reset in a tight loop.
     let pool = state.pool.clone();
     let insert_progress = progress.clone();
-    let insert_app = app.clone();
-    let mut last_emit = Instant::now();
+    let db_path = state.db_path.clone();
+    let insertion_handle = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=30000; PRAGMA wal_autocheckpoint=0;"
+        ).map_err(|e| e.to_string())?;
+        conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
 
-    while let Some(chunk) = rx.recv().await {
-        let chunk_len = chunk.len();
-        insert_asset_chunk(&pool, &chunk).await?;
-        let total_inserted =
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs() as i64;
+
+        let mut stmt = conn.prepare(
+            "INSERT OR IGNORE INTO assets (
+                filename, folder_id, rel_path, zip_file, zip_entry, zip_compression,
+                searchable_path, asset_type, format, file_size, fs_modified_at,
+                created_at, modified_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        ).map_err(|e| e.to_string())?;
+
+        while let Some(chunk) = rx.blocking_recv() {
+            let chunk_len = chunk.len();
+            for asset in &chunk {
+                stmt.execute(rusqlite::params![
+                    asset.filename,
+                    asset.folder_id,
+                    asset.rel_path,
+                    asset.zip_file,
+                    asset.zip_entry,
+                    asset.zip_compression,
+                    asset.searchable_path,
+                    asset.asset_type.as_str(),
+                    asset.format,
+                    asset.file_size,
+                    asset.fs_modified_at,
+                    now,
+                    now,
+                ]).map_err(|e| e.to_string())?;
+            }
             insert_progress
                 .files_inserted
-                .fetch_add(chunk_len, Ordering::Relaxed)
-                + chunk_len;
+                .fetch_add(chunk_len, Ordering::Relaxed);
+        }
 
-        if last_emit.elapsed().as_millis() >= EMIT_INTERVAL_MS {
-            let found = insert_progress.files_found.load(Ordering::Relaxed);
-            let zips = insert_progress.zips_scanned.load(Ordering::Relaxed);
-            let done = insert_progress.discovery_complete.load(Ordering::Relaxed);
-            let _ = insert_app.emit(
+        drop(stmt);
+        conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+        Ok(())
+    });
+
+    // Emit progress events while discovery + insertion run concurrently
+    let emit_progress = progress.clone();
+    let emit_app = app.clone();
+    let progress_handle = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(EMIT_INTERVAL_MS as u64)).await;
+            let found = emit_progress.files_found.load(Ordering::Relaxed);
+            let inserted = emit_progress.files_inserted.load(Ordering::Relaxed);
+            let done = emit_progress.discovery_complete.load(Ordering::Relaxed);
+            let zips = emit_progress.zips_scanned.load(Ordering::Relaxed);
+            let _ = emit_app.emit(
                 "scan-progress",
                 ScanProgress {
                     phase: "scanning".to_string(),
                     files_found: found,
-                    files_inserted: total_inserted,
+                    files_inserted: inserted,
                     files_total: if done { found } else { 0 },
                     zips_scanned: zips,
                     current_path: None,
                     warnings: vec![],
                 },
             );
-            last_emit = Instant::now();
         }
-    }
+    });
 
-    // Discovery finished (tx dropped) — check for errors
+    // Insertion finishes when discovery drops tx (channel closes)
+    insertion_handle
+        .await
+        .map_err(|e| format!("Insertion task panicked: {}", e))?
+        .map_err(|e| e)?;
+    progress_handle.abort();
+
+    // Discovery should already be done — check for errors
     discovery_handle
         .await
         .map_err(|e| format!("Discovery task panicked: {}", e))?
@@ -193,20 +245,13 @@ pub async fn add_folder(
     // Batched with progress events so the UI doesn't appear stuck.
     populate_fts_batched(&app, &pool, folder_id, max_id_before).await?;
 
-    // WAL auto-checkpoint is disabled globally (via after_connect); run an
-    // explicit passive checkpoint to flush WAL → .db without blocking readers.
-    // First pass may miss pages locked by active readers, so schedule a second
-    // attempt after a short delay to catch the rest.
-    database::checkpoint_passive(&pool)
+    // WAL auto-checkpoint is disabled globally (via after_connect); run a
+    // TRUNCATE checkpoint to flush WAL → .db and free disk space.
+    // TRUNCATE waits for readers to finish (frontend reads are short), so
+    // a single call is sufficient — no delayed retry needed.
+    database::checkpoint_truncate(&pool)
         .await
         .map_err(|e| e.to_string())?;
-    {
-        let pool2 = pool.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            let _ = database::checkpoint_passive(&pool2).await;
-        });
-    }
 
     // Emit completion
     let total_found = progress.files_found.load(Ordering::Relaxed);
@@ -806,25 +851,6 @@ pub(crate) async fn insert_asset_row(
     .execute(&mut **tx)
     .await
     .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-pub(crate) async fn insert_asset_chunk(
-    pool: &sqlx::SqlitePool,
-    assets: &[DiscoveredAsset],
-) -> Result<(), String> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_secs() as i64;
-
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-
-    for asset in assets {
-        insert_asset_row(&mut tx, asset, now).await?;
-    }
-
-    tx.commit().await.map_err(|e| e.to_string())?;
     Ok(())
 }
 

@@ -86,13 +86,13 @@ Uses sqlx with SQLite connection pool. WAL mode, 30s busy timeout.
 
 ### WAL Checkpoint Strategy
 
-Auto-checkpoint is **disabled on all connections** (backend via `after_connect` in `mod.rs`, frontend in `connection.ts`). This prevents continuous `.db` writes during bulk operations (scan, processing) where the default 1000-page threshold would cause the frontend's read connection to checkpoint on every query.
+Auto-checkpoint is set to **50000 pages (~200MB)** on backend pool connections (`after_connect` in `mod.rs`) to bound WAL growth during FTS population. It is **disabled** on the frontend connection (`connection.ts`) to avoid checkpoint I/O latency on UI queries, and on the rusqlite bulk-insert connection (single transaction, irrelevant).
 
 Checkpoints happen explicitly at two points:
-- **After scan** (`scan.rs`): PASSIVE checkpoint + delayed second pass after 5s
-- **After processing** (`work_queue.rs`): same pattern per category
+- **After scan** (`scan.rs`): TRUNCATE checkpoint (waits for readers, then flushes WAL and frees disk space)
+- **After processing** (`work_queue.rs`): same TRUNCATE checkpoint per category
 
-**Do not re-enable auto-checkpoint** on any connection — it causes write amplification during bulk operations. If adding new bulk write paths, add an explicit `database::checkpoint_passive()` call after completion.
+**Do not re-enable auto-checkpoint** on any connection — it causes write amplification during bulk operations. If adding new bulk write paths, add an explicit `database::checkpoint_truncate()` call after completion.
 
 ### FTS Population
 

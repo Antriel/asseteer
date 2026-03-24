@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 /// Application state shared across all commands
 pub struct AppState {
     pub pool: DbPool,
+    pub db_path: String,
     pub work_queue: Arc<WorkQueue>,
     pub thumbnail_worker: ThumbnailWorkerHandle,
     /// Cached rescan previews, keyed by folder_id
@@ -68,6 +69,7 @@ pub fn run() {
             // Store pool and work queue in app state
             app.manage(AppState {
                 pool: pool.clone(),
+                db_path: db_path.to_str().unwrap().to_string(),
                 work_queue: work_queue.clone(),
                 thumbnail_worker,
                 rescan_previews: Mutex::new(HashMap::new()),

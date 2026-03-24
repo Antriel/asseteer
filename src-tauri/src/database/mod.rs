@@ -35,10 +35,12 @@ pub async fn initialize_db(db_path: &str) -> Result<DbPool, sqlx::Error> {
         .max_connections(5)
         .after_connect(|conn, _meta| {
             Box::pin(async move {
-                // Disable WAL auto-checkpoint on all backend connections.
-                // Checkpoints are managed explicitly (after scan, after processing)
-                // to avoid continuous .db writes during bulk operations.
-                conn.execute("PRAGMA wal_autocheckpoint=0").await?;
+                // Auto-checkpoint at 50000 pages (~200MB of WAL) on backend connections.
+                // This bounds WAL growth during FTS population (which commits per batch)
+                // without checkpointing too aggressively during bulk writes.
+                // The frontend connection keeps auto-checkpoint disabled separately
+                // to avoid adding checkpoint I/O latency to UI queries.
+                conn.execute("PRAGMA wal_autocheckpoint=50000").await?;
                 Ok(())
             })
         })
@@ -52,9 +54,11 @@ pub async fn initialize_db(db_path: &str) -> Result<DbPool, sqlx::Error> {
     Ok(pool)
 }
 
-/// Run a passive WAL checkpoint. Never blocks readers or writers.
-pub async fn checkpoint_passive(pool: &DbPool) -> Result<(), sqlx::Error> {
-    sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
+/// Run a truncate WAL checkpoint. Waits for readers to finish, then
+/// checkpoints all frames and truncates the WAL file to zero bytes.
+/// Safe to call after bulk operations when no more writes are expected.
+pub async fn checkpoint_truncate(pool: &DbPool) -> Result<(), sqlx::Error> {
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(pool)
         .await?;
     Ok(())

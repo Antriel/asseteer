@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Backpack where the front pocket IS the magnifying glass lens -->
+  <defs>
+    <linearGradient id="bg1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3B9B8F"/>
+      <stop offset="100%" stop-color="#2A7A70"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Carry loop -->
+  <path d="M52 24 Q52 16 64 16 Q76 16 76 24" fill="none" stroke="#2A7A70" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Main backpack body -->
+  <rect x="30" y="28" width="68" height="80" rx="14" fill="url(#bg1)"/>
+
+  <!-- Shoulder straps (subtle, peeking from sides) -->
+  <path d="M30 44 Q22 44 22 54 L22 90 Q22 96 28 96" fill="none" stroke="#24665E" stroke-width="4.5" stroke-linecap="round"/>
+  <path d="M98 44 Q106 44 106 54 L106 90 Q106 96 100 96" fill="none" stroke="#24665E" stroke-width="4.5" stroke-linecap="round"/>
+
+  <!-- Front pocket = magnifying glass lens -->
+  <circle cx="60" cy="72" r="20" fill="#2E8A80" stroke="#D4F5F0" stroke-width="3"/>
+  <circle cx="60" cy="72" r="13" fill="none" stroke="#D4F5F0" stroke-width="2" opacity="0.5"/>
+
+  <!-- Magnifying glass handle -->
+  <line x1="75" y1="87" x2="90" y2="102" stroke="#D4F5F0" stroke-width="4.5" stroke-linecap="round"/>
+
+  <!-- Lens glare -->
+  <path d="M52 63 Q56 58 62 60" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+
+  <!-- Zipper line on main body -->
+  <line x1="44" y1="46" x2="84" y2="46" stroke="#24665E" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="82" cy="46" r="2.5" fill="#D4F5F0"/>
+</svg>

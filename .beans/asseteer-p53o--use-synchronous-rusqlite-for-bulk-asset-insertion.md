@@ -1,11 +1,11 @@
 ---
 # asseteer-p53o
 title: Use synchronous rusqlite for bulk asset insertion during scan
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-03-24T11:00:08Z
-updated_at: 2026-03-24T11:00:08Z
+updated_at: 2026-03-24T11:24:46Z
 ---
 
 The scan insertion loop currently does 940k individual `sqlx::query().bind(×13).execute()` calls through the async runtime. The per-statement async overhead (tokio poll cycles, connection pool dispatch, statement cache lookup) is the primary bottleneck — NVME at ~1% utilization (20-30 MB/s of 3000+ MB/s capacity), CPU appears idle.
@@ -36,3 +36,16 @@ This eliminates per-row async overhead and matches SQLite's canonical bulk inser
 - Keep sqlx pool for everything else (queries, updates, processing writes) — this is only for the scan bulk insert path
 - Channel capacity (32 chunks × 1000 assets) provides buffering between async/sync boundary
 - FTS batched population still uses sqlx (it's INSERT...SELECT, only ~19 statements total)
+
+
+## Summary of Changes
+
+Replaced the async sqlx insertion loop in `scan.rs` with a synchronous `rusqlite::Connection` on `spawn_blocking`:
+
+- **Cargo.toml**: Added `rusqlite = "0.32"` (compatible with sqlx's `libsqlite3-sys 0.30`)
+- **lib.rs**: Added `db_path: String` to `AppState` so the rusqlite connection can open the same DB file
+- **scan.rs**: The channel consumer now runs in `spawn_blocking` with a tight prepare-once/rebind-step-reset loop inside a single transaction. Per-row async overhead (tokio polls, connection pool dispatch, statement cache lookup) is completely eliminated
+- **scan.rs**: Progress emission moved to a separate async task polling atomics every 100ms, decoupled from the insertion loop
+- **scan.rs**: Removed `insert_asset_chunk()` (no longer used). `insert_asset_row()` kept for rescan path (small number of assets via sqlx)
+
+All 66 existing tests pass.

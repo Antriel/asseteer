@@ -689,15 +689,8 @@ impl WorkQueue {
                     }
 
                     // Checkpoint WAL → .db after processing writes are flushed.
-                    // Second pass after delay catches pages locked by readers.
-                    let _ = database::checkpoint_passive(&pool).await;
-                    {
-                        let pool2 = pool.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(Duration::from_secs(5)).await;
-                            let _ = database::checkpoint_passive(&pool2).await;
-                        });
-                    }
+                    // TRUNCATE waits for readers then frees WAL disk space.
+                    let _ = database::checkpoint_truncate(&pool).await;
 
                     // Free unused cached nested ZIP memory (preserves pinned entries
                     // that other categories may still be using)
