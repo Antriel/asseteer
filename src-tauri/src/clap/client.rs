@@ -34,12 +34,6 @@ struct TextRequest {
 }
 
 #[derive(Serialize)]
-#[allow(dead_code)]
-struct AudioPathRequest {
-    audio_path: String,
-}
-
-#[derive(Serialize)]
 struct BatchAudioPathRequest {
     audio_paths: Vec<String>,
 }
@@ -159,62 +153,6 @@ impl ClapClient {
             .client
             .post(&url)
             .json(&request)
-            .send()
-            .await
-            .map_err(|e| format!("Request failed: {}", e))?;
-
-        if !response.status().is_success() {
-            return Err(format!("Server error: {}", response.status()));
-        }
-
-        let embed: EmbeddingResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Parse error: {}", e))?;
-
-        Ok(embed.embedding)
-    }
-
-    /// Generate audio embedding from a file path
-    #[allow(dead_code)]
-    pub async fn embed_audio_path(&self, path: &str) -> Result<Vec<f32>, String> {
-        let url = format!("{}/embed/audio", self.base_url());
-        let request = AudioPathRequest {
-            audio_path: path.to_string(),
-        };
-
-        let response = self
-            .client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| format!("Request failed: {}", e))?;
-
-        if !response.status().is_success() {
-            return Err(format!("Server error: {}", response.status()));
-        }
-
-        let embed: EmbeddingResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Parse error: {}", e))?;
-
-        Ok(embed.embedding)
-    }
-
-    /// Generate audio embedding from raw bytes (for ZIP files)
-    #[allow(dead_code)]
-    pub async fn embed_audio_bytes(&self, bytes: Vec<u8>, filename: &str) -> Result<Vec<f32>, String> {
-        let url = format!("{}/embed/audio/upload", self.base_url());
-
-        let part = multipart::Part::bytes(bytes).file_name(filename.to_string());
-        let form = multipart::Form::new().part("audio", part);
-
-        let response = self
-            .client
-            .post(&url)
-            .multipart(form)
             .send()
             .await
             .map_err(|e| format!("Request failed: {}", e))?;

@@ -17,7 +17,6 @@ const NESTED_ZIP_PROCESSING_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Result of processing an asset
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ProcessingResult {
     pub asset_id: i64,
     pub success: bool,
@@ -548,17 +547,6 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
             error: Some(e),
         },
     }
-}
-
-/// Process CLAP embedding for an audio asset (single - fallback)
-#[allow(dead_code)]
-pub async fn process_clap_embedding(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
-    let results = process_clap_embedding_batch(&[asset.clone()], db).await;
-    results.into_iter().next().unwrap_or(ProcessingResult {
-        asset_id: asset.id,
-        success: false,
-        error: Some("Batch returned no results".to_string()),
-    })
 }
 
 /// Process CLAP embeddings for a batch of audio assets

@@ -43,7 +43,7 @@ impl BatchGroupCompletion {
 
 /// A group of batches sharing the same nested ZIP key.
 struct ZipBatchGroup {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     key: String,
     batches: Vec<WorkBatch>,
 }
