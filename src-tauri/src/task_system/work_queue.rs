@@ -1,4 +1,5 @@
 /// Work queue with worker pool for processing assets
+use crate::database;
 use crate::models::{Asset, ProcessingCategory};
 use crate::task_system::db_writer::{DbBatchWriter, ProcessingOutput};
 use crate::task_system::processor::{process_asset_cpu, process_clap_embedding_batch};
@@ -432,7 +433,7 @@ impl WorkQueue {
 
         // Spawn progress emitter task for this category
         let batch_writer_for_emitter = self.ensure_db_writer(&db).await;
-        self.spawn_progress_emitter(category, app_handle.clone(), batch_writer_for_emitter).await;
+        self.spawn_progress_emitter(category, app_handle.clone(), batch_writer_for_emitter, db.clone()).await;
 
         Ok(())
     }
@@ -619,7 +620,7 @@ impl WorkQueue {
     }
 
     /// Spawn a task that periodically emits progress events for a category
-    async fn spawn_progress_emitter(&self, category: ProcessingCategory, app_handle: AppHandle, batch_writer: DbBatchWriter) {
+    async fn spawn_progress_emitter(&self, category: ProcessingCategory, app_handle: AppHandle, batch_writer: DbBatchWriter, pool: SqlitePool) {
         let state = self.ensure_category_state(category).await;
         let category_str = category.as_str().to_string();
 
@@ -685,6 +686,17 @@ impl WorkQueue {
                     // Invalidate embedding cache when CLAP processing finishes
                     if category == ProcessingCategory::Clap {
                         crate::clap::cache::invalidate();
+                    }
+
+                    // Checkpoint WAL → .db after processing writes are flushed.
+                    // Second pass after delay catches pages locked by readers.
+                    let _ = database::checkpoint_passive(&pool).await;
+                    {
+                        let pool2 = pool.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            let _ = database::checkpoint_passive(&pool2).await;
+                        });
                     }
 
                     // Free unused cached nested ZIP memory (preserves pinned entries

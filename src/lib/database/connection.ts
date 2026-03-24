@@ -13,6 +13,9 @@ export async function getDatabase(): Promise<Database> {
     dbPromise = (async () => {
       console.time('[DB Frontend] Database.load');
       db = await Database.load('sqlite:asseteer.db');
+      // Disable WAL auto-checkpoint — this read-only connection should never
+      // trigger checkpoints (the backend manages them explicitly).
+      await db.execute('PRAGMA wal_autocheckpoint=0', []);
       console.timeEnd('[DB Frontend] Database.load');
       return db;
     })();

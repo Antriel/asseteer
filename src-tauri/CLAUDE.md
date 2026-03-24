@@ -23,7 +23,7 @@
 
 ### Phase 1: Discovery (`scan.rs`)
 - Recursive directory walk + ZIP archive scanning (including nested ZIPs)
-- Streams chunks of 200 assets through mpsc channel
+- Streams chunks of 1000 assets through mpsc channel
 - Discovery runs on `spawn_blocking`, insertion runs async concurrently
 - **Images**: PNG, JPG, JPEG, WebP, GIF, BMP
 - **Audio**: MP3, WAV, OGG, FLAC, M4A, AAC
@@ -83,6 +83,23 @@
 Uses sqlx with SQLite connection pool. WAL mode, 30s busy timeout.
 
 **Note**: All read operations are handled by frontend via Tauri SQL plugin.
+
+### WAL Checkpoint Strategy
+
+Auto-checkpoint is **disabled on all connections** (backend via `after_connect` in `mod.rs`, frontend in `connection.ts`). This prevents continuous `.db` writes during bulk operations (scan, processing) where the default 1000-page threshold would cause the frontend's read connection to checkpoint on every query.
+
+Checkpoints happen explicitly at two points:
+- **After scan** (`scan.rs`): PASSIVE checkpoint + delayed second pass after 5s
+- **After processing** (`work_queue.rs`): same pattern per category
+
+**Do not re-enable auto-checkpoint** on any connection — it causes write amplification during bulk operations. If adding new bulk write paths, add an explicit `database::checkpoint_passive()` call after completion.
+
+### FTS Population
+
+The FTS INSERT trigger (`assets_ai`) is permanently removed. Both FTS indexes (`assets_fts_sub` trigram, `assets_fts_word` unicode61) are populated explicitly:
+- **Scan**: batched `INSERT INTO...SELECT` in `populate_fts_batched()` with progress events
+- **Rescan**: inline in the transaction (typically small number of new assets)
+- **UPDATE/DELETE triggers** are kept for convenience (modifications are infrequent)
 
 ## Testing
 

@@ -1,7 +1,7 @@
 pub mod init;
 pub mod schema;
 
-use sqlx::{SqlitePool, sqlite::{SqlitePoolOptions, SqliteConnectOptions}};
+use sqlx::{Executor, SqlitePool, sqlite::{SqlitePoolOptions, SqliteConnectOptions}};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -33,6 +33,15 @@ pub async fn initialize_db(db_path: &str) -> Result<DbPool, sqlx::Error> {
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                // Disable WAL auto-checkpoint on all backend connections.
+                // Checkpoints are managed explicitly (after scan, after processing)
+                // to avoid continuous .db writes during bulk operations.
+                conn.execute("PRAGMA wal_autocheckpoint=0").await?;
+                Ok(())
+            })
+        })
         .connect_with(connect_options)
         .await?;
 
@@ -41,6 +50,14 @@ pub async fn initialize_db(db_path: &str) -> Result<DbPool, sqlx::Error> {
 
     println!("[DB] Database pool initialized successfully");
     Ok(pool)
+}
+
+/// Run a passive WAL checkpoint. Never blocks readers or writers.
+pub async fn checkpoint_passive(pool: &DbPool) -> Result<(), sqlx::Error> {
+    sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// Close the database pool gracefully

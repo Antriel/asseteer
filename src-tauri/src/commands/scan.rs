@@ -1,4 +1,4 @@
-use crate::{models::*, AppState};
+use crate::{database, models::*, AppState};
 use serde::Serialize;
 use serde_json;
 use sqlx;
@@ -36,6 +36,9 @@ const CHUNK_SIZE: usize = 1000;
 
 /// Minimum interval between progress event emissions
 const EMIT_INTERVAL_MS: u128 = 100;
+
+/// Number of assets per FTS indexing batch (for progress reporting)
+const FTS_BATCH_SIZE: i64 = 50_000;
 
 /// Represents a discovered asset (either a regular file or a zip entry)
 #[derive(Debug, Clone)]
@@ -121,12 +124,6 @@ pub async fn add_folder(
             .await
             .map_err(|e| e.to_string())?;
 
-    // Suppress WAL auto-checkpoint during bulk insert to reduce write I/O
-    sqlx::query("PRAGMA wal_autocheckpoint=0")
-        .execute(&state.pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
     let (tx, mut rx) = mpsc::channel::<Vec<DiscoveredAsset>>(32);
 
     let progress = Arc::new(ScanProgressState {
@@ -193,17 +190,23 @@ pub async fn add_folder(
     // Bulk-populate FTS indexes for newly inserted assets (INSERT trigger removed
     // for performance — trigram+unicode61 per-row indexing was the biggest write
     // amplifier). Scoped by folder_id + max_id to be safe with concurrent scans.
-    populate_fts_for_new_assets(&pool, folder_id, max_id_before).await?;
+    // Batched with progress events so the UI doesn't appear stuck.
+    populate_fts_batched(&app, &pool, folder_id, max_id_before).await?;
 
-    // Restore WAL auto-checkpoint and run a passive checkpoint
-    sqlx::query("PRAGMA wal_autocheckpoint=1000")
-        .execute(&pool)
+    // WAL auto-checkpoint is disabled globally (via after_connect); run an
+    // explicit passive checkpoint to flush WAL → .db without blocking readers.
+    // First pass may miss pages locked by active readers, so schedule a second
+    // attempt after a short delay to catch the rest.
+    database::checkpoint_passive(&pool)
         .await
         .map_err(|e| e.to_string())?;
-    sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
-        .execute(&pool)
-        .await
-        .map_err(|e| e.to_string())?;
+    {
+        let pool2 = pool.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let _ = database::checkpoint_passive(&pool2).await;
+        });
+    }
 
     // Emit completion
     let total_found = progress.files_found.load(Ordering::Relaxed);
@@ -825,38 +828,90 @@ pub(crate) async fn insert_asset_chunk(
     Ok(())
 }
 
-/// Bulk-populate both FTS indexes for newly inserted assets in a folder.
+/// Bulk-populate both FTS indexes for newly inserted assets in a folder,
+/// in batches of FTS_BATCH_SIZE with progress events.
 /// Uses folder_id + min_id_exclusive to scope to only this scan's new assets,
 /// which is safe when multiple scans for different folders run concurrently.
-pub(crate) async fn populate_fts_for_new_assets(
+async fn populate_fts_batched(
+    app: &AppHandle,
     pool: &sqlx::SqlitePool,
     folder_id: i64,
     min_id_exclusive: i64,
 ) -> Result<(), String> {
-    sqlx::query(
-        "INSERT INTO assets_fts_sub(rowid, filename, searchable_path)
-         SELECT id, filename, searchable_path FROM assets
-         WHERE folder_id = ?1 AND id > ?2",
+    let total: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM assets WHERE folder_id = ?1 AND id > ?2")
+            .bind(folder_id)
+            .bind(min_id_exclusive)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    if total == 0 {
+        return Ok(());
+    }
+
+    let max_id: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(id), 0) FROM assets WHERE folder_id = ?1 AND id > ?2",
     )
     .bind(folder_id)
     .bind(min_id_exclusive)
-    .execute(pool)
+    .fetch_one(pool)
     .await
     .map_err(|e| e.to_string())?;
 
-    sqlx::query(
-        "INSERT INTO assets_fts_word(rowid, filename, searchable_path)
-         SELECT id, filename, searchable_path FROM assets
-         WHERE folder_id = ?1 AND id > ?2",
-    )
-    .bind(folder_id)
-    .bind(min_id_exclusive)
-    .execute(pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let mut current_min = min_id_exclusive;
+    let mut indexed: usize = 0;
+
+    while current_min < max_id {
+        let batch_max = (current_min + FTS_BATCH_SIZE).min(max_id);
+
+        let result = sqlx::query(
+            "INSERT INTO assets_fts_sub(rowid, filename, searchable_path)
+             SELECT id, filename, searchable_path FROM assets
+             WHERE folder_id = ?1 AND id > ?2 AND id <= ?3",
+        )
+        .bind(folder_id)
+        .bind(current_min)
+        .bind(batch_max)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let batch_count = result.rows_affected() as usize;
+
+        sqlx::query(
+            "INSERT INTO assets_fts_word(rowid, filename, searchable_path)
+             SELECT id, filename, searchable_path FROM assets
+             WHERE folder_id = ?1 AND id > ?2 AND id <= ?3",
+        )
+        .bind(folder_id)
+        .bind(current_min)
+        .bind(batch_max)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        indexed += batch_count;
+
+        let _ = app.emit(
+            "scan-progress",
+            ScanProgress {
+                phase: "indexing".to_string(),
+                files_found: total as usize,
+                files_inserted: indexed,
+                files_total: total as usize,
+                zips_scanned: 0,
+                current_path: None,
+                warnings: vec![],
+            },
+        );
+
+        current_min = batch_max;
+    }
 
     Ok(())
 }
+
 
 /// Load folder search excludes as a HashSet of (zip_file, excluded_path) pairs.
 /// Encode an exclude key as `"{zip_file_or_empty}\0{path}"` for O(1) borrowed lookup.

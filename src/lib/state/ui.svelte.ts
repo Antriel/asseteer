@@ -1,6 +1,6 @@
 // Scan progress details
 export interface ScanProgress {
-  phase: 'idle' | 'discovering' | 'scanning' | 'inserting' | 'complete';
+  phase: 'idle' | 'discovering' | 'scanning' | 'inserting' | 'indexing' | 'complete';
   filesFound: number;
   filesInserted: number;
   filesTotal: number;

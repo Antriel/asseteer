@@ -188,10 +188,13 @@
     } else if (e.phase === 'inserting' || e.phase === 'scanning') {
       if (e.files_total > 0) {
         const pct = Math.round((e.files_inserted / e.files_total) * 100);
-        uiState.scanProgress = `Saving... ${e.files_inserted}/${e.files_total} (${pct}%)`;
+        uiState.scanProgress = `Saving... ${e.files_inserted.toLocaleString()}/${e.files_total.toLocaleString()} (${pct}%)`;
       } else {
-        uiState.scanProgress = `Scanning... ${e.files_found} found`;
+        uiState.scanProgress = `Scanning... ${e.files_found.toLocaleString()} found`;
       }
+    } else if (e.phase === 'indexing') {
+      const pct = Math.round((e.files_inserted / e.files_total) * 100);
+      uiState.scanProgress = `Indexing for search... ${e.files_inserted.toLocaleString()}/${e.files_total.toLocaleString()} (${pct}%)`;
     } else {
       uiState.scanProgress = `Done! ${e.files_found} assets.`;
       if (e.warnings && e.warnings.length > 0) {

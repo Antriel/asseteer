@@ -9,7 +9,7 @@
   import Spinner from '$lib/components/shared/Spinner.svelte';
 
   interface ScanProgress {
-    phase: 'discovering' | 'inserting' | 'scanning' | 'complete';
+    phase: 'discovering' | 'inserting' | 'scanning' | 'indexing' | 'complete';
     files_found: number;
     files_inserted: number;
     files_total: number;
@@ -38,6 +38,10 @@
           ? Math.round((progress.files_inserted / progress.files_total) * 100)
           : 0;
       return `Saving to database... ${progress.files_inserted}/${progress.files_total} (${pct}%)`;
+    }
+    if (progress.phase === 'indexing') {
+      const pct = Math.round((progress.files_inserted / progress.files_total) * 100);
+      return `Indexing for search... ${progress.files_inserted.toLocaleString()}/${progress.files_total.toLocaleString()} (${pct}%)`;
     }
     return `Scan complete! ${progress.files_found} assets discovered.`;
   }
