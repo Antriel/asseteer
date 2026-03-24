@@ -3,6 +3,7 @@ use crate::commands::scan::{
     ScanProgress, ScanProgressState,
 };
 use crate::AppState;
+use serde_json;
 use crate::utils::now_millis;
 use serde::Serialize;
 use sqlx;
@@ -63,6 +64,7 @@ pub(crate) struct CachedRescanPreview {
     pub removed: Vec<i64>,                   // asset IDs to delete
     pub modified: Vec<(i64, DiscoveredAsset)>, // (asset_id, new disk data)
     pub unchanged_count: usize,
+    pub warnings: Vec<String>,
     pub created_at: Instant,
 }
 
@@ -74,6 +76,7 @@ pub struct RescanPreviewResult {
     pub removed_count: usize,
     pub modified_count: usize,
     pub unchanged_count: usize,
+    pub warnings: Vec<String>,
 }
 
 /// Result returned to frontend from apply_rescan
@@ -120,6 +123,7 @@ pub async fn preview_rescan(
         files_inserted: AtomicUsize::new(0),
         zips_scanned: AtomicUsize::new(0),
         discovery_complete: AtomicBool::new(false),
+        warnings: std::sync::Mutex::new(Vec::new()),
     });
 
     let discover_app = app.clone();
@@ -158,6 +162,7 @@ pub async fn preview_rescan(
                     files_total: 0,
                     zips_scanned: zips,
                     current_path: None,
+                    warnings: vec![],
                 },
             );
             last_emit = Instant::now();
@@ -168,6 +173,11 @@ pub async fn preview_rescan(
         .await
         .map_err(|e| format!("Discovery task panicked: {}", e))?
         .map_err(|e| e)?;
+
+    let warnings: Vec<String> = progress.warnings
+        .lock()
+        .map(|mut w| w.drain(..).collect())
+        .unwrap_or_default();
 
     // 3. Fetch existing assets from DB
     let existing: Vec<ExistingAsset> = sqlx::query_as(
@@ -222,6 +232,7 @@ pub async fn preview_rescan(
         removed,
         modified,
         unchanged_count,
+        warnings: warnings.clone(),
         created_at: Instant::now(),
     };
 
@@ -231,6 +242,7 @@ pub async fn preview_rescan(
         removed_count: preview.removed.len(),
         modified_count: preview.modified.len(),
         unchanged_count: preview.unchanged_count,
+        warnings,
     };
 
     // Emit completion
@@ -243,6 +255,7 @@ pub async fn preview_rescan(
             files_total: result.added_count + result.removed_count + result.modified_count + result.unchanged_count,
             zips_scanned: progress.zips_scanned.load(Ordering::Relaxed),
             current_path: None,
+            warnings: vec![],
         },
     );
 
@@ -297,6 +310,7 @@ pub async fn apply_rescan(
             files_total: total_ops,
             zips_scanned: 0,
             current_path: None,
+            warnings: vec![],
         },
     );
 
@@ -324,6 +338,7 @@ pub async fn apply_rescan(
                     files_total: total_ops,
                     zips_scanned: 0,
                     current_path: None,
+                    warnings: vec![],
                 },
             );
             last_emit = Instant::now();
@@ -379,6 +394,7 @@ pub async fn apply_rescan(
                     files_total: total_ops,
                     zips_scanned: 0,
                     current_path: None,
+                    warnings: vec![],
                 },
             );
             last_emit = Instant::now();
@@ -409,6 +425,7 @@ pub async fn apply_rescan(
                     files_total: total_ops,
                     zips_scanned: 0,
                     current_path: None,
+                    warnings: vec![],
                 },
             );
             last_emit = Instant::now();
@@ -442,12 +459,20 @@ pub async fn apply_rescan(
 
     tx.commit().await.map_err(|e| e.to_string())?;
 
-    // Update source folder stats
+    // Encode warnings as JSON (NULL if empty)
+    let warnings_json: Option<String> = if preview.warnings.is_empty() {
+        None
+    } else {
+        serde_json::to_string(&preview.warnings).ok()
+    };
+
+    // Update source folder stats and persist warnings
     sqlx::query(
-        "UPDATE source_folders SET last_scanned_at = ?1, asset_count = (SELECT COUNT(*) FROM assets WHERE folder_id = ?2) WHERE id = ?2",
+        "UPDATE source_folders SET last_scanned_at = ?1, asset_count = (SELECT COUNT(*) FROM assets WHERE folder_id = ?2), scan_warnings = ?3 WHERE id = ?2",
     )
     .bind(now)
     .bind(folder_id)
+    .bind(warnings_json)
     .execute(&state.pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -462,6 +487,7 @@ pub async fn apply_rescan(
             files_total: total_ops,
             zips_scanned: 0,
             current_path: None,
+            warnings: vec![],
         },
     );
 

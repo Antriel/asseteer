@@ -33,6 +33,9 @@ pub struct SourceFolder {
     pub last_scanned_at: Option<i64>,
     pub asset_count: i64,
     pub status: String,
+    /// JSON-encoded Vec<String> of warnings from the last scan/rescan. NULL if none.
+    #[sqlx(default)]
+    pub scan_warnings: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

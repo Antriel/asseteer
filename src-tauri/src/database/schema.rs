@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS source_folders (
     added_at INTEGER NOT NULL,
     last_scanned_at INTEGER,
     asset_count INTEGER DEFAULT 0,
-    status TEXT DEFAULT 'active'
+    status TEXT DEFAULT 'active',
+    scan_warnings TEXT
 )
 "#;
 

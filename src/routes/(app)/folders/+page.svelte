@@ -21,6 +21,7 @@
     files_total: number;
     zips_scanned: number;
     current_path: string | null;
+    warnings?: string[];
   }
 
   interface RescanPreviewResult {
@@ -29,6 +30,7 @@
     removed_count: number;
     modified_count: number;
     unchanged_count: number;
+    warnings?: string[];
   }
 
   interface RescanApplyResult {
@@ -192,11 +194,20 @@
       }
     } else {
       uiState.scanProgress = `Done! ${e.files_found} assets.`;
+      if (e.warnings && e.warnings.length > 0) {
+        const count = e.warnings.length;
+        const msg =
+          count === 1
+            ? `Warning: ${e.warnings[0]}`
+            : `${count} files could not be read during scan`;
+        showToast(msg, 'warning', 8000);
+      }
     }
   }
 
   // Add folder
   async function addFolder() {
+    let succeeded = false;
     try {
       const selected = await open({
         directory: true,
@@ -221,11 +232,7 @@
 
       await invoke('add_folder', { path: selected });
       showToast('Folder added successfully', 'success');
-      await loadFolders();
-      exploreState.clearCache();
-      await exploreState.loadRoots(true);
-      await processingState.refreshPendingCount();
-      await emit('scan-complete');
+      succeeded = true;
     } catch (error) {
       showToast('Failed to add folder: ' + error, 'error');
     } finally {
@@ -236,6 +243,15 @@
         unlisten();
         unlisten = null;
       }
+    }
+
+    // Reload folder list after isScanning is cleared so the new card appears immediately
+    await loadFolders();
+    if (succeeded) {
+      exploreState.clearCache();
+      await exploreState.loadRoots(true);
+      await processingState.refreshPendingCount();
+      await emit('scan-complete');
     }
   }
 
@@ -273,6 +289,15 @@
       if (rescanUnlisten) {
         rescanUnlisten();
         rescanUnlisten = null;
+      }
+
+      if (preview.warnings && preview.warnings.length > 0) {
+        const count = preview.warnings.length;
+        const msg =
+          count === 1
+            ? `Warning: ${preview.warnings[0]}`
+            : `${count} files could not be read during rescan`;
+        showToast(msg, 'warning', 8000);
       }
 
       // If nothing changed, skip the preview step
@@ -529,6 +554,21 @@
                 </button>
               </div>
             </div>
+
+            <!-- Scan warnings (persistent) -->
+            {#if folder.scan_warnings}
+              {@const warnings = JSON.parse(folder.scan_warnings) as string[]}
+              <div class="mt-3 rounded-md bg-warning/10 border border-warning/20 px-3 py-2">
+                <p class="text-xs font-medium text-warning mb-1">
+                  {warnings.length} file{warnings.length !== 1 ? 's' : ''} could not be read during last scan
+                </p>
+                <ul class="space-y-0.5">
+                  {#each warnings as w}
+                    <li class="text-xs text-secondary font-mono truncate" title={w}>{w}</li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
           </div>
 
           <!-- Rescan panel (inline, below folder info) -->

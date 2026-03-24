@@ -1,5 +1,6 @@
 use crate::{models::*, AppState};
 use serde::Serialize;
+use serde_json;
 use sqlx;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek};
@@ -21,6 +22,7 @@ pub struct ScanProgress {
     pub files_total: usize,
     pub zips_scanned: usize,
     pub current_path: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 /// Supported image extensions
@@ -57,6 +59,7 @@ pub(crate) struct ScanProgressState {
     pub files_inserted: AtomicUsize,
     pub zips_scanned: AtomicUsize,
     pub discovery_complete: AtomicBool,
+    pub warnings: std::sync::Mutex<Vec<String>>,
 }
 
 /// Add a folder as a source folder and scan it for assets.
@@ -131,6 +134,7 @@ pub async fn add_folder(
         files_inserted: AtomicUsize::new(0),
         zips_scanned: AtomicUsize::new(0),
         discovery_complete: AtomicBool::new(false),
+        warnings: std::sync::Mutex::new(Vec::new()),
     });
 
     // Spawn discovery on a blocking thread so it doesn't stall the async runtime
@@ -168,6 +172,7 @@ pub async fn add_folder(
                     files_total: if done { found } else { 0 },
                     zips_scanned: zips,
                     current_path: None,
+                    warnings: vec![],
                 },
             );
             last_emit = Instant::now();
@@ -179,6 +184,11 @@ pub async fn add_folder(
         .await
         .map_err(|e| format!("Discovery task panicked: {}", e))?
         .map_err(|e| e)?;
+
+    let warnings: Vec<String> = progress.warnings
+        .lock()
+        .map(|mut w| w.drain(..).collect())
+        .unwrap_or_default();
 
     // Bulk-populate FTS indexes for newly inserted assets (INSERT trigger removed
     // for performance — trigram+unicode61 per-row indexing was the biggest write
@@ -207,18 +217,27 @@ pub async fn add_folder(
             files_total: total_found,
             zips_scanned: progress.zips_scanned.load(Ordering::Relaxed),
             current_path: None,
+            warnings: warnings.clone(),
         },
     );
 
     update_session_total(&state, session_id, total_found).await?;
     update_session_status(&state, session_id, "complete").await?;
 
-    // Update source folder stats
+    // Encode warnings as JSON (NULL if empty)
+    let warnings_json: Option<String> = if warnings.is_empty() {
+        None
+    } else {
+        serde_json::to_string(&warnings).ok()
+    };
+
+    // Update source folder stats and persist warnings
     sqlx::query(
-        "UPDATE source_folders SET last_scanned_at = ?1, asset_count = (SELECT COUNT(*) FROM assets WHERE folder_id = ?2) WHERE id = ?2",
+        "UPDATE source_folders SET last_scanned_at = ?1, asset_count = (SELECT COUNT(*) FROM assets WHERE folder_id = ?2), scan_warnings = ?3 WHERE id = ?2",
     )
     .bind(now)
     .bind(folder_id)
+    .bind(warnings_json)
     .execute(&state.pool)
     .await
     .map_err(|e| e.to_string())?;
@@ -317,6 +336,7 @@ pub(crate) fn discover_files_streaming(
             files_total: 0,
             zips_scanned: 0,
             current_path: Some(root_path.to_string_lossy().to_string()),
+            warnings: vec![],
         },
     );
 
@@ -358,6 +378,12 @@ pub(crate) fn discover_files_streaming(
                         Ok(m) => m,
                         Err(e) => {
                             eprintln!("Warning: Failed to read metadata for {}: {}", path.display(), e);
+                            let rel = path.strip_prefix(root_path)
+                                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                                .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
+                            if let Ok(mut w) = progress.warnings.lock() {
+                                w.push(format!("{}: {}", rel, e));
+                            }
                             continue;
                         }
                     };
@@ -425,6 +451,7 @@ pub(crate) fn discover_files_streaming(
                         files_total: 0,
                         zips_scanned: zips,
                         current_path: Some(path.to_string_lossy().to_string()),
+                        warnings: vec![],
                     },
                 );
                 last_emit = Instant::now();
@@ -549,6 +576,10 @@ fn discover_zip_parallel<'scope>(
         Ok(f) => f,
         Err(e) => {
             eprintln!("Warning: Failed to open zip {}: {}", zip_path.display(), e);
+            let rel = if rel_path.is_empty() { zip_filename.to_string() } else { format!("{}/{}", rel_path, zip_filename) };
+            if let Ok(mut w) = progress.warnings.lock() {
+                w.push(format!("{}: {}", rel, e));
+            }
             return;
         }
     };
@@ -556,6 +587,10 @@ fn discover_zip_parallel<'scope>(
         Ok(a) => a,
         Err(e) => {
             eprintln!("Warning: Failed to read zip archive {}: {}", zip_path.display(), e);
+            let rel = if rel_path.is_empty() { zip_filename.to_string() } else { format!("{}/{}", rel_path, zip_filename) };
+            if let Ok(mut w) = progress.warnings.lock() {
+                w.push(format!("{}: {}", rel, e));
+            }
             return;
         }
     };
@@ -595,6 +630,10 @@ fn discover_nested_zip_parallel<'scope>(
                 "Warning: Failed to load nested zip {}/{}: {}",
                 outer_zip_path, cache_path, e
             );
+            let rel = if rel_path.is_empty() { format!("{}/{}", zip_filename, cache_path) } else { format!("{}/{}/{}", rel_path, zip_filename, cache_path) };
+            if let Ok(mut w) = progress.warnings.lock() {
+                w.push(format!("{}: {}", rel, e));
+            }
             return;
         }
     };
@@ -606,6 +645,10 @@ fn discover_nested_zip_parallel<'scope>(
                 "Warning: Failed to open nested zip {}/{}: {}",
                 outer_zip_path, cache_path, e
             );
+            let rel = if rel_path.is_empty() { format!("{}/{}", zip_filename, cache_path) } else { format!("{}/{}/{}", rel_path, zip_filename, cache_path) };
+            if let Ok(mut w) = progress.warnings.lock() {
+                w.push(format!("{}: {}", rel, e));
+            }
             return;
         }
     };

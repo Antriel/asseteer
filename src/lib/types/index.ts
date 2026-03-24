@@ -32,6 +32,7 @@ export interface SourceFolder {
   last_scanned_at: number | null;
   asset_count: number;
   status: string;
+  scan_warnings: string | null;
 }
 
 /** Structured folder location for filtering/navigation (replaces the old path::zipPrefix string) */

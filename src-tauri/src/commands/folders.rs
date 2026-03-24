@@ -11,7 +11,7 @@ pub async fn list_folders(
     state: State<'_, AppState>,
 ) -> Result<Vec<SourceFolder>, String> {
     sqlx::query_as::<_, SourceFolder>(
-        "SELECT id, path, label, added_at, last_scanned_at, asset_count, status
+        "SELECT id, path, label, added_at, last_scanned_at, asset_count, status, scan_warnings
          FROM source_folders
          ORDER BY label COLLATE NOCASE"
     )
