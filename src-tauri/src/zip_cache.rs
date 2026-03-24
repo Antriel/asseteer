@@ -36,8 +36,20 @@ const MIN_BUDGET_BYTES: usize = 1024 * 1024 * 1024; // 1 GB
 /// Warn threshold: log if cache wait takes longer than this
 const CACHE_WAIT_WARN_MS: u128 = 5000;
 
-/// Warn threshold: log if decompression takes longer than this
-const CACHE_LOAD_WARN_MS: u128 = 10000;
+/// Fixed overhead for opening a ZIP and reading the central directory (conservative for HDDs).
+const CACHE_LOAD_SEEK_MS: u128 = 4000;
+
+/// Minimum expected decompression throughput (conservative for slow CPUs/HDDs).
+/// Real hardware shows 40-80 MB/s; this is intentionally well below that.
+const CACHE_LOAD_MIN_THROUGHPUT_MB_S: f64 = 15.0;
+
+/// Compute the slow-load warning threshold in ms for a given decompressed size.
+/// Formula: SEEK_MS + size_mb / MIN_THROUGHPUT_MB_S * 1000
+fn cache_load_warn_threshold_ms(size_bytes: usize) -> u128 {
+    let size_mb = size_bytes as f64 / MB;
+    let throughput_ms = (size_mb / CACHE_LOAD_MIN_THROUGHPUT_MB_S * 1000.0) as u128;
+    CACHE_LOAD_SEEK_MS + throughput_ms
+}
 
 // --- Cache data structures ---
 
@@ -343,7 +355,7 @@ fn get_or_load_cached_bytes(
             // Evict if over budget (actual size may differ from estimate)
             evict_for_budget(&mut cache, 0);
 
-            if load_ms > CACHE_LOAD_WARN_MS {
+            if load_ms > cache_load_warn_threshold_ms(size_bytes) {
                 eprintln!(
                     "[ZipCache] WARN slow LOAD key='{}' size_mb={:.1} load_ms={} entries={} cached_mb={:.0} in_flight_mb={:.0}",
                     key,
