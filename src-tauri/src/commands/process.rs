@@ -161,7 +161,7 @@ pub async fn stop_processing(
         return Err(format!("Processing for category '{}' is not running", category));
     }
 
-    state.work_queue.stop(cat).await;
+    state.work_queue.stop(cat, state.pool.clone()).await;
     println!("[ProcessingQueue] Processing stopped for category '{}'", category);
 
     // Emit immediate progress update with stopped state

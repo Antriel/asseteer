@@ -779,7 +779,12 @@ impl WorkQueue {
 
                     // Checkpoint WAL → .db after processing writes are flushed.
                     // TRUNCATE waits for readers then frees WAL disk space.
-                    let _ = database::checkpoint_truncate(&pool).await;
+                    if let Err(e) = database::checkpoint_truncate(&pool).await {
+                        eprintln!(
+                            "[Progress Emitter] Failed to checkpoint WAL after '{}' processing: {}",
+                            category_str, e
+                        );
+                    }
 
                     // Free unused cached nested ZIP memory (preserves pinned entries
                     // that other categories may still be using)
@@ -824,7 +829,7 @@ impl WorkQueue {
     }
 
     /// Stop processing for a specific category
-    pub async fn stop(&self, category: ProcessingCategory) {
+    pub async fn stop(&self, category: ProcessingCategory, pool: SqlitePool) {
         if let Some(state) = self.category_states.read().await.get(&category) {
             state.stop_signal.store(true, Ordering::SeqCst);
             state.pause_signal.store(false, Ordering::SeqCst); // Clear pause state when stopping
@@ -857,6 +862,23 @@ impl WorkQueue {
             // Workers check stop_signal and exit on their own - just wait for them
             for handle in handles.drain(..) {
                 let _ = handle.await;
+            }
+
+            let batch_writer = {
+                let writer = self.db_writer.read().await;
+                writer.clone()
+            };
+
+            if let Some(writer) = batch_writer {
+                writer.flush().await;
+            }
+
+            if let Err(e) = database::checkpoint_truncate(&pool).await {
+                eprintln!(
+                    "[WorkQueue] Failed to checkpoint WAL after stopping '{}': {}",
+                    category.as_str(),
+                    e
+                );
             }
         }
     }
@@ -1454,7 +1476,7 @@ mod tests {
             .unwrap();
 
         tokio::time::sleep(Duration::from_millis(50)).await;
-        queue.stop(ProcessingCategory::Image).await;
+        queue.stop(ProcessingCategory::Image, db.clone()).await;
 
         assert!(!queue.is_running(ProcessingCategory::Image).await);
     }
@@ -1534,7 +1556,7 @@ mod tests {
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("already running"));
 
-        queue.stop(ProcessingCategory::Image).await;
+        queue.stop(ProcessingCategory::Image, db.clone()).await;
     }
 
     // -----------------------------------------------------------------------
