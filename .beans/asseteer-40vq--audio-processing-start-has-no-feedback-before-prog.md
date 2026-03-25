@@ -5,7 +5,7 @@ status: completed
 type: bug
 priority: normal
 created_at: 2026-03-24T12:32:22Z
-updated_at: 2026-03-25T11:40:23Z
+updated_at: 2026-03-25T15:11:08Z
 ---
 
 When clicking to start audio processing, there's no immediate feedback until progress starts (can take ~1 second). Also, the 'Processing: <filepath>' line sometimes disappears (shows null) — should show last entry instead of hiding the line to avoid UI jitter.
@@ -33,3 +33,9 @@ Either per-worker `current_file` (progress emitter picks any non-None), or stop 
 
 **Frontend** (`src/lib/components/ProcessingDetails.svelte`):
 4. **"Starting..." placeholder**: When processing is running but no file has been reported yet, show "Starting..." instead of hiding the row entirely. This gives immediate visual feedback.
+
+## Summary of Changes
+
+Investigated the regression and kept the backend progress-emitter behavior intact. The gap was on the frontend: category cards waited for the backend command + first progress refresh before showing any visible state change.
+
+Updated processing UI state to track a per-category `starting` phase immediately on click, seed temporary progress data, and clear/revert that state on backend confirmation or error. The processing cards and details panel now show `Starting...` right away instead of leaving the Start button unchanged while preparation is still happening. Applied the same behavior to the CLAP card for consistency.

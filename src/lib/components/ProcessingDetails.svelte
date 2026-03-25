@@ -1,7 +1,13 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import type { ProcessingCategory, CategoryProgress, ProcessingErrorDetail } from '$lib/types';
-  import { processingState, formatEta, formatRate, formatElapsed } from '$lib/state/tasks.svelte';
+  import {
+    processingState,
+    formatEta,
+    formatRate,
+    formatElapsed,
+    isCategoryStarting,
+  } from '$lib/state/tasks.svelte';
 
   interface Props {
     category: ProcessingCategory;
@@ -21,6 +27,8 @@
   let etaDisplay = $derived(formatEta(progress?.eta_seconds ?? null));
   let rateDisplay = $derived(formatRate(progress?.processing_rate ?? 0));
   let isRunning = $derived(progress?.isRunning && !progress?.isPaused);
+  let isStarting = $derived(isCategoryStarting(processingState, category));
+  let isActive = $derived(isRunning || isStarting);
   let hasFailures = $derived((progress?.failed ?? 0) > 0);
 
   // Live elapsed time ticker
@@ -85,7 +93,7 @@
 
 <div class="flex flex-col gap-3 pt-3 border-t border-default">
   <!-- Current file being processed -->
-  {#if isRunning}
+  {#if isActive}
     <div class="flex items-center gap-2 text-sm min-w-0">
       <span class="text-secondary shrink-0">Processing:</span>
       {#if currentFile}
@@ -99,7 +107,7 @@
   {/if}
 
   <!-- Processing stats row -->
-  {#if isRunning}
+  {#if isActive}
     <div class="flex items-center gap-4 text-sm">
       <!-- Elapsed -->
       {#if elapsedMs > 0}

@@ -28,6 +28,9 @@ class ProcessingState {
   // Per-category progress tracking (using SvelteMap for reactivity)
   categoryProgress = $state(new SvelteMap<ProcessingCategory, CategoryProgress>());
 
+  // Categories that have been asked to start and are waiting for backend confirmation
+  startingCategories = $state(new SvelteSet<ProcessingCategory>());
+
   // Categories enabled for processing (using SvelteSet for reactivity)
   enabledCategories = $state(new SvelteSet<ProcessingCategory>(['image', 'audio', 'clap']));
 
@@ -105,6 +108,7 @@ class ProcessingState {
    * Update progress for a specific category
    */
   private updateCategoryProgress(category: ProcessingCategory, progress: CategoryProgress) {
+    this.startingCategories.delete(category);
     this.categoryProgress.set(category, {
       ...progress,
       isPaused: progress.is_paused,
@@ -142,6 +146,22 @@ class ProcessingState {
       this.processingStartedAt = now;
     }
 
+    const previousProgress = this.categoryProgress.get(category) ?? null;
+    this.startingCategories.add(category);
+    this.categoryProgress.set(category, {
+      category,
+      total: pendingCount,
+      completed: 0,
+      failed: 0,
+      is_paused: false,
+      is_running: false,
+      current_file: null,
+      processing_rate: 0,
+      eta_seconds: null,
+      isPaused: false,
+      isRunning: false,
+    });
+
     try {
       await invoke('start_processing', {
         category,
@@ -151,6 +171,17 @@ class ProcessingState {
       // Query initial progress
       await this.refreshProgress(category);
     } catch (error) {
+      this.startingCategories.delete(category);
+      if (previousProgress) {
+        this.categoryProgress.set(category, previousProgress);
+      } else {
+        this.categoryProgress.delete(category);
+      }
+      this.categoryStartedAt.delete(category);
+      this.categoryDurationMs.delete(category);
+      if (this.categoryStartedAt.size === 0) {
+        this.processingStartedAt = null;
+      }
       console.error(`[Processing] Failed to start ${category}:`, error);
       throw error;
     }
@@ -477,7 +508,7 @@ export function canStartCategory(state: ProcessingState, category: ProcessingCat
   const pendingCount = state.getPendingCountForCategory(category);
 
   // Can start if: has pending items AND not currently running
-  return pendingCount > 0 && (!progress || !progress.isRunning);
+  return pendingCount > 0 && !state.startingCategories.has(category) && (!progress || !progress.isRunning);
 }
 
 /**
@@ -504,6 +535,10 @@ export function getCategoryStatus(
 
   if (progress.isPaused) return 'paused';
   return 'running';
+}
+
+export function isCategoryStarting(state: ProcessingState, category: ProcessingCategory): boolean {
+  return state.startingCategories.has(category);
 }
 
 /**

@@ -1,6 +1,11 @@
 <script lang="ts">
   import type { ProcessingCategory, CategoryProgress } from '$lib/types';
-  import { processingState, getCategoryStatus, formatElapsed } from '$lib/state/tasks.svelte';
+  import {
+    processingState,
+    getCategoryStatus,
+    formatElapsed,
+    isCategoryStarting,
+  } from '$lib/state/tasks.svelte';
   import { settings } from '$lib/state/settings.svelte';
   import ProcessingDetails from './ProcessingDetails.svelte';
 
@@ -27,9 +32,18 @@
   let processed = $derived(completed + failed);
   let percentage = $derived(total === 0 ? 0 : Math.round((processed / total) * 100));
   let durationMs = $derived(processingState.categoryDurationMs.get(category));
+  let isStarting = $derived(isCategoryStarting(processingState, category));
 
   // Status badge configuration
   let statusConfig = $derived.by(() => {
+    if (isStarting) {
+      return {
+        label: 'Starting...',
+        bgClass: 'bg-blue-100 dark:bg-blue-900/30',
+        textClass: 'text-blue-700 dark:text-blue-300',
+      };
+    }
+
     switch (status) {
       case 'running':
         if (isStopping) {
@@ -76,10 +90,10 @@
   let isStopping = $derived(processingState.stoppingCategories.has(category));
 
   // Button visibility
-  let canStart = $derived(status === 'idle' && !disabled);
-  let canPause = $derived(status === 'running' && !isStopping);
-  let canResume = $derived(status === 'paused' && !isStopping);
-  let canStop = $derived((status === 'running' || status === 'paused') && !isStopping);
+  let canStart = $derived(status === 'idle' && !disabled && !isStarting);
+  let canPause = $derived(status === 'running' && !isStopping && !isStarting);
+  let canResume = $derived(status === 'paused' && !isStopping && !isStarting);
+  let canStop = $derived((status === 'running' || status === 'paused') && !isStopping && !isStarting);
 
   // Event handlers
   async function handleStart() {
@@ -136,7 +150,11 @@
 
     <!-- Control buttons -->
     <div class="flex items-center gap-2">
-      {#if canStart}
+      {#if isStarting}
+        <span class="px-3 py-1.5 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/30 rounded">
+          Starting...
+        </span>
+      {:else if canStart}
         <button
           onclick={handleStart}
           class="px-3 py-1.5 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded transition-colors"
@@ -181,7 +199,7 @@
   </div>
 
   <!-- Progress info -->
-  {#if status === 'idle' && pendingCount > 0}
+  {#if status === 'idle' && pendingCount > 0 && !isStarting}
     <!-- Idle state: show pending count -->
     <div class="flex items-center gap-2 text-sm">
       <span class="text-secondary">Pending:</span>
@@ -210,7 +228,7 @@
         </button>
       </div>
     {/if}
-  {:else if status === 'idle' && pendingCount === 0}
+  {:else if status === 'idle' && pendingCount === 0 && !isStarting}
     <!-- No pending items -->
     <div class="text-sm text-secondary">No assets to process</div>
   {:else if progress}

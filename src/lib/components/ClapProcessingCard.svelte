@@ -1,6 +1,10 @@
 <script lang="ts">
   import { clapState } from '$lib/state/clap.svelte';
-  import { processingState, getCategoryStatus } from '$lib/state/tasks.svelte';
+  import {
+    processingState,
+    getCategoryStatus,
+    isCategoryStarting,
+  } from '$lib/state/tasks.svelte';
   import { showToast } from '$lib/state/ui.svelte';
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
@@ -74,6 +78,13 @@
           textClass: 'text-green-700 dark:text-green-300',
         };
       default:
+        if (isStarting) {
+          return {
+            label: 'Starting...',
+            bgClass: 'bg-blue-100 dark:bg-blue-900/30',
+            textClass: 'text-blue-700 dark:text-blue-300',
+          };
+        }
         if (pendingCount === 0) {
           return {
             label: 'Ready',
@@ -91,12 +102,13 @@
 
   // Stopping wind-down state
   let isStopping = $derived(processingState.stoppingCategories.has('clap'));
+  let isStarting = $derived(isCategoryStarting(processingState, 'clap'));
 
   // Button visibility
-  let canStart = $derived(clapState.serverAvailable && status === 'idle' && pendingCount > 0);
-  let canPause = $derived(status === 'running' && !isStopping);
-  let canResume = $derived(status === 'paused' && !isStopping);
-  let canStop = $derived((status === 'running' || status === 'paused') && !isStopping);
+  let canStart = $derived(clapState.serverAvailable && status === 'idle' && pendingCount > 0 && !isStarting);
+  let canPause = $derived(status === 'running' && !isStopping && !isStarting);
+  let canResume = $derived(status === 'paused' && !isStopping && !isStarting);
+  let canStop = $derived((status === 'running' || status === 'paused') && !isStopping && !isStarting);
 
   async function handleStartServer() {
     try {
@@ -228,19 +240,23 @@
     <!-- Server is available - show processing controls -->
     <div class="flex items-center justify-between">
       <div class="text-sm">
-        {#if status === 'idle' && pendingCount > 0}
+        {#if status === 'idle' && pendingCount > 0 && !isStarting}
           <span class="text-orange-600 dark:text-orange-400 font-medium">
             {pendingCount} audio files
           </span>
           <span class="text-secondary"> need embeddings</span>
-        {:else if status === 'idle' && pendingCount === 0}
+        {:else if status === 'idle' && pendingCount === 0 && !isStarting}
           <span class="text-green-600 dark:text-green-400">All audio files have embeddings</span>
         {/if}
       </div>
 
       <!-- Control buttons -->
       <div class="flex items-center gap-2">
-        {#if canStart}
+        {#if isStarting}
+          <span class="px-3 py-1.5 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/30 rounded">
+            Starting...
+          </span>
+        {:else if canStart}
           <button
             onclick={handleStart}
             class="px-3 py-1.5 text-sm font-medium text-white bg-purple-500 hover:bg-purple-600 rounded transition-colors"
@@ -285,7 +301,7 @@
     </div>
 
     <!-- Progress display when processing or completed -->
-    {#if progress && (status === 'running' || status === 'paused' || status === 'completed')}
+    {#if progress && (status === 'running' || status === 'paused' || status === 'completed' || isStarting)}
       <div class="flex flex-col gap-2">
         <!-- Progress bar -->
         <div class="flex flex-col gap-1">
