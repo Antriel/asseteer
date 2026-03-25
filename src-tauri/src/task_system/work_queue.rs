@@ -42,11 +42,14 @@ impl BatchGroupCompletion {
     }
 }
 
-/// A group of batches sharing the same nested ZIP key.
+/// A group of batches sharing the same ZIP key (nested or regular).
 struct ZipBatchGroup {
     #[allow(dead_code)]
     key: String,
     batches: Vec<WorkBatch>,
+    /// For regular (non-nested) ZIP groups: the resolved filesystem path to the ZIP.
+    /// None for nested ZIP groups (they use zip_cache instead).
+    zip_path: Option<String>,
 }
 
 /// Dispatch plan separating ZIP-grouped and non-ZIP batches.
@@ -118,6 +121,8 @@ struct WorkBatch {
     pre_generate_thumbnails: bool,
     /// Completion tracker for staged ZIP dispatch (None for non-ZIP / CLAP batches)
     group_completion: Option<Arc<BatchGroupCompletion>>,
+    /// Pre-extracted bytes for regular ZIP groups (shared across batch, keyed by asset_id)
+    preloaded_bytes: Option<Arc<HashMap<i64, Result<Vec<u8>, String>>>>,
 }
 
 /// Work queue manages asset processing with a worker pool
@@ -219,6 +224,7 @@ impl WorkQueue {
                             assets: std::mem::take(&mut current_batch),
                             pre_generate_thumbnails: false,
                             group_completion: None,
+                            preloaded_bytes: None,
                         });
                     }
 
@@ -232,6 +238,7 @@ impl WorkQueue {
                         assets: current_batch,
                         pre_generate_thumbnails: false,
                         group_completion: None,
+                        preloaded_bytes: None,
                     });
                 }
 
@@ -264,9 +271,10 @@ impl WorkQueue {
                                 assets: chunk.to_vec(),
                                 pre_generate_thumbnails,
                                 group_completion: None, // set by dispatcher
+                                preloaded_bytes: None,  // nested ZIPs use zip_cache
                             })
                             .collect();
-                        ZipBatchGroup { key, batches }
+                        ZipBatchGroup { key, batches, zip_path: None }
                     })
                     .collect();
 
@@ -300,31 +308,37 @@ impl WorkQueue {
                         assets: vec![asset],
                         pre_generate_thumbnails,
                         group_completion: None,
+                        preloaded_bytes: None,
                     });
                 }
 
-                // Regular ZIP assets: group by ZIP path for bulk extraction
-                let regular_zip_batch_count: usize = regular_zip_map.values()
-                    .map(|g| (g.len() + REGULAR_ZIP_BATCH_SIZE - 1) / REGULAR_ZIP_BATCH_SIZE)
-                    .sum();
-                if regular_zip_batch_count > 0 {
+                // Regular ZIP assets: group by ZIP path for staged dispatch
+                // (avoids concurrent workers all parsing the same ZIP's central directory)
+                let regular_zip_asset_count: usize = regular_zip_map.values().map(|g| g.len()).sum();
+                if regular_zip_asset_count > 0 {
                     println!(
-                        "[WorkQueue] Grouped {} non-nested ZIP assets into {} batches from {} ZIP files",
-                        regular_zip_map.values().map(|g| g.len()).sum::<usize>(),
-                        regular_zip_batch_count,
+                        "[WorkQueue] Grouped {} non-nested ZIP assets into {} ZIP file groups for staged dispatch",
+                        regular_zip_asset_count,
                         regular_zip_map.len(),
                     );
                 }
-                for (_zip_path, group) in regular_zip_map {
-                    for chunk in group.chunks(REGULAR_ZIP_BATCH_SIZE) {
-                        non_zip.push(WorkBatch {
+                for (zip_path, group) in regular_zip_map {
+                    let batches = group
+                        .chunks(REGULAR_ZIP_BATCH_SIZE)
+                        .map(|chunk| WorkBatch {
                             category,
                             generation,
                             assets: chunk.to_vec(),
                             pre_generate_thumbnails,
-                            group_completion: None,
-                        });
-                    }
+                            group_completion: None, // set by dispatcher
+                            preloaded_bytes: None,  // set by dispatcher for regular ZIPs
+                        })
+                        .collect();
+                    zip_groups.push(ZipBatchGroup {
+                        key: zip_path.clone(),
+                        batches,
+                        zip_path: Some(zip_path),
+                    });
                 }
 
                 BatchPlan {
@@ -383,35 +397,50 @@ impl WorkQueue {
                 .map_err(|e| format!("Failed to queue non-ZIP batch: {}", e))?;
         }
 
-        // Spawn staged dispatcher for ZIP groups (concurrent, bounded by memory budget)
+        // Spawn staged dispatcher for ZIP groups (concurrent, bounded by memory/concurrency budget)
         if !plan.zip_groups.is_empty() {
             let zip_tx = self.zip_tx.clone();
             let stop_signal = state.stop_signal.clone();
             let gen = state.generation.clone();
 
+            // Separate nested and regular ZIP groups for different concurrency limits
+            let (nested_groups, regular_groups): (Vec<_>, Vec<_>) =
+                plan.zip_groups.into_iter().partition(|g| g.zip_path.is_none());
+
             let dispatcher = tokio::spawn(async move {
-                // Allow multiple ZIP key groups in flight simultaneously,
-                // bounded by how many fit in the memory budget (~1 per GB).
-                let max_concurrent = std::cmp::max(
+                // Nested ZIP groups: bounded by memory budget (~1 per GB of RAM)
+                let nested_max = std::cmp::max(
                     1,
                     zip_cache::budget_bytes() / (1024 * 1024 * 1024),
                 );
+                // Regular ZIP groups: higher concurrency (no zip_cache memory, just I/O)
+                let regular_max = std::cmp::max(2, num_cpus::get() / 2);
                 println!(
-                    "[WorkQueue] Dispatcher: max {} concurrent ZIP groups (budget {:.1} GB)",
-                    max_concurrent,
-                    zip_cache::budget_bytes() as f64 / (1024.0 * 1024.0 * 1024.0)
+                    "[WorkQueue] Dispatcher: {} nested ZIP groups (max {} concurrent, budget {:.1} GB), \
+                     {} regular ZIP groups (max {} concurrent)",
+                    nested_groups.len(),
+                    nested_max,
+                    zip_cache::budget_bytes() as f64 / (1024.0 * 1024.0 * 1024.0),
+                    regular_groups.len(),
+                    regular_max,
                 );
-                let sem = Arc::new(Semaphore::new(max_concurrent));
+                let nested_sem = Arc::new(Semaphore::new(nested_max));
+                let regular_sem = Arc::new(Semaphore::new(regular_max));
                 let mut join_set = tokio::task::JoinSet::new();
 
-                for group in plan.zip_groups {
+                // Interleave: dispatch all groups, picking the right semaphore
+                let all_groups = nested_groups.into_iter().chain(regular_groups.into_iter());
+
+                for group in all_groups {
                     if stop_signal.load(Ordering::SeqCst)
                         || gen.load(Ordering::SeqCst) != generation
                     {
                         break;
                     }
 
-                    let permit = match sem.clone().acquire_owned().await {
+                    let is_regular = group.zip_path.is_some();
+                    let sem = if is_regular { regular_sem.clone() } else { nested_sem.clone() };
+                    let permit = match sem.acquire_owned().await {
                         Ok(p) => p,
                         Err(_) => break, // semaphore closed
                     };
@@ -428,11 +457,32 @@ impl WorkQueue {
                             return;
                         }
 
+                        // For regular ZIP groups: pre-extract all bytes in one archive open
+                        // to avoid each batch re-parsing the central directory
+                        let preloaded = if let Some(ref zip_path) = group.zip_path {
+                            let entries: Vec<(i64, String)> = group.batches.iter()
+                                .flat_map(|b| b.assets.iter())
+                                .filter_map(|a| a.zip_entry.as_ref().map(|e| (a.id, e.clone())))
+                                .collect();
+                            let zp = zip_path.clone();
+                            match tokio::task::spawn_blocking(move || {
+                                let refs: Vec<(i64, &str)> =
+                                    entries.iter().map(|(id, e)| (*id, e.as_str())).collect();
+                                crate::utils::bulk_load_from_zip(&zp, &refs)
+                            }).await {
+                                Ok(map) => Some(Arc::new(map)),
+                                Err(_) => None, // fall back to per-batch loading in workers
+                            }
+                        } else {
+                            None
+                        };
+
                         let completion =
                             Arc::new(BatchGroupCompletion::new(group.batches.len()));
 
                         for mut batch in group.batches {
                             batch.group_completion = Some(completion.clone());
+                            batch.preloaded_bytes = preloaded.clone();
                             if zip_tx.send(batch).is_err() {
                                 return; // channel closed
                             }
@@ -522,6 +572,7 @@ impl WorkQueue {
                 let batch_assets = work_batch.assets;
                 let pre_generate_thumbnails = work_batch.pre_generate_thumbnails;
                 let group_completion = work_batch.group_completion;
+                let batch_preloaded = work_batch.preloaded_bytes;
 
                 // Get category state
                 let state = {
@@ -608,10 +659,26 @@ impl WorkQueue {
                 } else {
                     // Image/Audio: CPU-only processing, DB writes batched via DbBatchWriter
 
-                    // Bulk-extract bytes for non-nested ZIP batches (avoids re-opening
-                    // the ZIP and re-parsing the central directory for every entry)
+                    // Use pre-extracted bytes from dispatcher (regular ZIP groups), or
+                    // fall back to per-batch bulk extraction for non-grouped ZIP batches
                     let mut preloaded: Option<HashMap<i64, Result<Vec<u8>, String>>> =
-                        if batch_assets.len() > 1 && batch_assets[0].zip_file.is_some() {
+                        if let Some(ref shared) = batch_preloaded {
+                            // Dispatcher already pre-extracted all bytes for this ZIP group —
+                            // extract just the entries for this batch (cheap Arc clone + lookups)
+                            let mut batch_map = HashMap::with_capacity(batch_assets.len());
+                            for asset in &batch_assets {
+                                if let Some(result) = shared.get(&asset.id) {
+                                    batch_map.insert(asset.id, match result {
+                                        Ok(bytes) => Ok(bytes.clone()),
+                                        Err(e) => Err(e.clone()),
+                                    });
+                                }
+                            }
+                            Some(batch_map)
+                        } else if batch_assets.len() > 1 && batch_assets[0].zip_file.is_some()
+                            && zip_cache::nested_zip_group_key(&batch_assets[0]).is_none()
+                        {
+                            // Fallback: bulk-extract for non-nested ZIP batches not from dispatcher
                             let zip_path = crate::utils::resolve_zip_path(&batch_assets[0]);
                             let entries: Vec<(i64, String)> = batch_assets
                                 .iter()
