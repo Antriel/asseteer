@@ -183,8 +183,7 @@
   }
 </script>
 
-<div class="h-full overflow-y-auto p-8">
-  <div class="max-w-2xl">
+<div class="flex flex-col h-full overflow-auto p-6">
     <h1 class="text-2xl font-semibold text-primary mb-1">Settings</h1>
     <p class="text-sm text-tertiary mb-8">Configure Asseteer features</p>
 
@@ -419,5 +418,4 @@
         </div>
       </div>
     </section>
-  </div>
 </div>
