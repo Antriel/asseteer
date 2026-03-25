@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import type { ProcessingCategory, CategoryProgress, ProcessingErrorDetail } from '$lib/types';
-  import { processingState, formatEta, formatRate } from '$lib/state/tasks.svelte';
+  import { processingState, formatEta, formatRate, formatElapsed } from '$lib/state/tasks.svelte';
 
   interface Props {
     category: ProcessingCategory;
@@ -21,6 +22,31 @@
   let rateDisplay = $derived(formatRate(progress?.processing_rate ?? 0));
   let isRunning = $derived(progress?.isRunning && !progress?.isPaused);
   let hasFailures = $derived((progress?.failed ?? 0) > 0);
+
+  // Live elapsed time ticker
+  let elapsedMs = $state(0);
+  let elapsedInterval: ReturnType<typeof setInterval> | null = null;
+
+  $effect(() => {
+    const startedAt = processingState.categoryStartedAt.get(category);
+    if (startedAt && progress?.isRunning) {
+      elapsedMs = Date.now() - startedAt;
+      elapsedInterval = setInterval(() => {
+        elapsedMs = Date.now() - startedAt;
+      }, 1000);
+    } else {
+      if (elapsedInterval) {
+        clearInterval(elapsedInterval);
+        elapsedInterval = null;
+      }
+    }
+    return () => {
+      if (elapsedInterval) {
+        clearInterval(elapsedInterval);
+        elapsedInterval = null;
+      }
+    };
+  });
 
   async function loadErrors() {
     if (isLoadingErrors) return;
@@ -75,6 +101,14 @@
   <!-- Processing stats row -->
   {#if isRunning}
     <div class="flex items-center gap-4 text-sm">
+      <!-- Elapsed -->
+      {#if elapsedMs > 0}
+        <div class="flex items-center gap-1.5">
+          <span class="text-secondary">Elapsed:</span>
+          <span class="font-medium text-primary">{formatElapsed(elapsedMs)}</span>
+        </div>
+      {/if}
+
       <!-- Rate -->
       <div class="flex items-center gap-1.5">
         <span class="text-secondary">Rate:</span>

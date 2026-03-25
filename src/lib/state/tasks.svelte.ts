@@ -21,6 +21,7 @@ export interface ProcessingRunResult {
   total: number;
   completed: number;
   failed: number;
+  durationMs: number;
 }
 
 class ProcessingState {
@@ -38,6 +39,13 @@ class ProcessingState {
 
   // Result from last completed processing run (shown in status bar until next run)
   lastRunResult = $state<ProcessingRunResult | null>(null);
+
+  // Per-category elapsed time tracking
+  categoryStartedAt = $state(new SvelteMap<ProcessingCategory, number>());
+  categoryDurationMs = $state(new SvelteMap<ProcessingCategory, number>());
+
+  // Overall processing start time (earliest running category)
+  private processingStartedAt: number | null = null;
 
   // Event listeners
   private unlistenFns: UnlistenFn[] = [];
@@ -85,7 +93,11 @@ class ProcessingState {
     }
 
     if (!anyRunning && total > 0) {
-      this.lastRunResult = { total, completed, failed };
+      const durationMs = this.processingStartedAt
+        ? Date.now() - this.processingStartedAt
+        : 0;
+      this.lastRunResult = { total, completed, failed, durationMs };
+      this.processingStartedAt = null;
     }
   }
 
@@ -98,9 +110,14 @@ class ProcessingState {
       isPaused: progress.is_paused,
       isRunning: progress.is_running,
     });
-    // Clear stopping state once the category is no longer running
+    // When a category stops running, record its duration
     if (!progress.is_running) {
       this.stoppingCategories.delete(category);
+      const startedAt = this.categoryStartedAt.get(category);
+      if (startedAt) {
+        this.categoryDurationMs.set(category, Date.now() - startedAt);
+        this.categoryStartedAt.delete(category);
+      }
     }
   }
 
@@ -116,6 +133,14 @@ class ProcessingState {
 
     // Clear last run result when starting new processing
     this.lastRunResult = null;
+
+    // Track start time for this category
+    const now = Date.now();
+    this.categoryStartedAt.set(category, now);
+    this.categoryDurationMs.delete(category);
+    if (!this.processingStartedAt) {
+      this.processingStartedAt = now;
+    }
 
     try {
       await invoke('start_processing', {
@@ -492,6 +517,24 @@ export function formatEta(seconds: number | null): string {
   } else if (seconds < 3600) {
     const mins = Math.floor(seconds / 60);
     const secs = Math.round(seconds % 60);
+    return `${mins}m ${secs}s`;
+  } else {
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${mins}m`;
+  }
+}
+
+/**
+ * Format elapsed milliseconds for display (e.g., "2m 45s", "1h 23m")
+ */
+export function formatElapsed(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  } else if (seconds < 3600) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
     return `${mins}m ${secs}s`;
   } else {
     const hours = Math.floor(seconds / 3600);

@@ -65,6 +65,7 @@
   async function startScan(path: string) {
     uiState.isScanning = true;
     uiState.scanProgress = 'Starting scan...';
+    uiState.startScanTimer();
 
     // Set up progress listener
     unlisten = await listen<ScanProgress>('scan-progress', (event) => {
@@ -91,6 +92,7 @@
       console.error('Failed to scan:', error);
       uiState.scanProgress = `Error: ${error}`;
     } finally {
+      uiState.stopScanTimer();
       uiState.isScanning = false;
       // Clean up listener
       if (unlisten) {

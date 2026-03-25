@@ -6,6 +6,7 @@
     getOverallProgress,
     getCategoryProgress,
     getCategoryStatus,
+    formatElapsed,
   } from '$lib/state/tasks.svelte';
   import { uiState } from '$lib/state/ui.svelte';
   import { thumbnailMetrics } from '$lib/state/thumbnails.svelte';
@@ -37,6 +38,42 @@
         showThumbnails = false;
         hideTimer = null;
       }, 1000);
+    }
+  });
+
+  // Live elapsed time for scan
+  let scanElapsedMs = $state(0);
+  $effect(() => {
+    const startedAt = uiState.scanStartedAt;
+    if (startedAt) {
+      scanElapsedMs = Date.now() - startedAt;
+      const interval = setInterval(() => {
+        scanElapsedMs = Date.now() - startedAt;
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  });
+
+  // Live elapsed time for processing
+  let processingElapsedMs = $state(0);
+  $effect(() => {
+    // Touch reactive deps
+    const running = isAnyRunning(processingState);
+    // Read the map to subscribe to changes
+    processingState.categoryStartedAt.size;
+    if (running) {
+      // Find earliest start time across all running categories
+      let earliest = Infinity;
+      for (const ts of processingState.categoryStartedAt.values()) {
+        if (ts < earliest) earliest = ts;
+      }
+      if (earliest < Infinity) {
+        processingElapsedMs = Date.now() - earliest;
+        const interval = setInterval(() => {
+          processingElapsedMs = Date.now() - earliest;
+        }, 1000);
+        return () => clearInterval(interval);
+      }
     }
   });
 
@@ -72,6 +109,9 @@
               : 0}
           <span class="text-secondary">{pct}%</span>
         {/if}
+        {#if scanElapsedMs > 0}
+          <span class="text-tertiary">{formatElapsed(scanElapsedMs)}</span>
+        {/if}
       </div>
     </a>
     <div class="w-px h-5 bg-tertiary mr-4"></div>
@@ -85,12 +125,18 @@
         <div class="w-2 h-2 rounded-full bg-accent animate-pulse"></div>
         <span class="text-primary font-medium">Processing</span>
         <span class="text-secondary">{overall.completed}/{overall.total}</span>
+        {#if processingElapsedMs > 0}
+          <span class="text-tertiary">{formatElapsed(processingElapsedMs)}</span>
+        {/if}
       </div>
     {:else if isPaused}
       <div class="flex items-center gap-2">
         <div class="w-2 h-2 rounded-full bg-warning"></div>
         <span class="text-warning font-medium">Paused</span>
         <span class="text-secondary">{overall.completed}/{overall.total}</span>
+        {#if processingElapsedMs > 0}
+          <span class="text-tertiary">{formatElapsed(processingElapsedMs)}</span>
+        {/if}
       </div>
     {:else if processingState.lastRunResult}
       {@const result = processingState.lastRunResult}
@@ -104,6 +150,9 @@
           <div class="w-2 h-2 rounded-full bg-success"></div>
           <span class="text-primary font-medium">Complete</span>
           <span class="text-secondary">{result.completed} processed</span>
+        {/if}
+        {#if result.durationMs > 0}
+          <span class="text-tertiary">in {formatElapsed(result.durationMs)}</span>
         {/if}
       </div>
     {:else}

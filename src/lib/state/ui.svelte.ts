@@ -15,6 +15,10 @@ class UIState {
   scanningFolderPath = $state<string | null>(null);
   currentSessionId = $state<number | null>(null);
 
+  // Elapsed time tracking for scans
+  scanStartedAt = $state<number | null>(null);
+  scanDurationMs = $state<number | null>(null);
+
   // Detailed scan progress (persists across navigation)
   scanDetails = $state<ScanProgress>({
     phase: 'idle',
@@ -41,6 +45,22 @@ class UIState {
       zipsScanned: 0,
       currentPath: null,
     };
+    this.scanStartedAt = null;
+    this.scanDurationMs = null;
+  }
+
+  // Call when a scan begins
+  startScanTimer() {
+    this.scanStartedAt = Date.now();
+    this.scanDurationMs = null;
+  }
+
+  // Call when a scan ends — captures total duration
+  stopScanTimer() {
+    if (this.scanStartedAt) {
+      this.scanDurationMs = Date.now() - this.scanStartedAt;
+    }
+    this.scanStartedAt = null;
   }
 }
 

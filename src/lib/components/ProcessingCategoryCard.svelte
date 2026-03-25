@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ProcessingCategory, CategoryProgress } from '$lib/types';
-  import { processingState, getCategoryStatus } from '$lib/state/tasks.svelte';
+  import { processingState, getCategoryStatus, formatElapsed } from '$lib/state/tasks.svelte';
   import ProcessingDetails from './ProcessingDetails.svelte';
 
   interface Props {
@@ -25,6 +25,7 @@
   let failed = $derived(progress?.failed || 0);
   let processed = $derived(completed + failed);
   let percentage = $derived(total === 0 ? 0 : Math.round((processed / total) * 100));
+  let durationMs = $derived(processingState.categoryDurationMs.get(category));
 
   // Status badge configuration
   let statusConfig = $derived.by(() => {
@@ -127,6 +128,9 @@
       <span class="text-xs px-2 py-1 rounded {statusConfig.bgClass} {statusConfig.textClass}">
         {statusConfig.label}
       </span>
+      {#if status === 'completed' && durationMs}
+        <span class="text-xs text-tertiary">in {formatElapsed(durationMs)}</span>
+      {/if}
     </div>
 
     <!-- Control buttons -->

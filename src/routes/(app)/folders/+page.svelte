@@ -5,6 +5,7 @@
   import { open } from '@tauri-apps/plugin-dialog';
   import { openPath } from '@tauri-apps/plugin-opener';
   import { showToast, showConfirm, uiState } from '$lib/state/ui.svelte';
+  import { formatElapsed } from '$lib/state/tasks.svelte';
   import { exploreState } from '$lib/state/explore.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
   import { processingState } from '$lib/state/tasks.svelte';
@@ -255,6 +256,7 @@
       uiState.isScanning = true;
       uiState.scanningFolderPath = selected.replace(/\\/g, '/');
       uiState.resetScanDetails();
+      uiState.startScanTimer();
 
       if (unlisten) {
         unlisten();
@@ -271,6 +273,7 @@
     } catch (error) {
       showToast('Failed to add folder: ' + error, 'error');
     } finally {
+      uiState.stopScanTimer();
       uiState.isScanning = false;
       uiState.scanProgress = '';
       uiState.scanningFolderPath = null;
@@ -422,6 +425,19 @@
     }
   }
 
+  // Live elapsed time ticker for scan
+  let scanElapsedMs = $state(0);
+  $effect(() => {
+    const startedAt = uiState.scanStartedAt;
+    if (startedAt) {
+      scanElapsedMs = Date.now() - startedAt;
+      const interval = setInterval(() => {
+        scanElapsedMs = Date.now() - startedAt;
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  });
+
   function folderName(path: string): string {
     const parts = path.replace(/\\/g, '/').split('/');
     return parts[parts.length - 1] || path;
@@ -452,7 +468,12 @@
     <div class="mb-4 rounded-lg border border-default bg-secondary p-4 flex items-center gap-3">
       <Spinner size="sm" />
       <div class="flex flex-col min-w-0">
-        <span class="text-sm text-secondary">{uiState.scanProgress}</span>
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-secondary">{uiState.scanProgress}</span>
+          {#if scanElapsedMs > 0}
+            <span class="text-xs text-tertiary">{formatElapsed(scanElapsedMs)}</span>
+          {/if}
+        </div>
         {#if uiState.scanDetails.currentPath}
           <span
             class="text-xs text-tertiary overflow-hidden whitespace-nowrap text-ellipsis block"
