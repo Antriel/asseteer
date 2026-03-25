@@ -26,7 +26,8 @@
   let completed = $derived(progress?.completed || 0);
   let failed = $derived(progress?.failed || 0);
   let processed = $derived(completed + failed);
-  let percentage = $derived(total === 0 ? 0 : Math.round((processed / total) * 100));
+  let ratio = $derived(total === 0 ? 0 : processed / total);
+  let percentage = $derived(Math.floor(ratio * 100));
 
   // Status configuration
   let statusConfig = $derived.by(() => {
@@ -314,7 +315,7 @@
           <div class="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
             <div
               class="h-full bg-purple-500 transition-all duration-300"
-              style="width: {percentage}%"
+              style="width: {ratio * 100}%"
             ></div>
           </div>
         </div>
