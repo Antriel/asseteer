@@ -5,7 +5,7 @@ status: completed
 type: task
 priority: high
 created_at: 2026-03-25T09:36:29Z
-updated_at: 2026-03-25T09:50:42Z
+updated_at: 2026-03-25T10:43:10Z
 blocked_by:
     - asseteer-ctrc
 ---
@@ -71,3 +71,12 @@ Implemented all three phases of the ZIP extraction optimization:
 **Phase 3 - Separate concurrency**: Nested ZIP groups use memory-budget-based limits (~1 per GB). Regular ZIP groups use `max(2, num_cpus/2)` concurrent groups since they dont consume zip_cache memory.
 
 Expected improvement: For a 40K-entry ZIP, instead of 23 workers each parsing the 3MB central directory (3.6s per batch), only one parse happens per group dispatch. Batch time should drop from ~3.6s to ~50ms for all but the first batch.
+
+
+## Fix: Streaming extraction (2025-03-25)
+
+Replaced upfront pre-extraction (loaded ALL entries for a ZIP group into memory) with streaming extraction:
+- Blocking extractor thread opens archive once, extracts entries batch-by-batch
+- `tokio::sync::mpsc::channel(PIPELINE_DEPTH=2)` provides backpressure — at most 2 batches (~32 entries) of pre-extracted bytes in memory per group
+- Memory bounded to `regular_max × 2 × 16 × avg_file_size` (~256MB-2.5GB) instead of unbounded (was 20-50GB)
+- Added `bulk_load_from_archive()` to utils.rs for extracting from an already-opened archive

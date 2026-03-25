@@ -457,39 +457,89 @@ impl WorkQueue {
                             return;
                         }
 
-                        // For regular ZIP groups: pre-extract all bytes in one archive open
-                        // to avoid each batch re-parsing the central directory
-                        let preloaded = if let Some(ref zip_path) = group.zip_path {
-                            let entries: Vec<(i64, String)> = group.batches.iter()
-                                .flat_map(|b| b.assets.iter())
-                                .filter_map(|a| a.zip_entry.as_ref().map(|e| (a.id, e.clone())))
-                                .collect();
-                            let zp = zip_path.clone();
-                            match tokio::task::spawn_blocking(move || {
-                                let refs: Vec<(i64, &str)> =
-                                    entries.iter().map(|(id, e)| (*id, e.as_str())).collect();
-                                crate::utils::bulk_load_from_zip(&zp, &refs)
-                            }).await {
-                                Ok(map) => Some(Arc::new(map)),
-                                Err(_) => None, // fall back to per-batch loading in workers
+                        if let Some(zip_path) = group.zip_path {
+                            // Regular ZIP group: stream-extract batch by batch from a shared
+                            // archive handle. Bounded channel limits pre-extracted bytes in
+                            // memory to PIPELINE_DEPTH batches (~32 entries) per group.
+                            const PIPELINE_DEPTH: usize = 2;
+                            let batch_count = group.batches.len();
+                            let completion = Arc::new(BatchGroupCompletion::new(batch_count));
+                            let (batch_tx, mut batch_rx) =
+                                tokio::sync::mpsc::channel::<WorkBatch>(PIPELINE_DEPTH);
+
+                            // Extractor: opens archive once, extracts entries batch by batch
+                            let stop_ext = stop.clone();
+                            let gen_ext = gen_clone.clone();
+                            let extract_handle = tokio::task::spawn_blocking(move || {
+                                let archive_opt = std::fs::File::open(&zip_path)
+                                    .ok()
+                                    .and_then(|f| {
+                                        zip::ZipArchive::new(std::io::BufReader::new(f)).ok()
+                                    });
+                                let mut archive_opt = archive_opt;
+
+                                for mut batch in group.batches {
+                                    if stop_ext.load(Ordering::SeqCst)
+                                        || gen_ext.load(Ordering::SeqCst) != generation
+                                    {
+                                        break;
+                                    }
+
+                                    if let Some(ref mut archive) = archive_opt {
+                                        let preloaded =
+                                            crate::utils::bulk_load_from_archive(archive, &batch.assets);
+                                        batch.preloaded_bytes = Some(Arc::new(preloaded));
+                                    }
+                                    // Blocks if PIPELINE_DEPTH batches are buffered (backpressure)
+                                    if batch_tx.blocking_send(batch).is_err() {
+                                        break; // receiver dropped (stop or channel closed)
+                                    }
+                                }
+                            });
+
+                            // Forward extracted batches to workers
+                            let mut forwarded = 0usize;
+                            while let Some(mut batch) = batch_rx.recv().await {
+                                if stop.load(Ordering::SeqCst)
+                                    || gen_clone.load(Ordering::SeqCst) != generation
+                                {
+                                    break;
+                                }
+                                batch.group_completion = Some(completion.clone());
+                                if zip_tx.send(batch).is_err() {
+                                    break;
+                                }
+                                forwarded += 1;
                             }
+                            // Drop receiver so extractor unblocks if it's in blocking_send
+                            drop(batch_rx);
+
+                            // Signal completion for batches that were never forwarded
+                            for _ in forwarded..batch_count {
+                                completion.batch_done();
+                            }
+
+                            // Wait for workers to finish all forwarded batches
+                            if forwarded > 0 {
+                                completion.done.notified().await;
+                            }
+
+                            // Ensure extractor thread finishes (releases file handle)
+                            let _ = extract_handle.await;
                         } else {
-                            None
-                        };
+                            // Nested ZIP group: dispatch all at once (zip_cache handles caching)
+                            let completion =
+                                Arc::new(BatchGroupCompletion::new(group.batches.len()));
 
-                        let completion =
-                            Arc::new(BatchGroupCompletion::new(group.batches.len()));
-
-                        for mut batch in group.batches {
-                            batch.group_completion = Some(completion.clone());
-                            batch.preloaded_bytes = preloaded.clone();
-                            if zip_tx.send(batch).is_err() {
-                                return; // channel closed
+                            for mut batch in group.batches {
+                                batch.group_completion = Some(completion.clone());
+                                if zip_tx.send(batch).is_err() {
+                                    return;
+                                }
                             }
-                        }
 
-                        // Wait for all batches in this group to complete
-                        completion.done.notified().await;
+                            completion.done.notified().await;
+                        }
                     });
                 }
 

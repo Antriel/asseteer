@@ -182,6 +182,34 @@ pub fn bulk_load_from_zip(zip_path: &str, entries: &[(i64, &str)]) -> HashMap<i6
     results
 }
 
+/// Extract entries for a batch of assets from an already-opened ZIP archive.
+/// Avoids re-parsing the central directory for each batch within a group.
+pub fn bulk_load_from_archive<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    assets: &[Asset],
+) -> HashMap<i64, Result<Vec<u8>, String>> {
+    let mut results = HashMap::with_capacity(assets.len());
+    for asset in assets {
+        if let Some(entry_path) = &asset.zip_entry {
+            let result = match archive.by_name(entry_path) {
+                Ok(mut entry) => {
+                    let mut buffer = Vec::with_capacity(entry.size() as usize);
+                    match entry.read_to_end(&mut buffer) {
+                        Ok(_) => Ok(buffer),
+                        Err(e) => Err(format!(
+                            "Failed to read entry {} from archive: {}",
+                            entry_path, e
+                        )),
+                    }
+                }
+                Err(e) => Err(format!("Failed to find entry {} in archive: {}", entry_path, e)),
+            };
+            results.insert(asset.id, result);
+        }
+    }
+    results
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================
