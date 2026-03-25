@@ -10,6 +10,7 @@
   import ProcessingCategoryCard from '$lib/components/ProcessingCategoryCard.svelte';
   import ClapProcessingCard from '$lib/components/ClapProcessingCard.svelte';
   import { onMount } from 'svelte';
+  import { slide } from 'svelte/transition';
 
   // Refresh state on mount (listeners already initialized in root layout)
   onMount(async () => {
@@ -64,76 +65,72 @@
 
 <div class="flex flex-col h-full overflow-auto p-6">
   <!-- Page Header -->
-  <div class="flex items-center justify-between mb-6">
-    <div>
-      <h1 class="text-2xl font-bold text-primary">Processing</h1>
-      <p class="text-sm text-secondary mt-1">
-        Extract metadata, generate thumbnails, and enable search for your assets
-      </p>
-    </div>
-
-    <!-- Global controls -->
-    <div class="flex items-center gap-2">
-      {#if anyRunning && !anyPaused}
-        <button
-          onclick={handlePauseAll}
-          class="px-4 py-2 text-sm font-medium text-white bg-warning hover:opacity-90 rounded-lg transition-default"
-        >
-          Pause All
-        </button>
-        <button
-          onclick={handleStopAll}
-          class="px-4 py-2 text-sm font-medium text-white bg-error hover:opacity-90 rounded-lg transition-default"
-        >
-          Stop All
-        </button>
-      {:else if anyPaused}
-        <button
-          onclick={handleResumeAll}
-          class="px-4 py-2 text-sm font-medium text-white bg-success hover:opacity-90 rounded-lg transition-default"
-        >
-          Resume All
-        </button>
-        <button
-          onclick={handleStopAll}
-          class="px-4 py-2 text-sm font-medium text-white bg-error hover:opacity-90 rounded-lg transition-default"
-        >
-          Stop All
-        </button>
-      {:else if hasPendingAssets}
-        <button
-          onclick={handleStartAll}
-          class="px-4 py-2 text-sm font-medium text-white bg-accent hover:opacity-90 rounded-lg transition-default"
-        >
-          Start All
-        </button>
-      {/if}
-    </div>
-  </div>
-
-  <!-- Overall Progress Card (when processing) -->
-  {#if anyRunning && overallProgress.total > 0}
-    <div class="bg-secondary border border-default rounded-lg p-4 mb-6">
-      <div class="flex items-center justify-between mb-3">
-        <span class="text-sm font-medium text-secondary">Overall Progress</span>
-        <span class="text-sm text-primary font-medium">
-          {overallProgress.completed + overallProgress.failed} / {overallProgress.total}
-        </span>
+  <div class="mb-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-bold text-primary">Processing</h1>
+        <p class="text-sm text-secondary mt-1">
+          Extract metadata, generate thumbnails, and enable search for your assets
+        </p>
       </div>
-      <div class="h-2 bg-tertiary rounded-full overflow-hidden">
-        <div
-          class="h-full bg-accent transition-all duration-300"
-          style="width: {overallProgress.percentage}%"
-        ></div>
-      </div>
-      <div class="flex items-center justify-between mt-2 text-xs text-tertiary">
-        <span>{overallProgress.percentage}% complete</span>
-        {#if overallProgress.failed > 0}
-          <span class="text-error">{overallProgress.failed} failed</span>
+
+      <!-- Global controls -->
+      <div class="flex items-center gap-2">
+        {#if anyRunning && !anyPaused}
+          <button
+            onclick={handlePauseAll}
+            class="px-4 py-2 text-sm font-medium text-white bg-warning hover:opacity-90 rounded-lg transition-default"
+          >
+            Pause All
+          </button>
+          <button
+            onclick={handleStopAll}
+            class="px-4 py-2 text-sm font-medium text-white bg-error hover:opacity-90 rounded-lg transition-default"
+          >
+            Stop All
+          </button>
+        {:else if anyPaused}
+          <button
+            onclick={handleResumeAll}
+            class="px-4 py-2 text-sm font-medium text-white bg-success hover:opacity-90 rounded-lg transition-default"
+          >
+            Resume All
+          </button>
+          <button
+            onclick={handleStopAll}
+            class="px-4 py-2 text-sm font-medium text-white bg-error hover:opacity-90 rounded-lg transition-default"
+          >
+            Stop All
+          </button>
+        {:else if hasPendingAssets}
+          <button
+            onclick={handleStartAll}
+            class="px-4 py-2 text-sm font-medium text-white bg-accent hover:opacity-90 rounded-lg transition-default"
+          >
+            Start All
+          </button>
         {/if}
       </div>
     </div>
-  {/if}
+
+    <!-- Inline progress bar (slides in below header when processing) -->
+    {#if anyRunning && overallProgress.total > 0}
+      <div transition:slide={{ duration: 200 }} class="mt-4">
+        <div class="flex items-center justify-between mb-1.5 text-xs">
+          <span class="text-secondary font-medium">Overall progress</span>
+          <span class="text-primary font-medium">
+            {overallProgress.completed + overallProgress.failed} / {overallProgress.total} &middot; {overallProgress.percentage}%{#if overallProgress.failed > 0} &middot; <span class="text-error">{overallProgress.failed} failed</span>{/if}
+          </span>
+        </div>
+        <div class="h-1.5 bg-tertiary rounded-full overflow-hidden">
+          <div
+            class="h-full bg-accent transition-all duration-300"
+            style="width: {overallProgress.percentage}%"
+          ></div>
+        </div>
+      </div>
+    {/if}
+  </div>
 
   <!-- Category cards -->
   <div class="flex flex-col gap-4">
