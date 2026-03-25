@@ -110,6 +110,9 @@ pub fn run() {
             commands::search::get_clap_log_dir,
             commands::search::check_clap_setup_state,
             commands::search::invalidate_embedding_cache,
+            // Database management commands
+            commands::database::get_db_info,
+            commands::database::vacuum_database,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

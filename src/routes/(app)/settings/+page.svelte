@@ -2,11 +2,71 @@
   import { clapState, type ClapSetupStatus, type ClapStartupPhase } from '$lib/state/clap.svelte';
   import { checkClapSetupState } from '$lib/database/queries';
   import { showToast, showConfirm } from '$lib/state/ui.svelte';
+  import { formatFileSize } from '$lib/utils/format';
   import { invoke } from '@tauri-apps/api/core';
   import { openPath } from '@tauri-apps/plugin-opener';
 
   let isFirstTimeSetup = $state(false);
   let showDownloadStep = $state(false);
+
+  // Database info
+  interface DbInfo {
+    path: string;
+    main_size: number;
+    wal_size: number;
+    page_count: number;
+    page_size: number;
+    freelist_count: number;
+    total_assets: number;
+    total_folders: number;
+  }
+  let dbInfo = $state<DbInfo | null>(null);
+  let dbLoading = $state(false);
+  let vacuumRunning = $state(false);
+
+  async function loadDbInfo() {
+    dbLoading = true;
+    try {
+      dbInfo = await invoke<DbInfo>('get_db_info');
+    } catch (error) {
+      showToast('Failed to load database info: ' + error, 'error');
+    } finally {
+      dbLoading = false;
+    }
+  }
+
+  async function handleOpenDbFolder() {
+    if (!dbInfo) return;
+    try {
+      const folder = dbInfo.path.replace(/[\\/][^\\/]+$/, '');
+      await openPath(folder);
+    } catch (error) {
+      showToast('Failed to open folder: ' + error, 'error');
+    }
+  }
+
+  async function handleVacuum() {
+    const confirmed = await showConfirm(
+      'This will compact the database to reclaim unused space. The app may be unresponsive briefly during this operation.',
+      'Compact Database',
+      'Compact',
+    );
+    if (!confirmed) return;
+
+    vacuumRunning = true;
+    try {
+      await invoke('vacuum_database');
+      showToast('Database compacted successfully', 'success');
+      await loadDbInfo();
+    } catch (error) {
+      showToast('Failed to compact database: ' + error, 'error');
+    } finally {
+      vacuumRunning = false;
+    }
+  }
+
+  // Load DB info on mount
+  loadDbInfo();
 
   const statusLabel: Record<ClapSetupStatus, string> = {
     'not-configured': 'Not set up',
@@ -69,12 +129,6 @@
     return 'idle';
   }
 
-  function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
-  }
 
   async function handleSetup() {
     try {
@@ -267,7 +321,7 @@
           <div class="flex items-center justify-between pt-3 border-t border-default">
             <div class="text-sm">
               <span class="text-tertiary">Cache size</span>
-              <span class="text-secondary ml-2">{formatBytes(clapState.cacheSize)}</span>
+              <span class="text-secondary ml-2">{formatFileSize(clapState.cacheSize)}</span>
             </div>
             <div class="flex items-center gap-2">
               <button
@@ -281,6 +335,73 @@
                 class="px-3 py-1.5 text-xs font-medium rounded-lg border border-default text-secondary hover:text-primary hover:bg-tertiary transition-colors"
               >
                 Clear Cache
+              </button>
+            </div>
+          </div>
+        {/if}
+      </div>
+    </section>
+
+    <!-- Database Section -->
+    <section class="mb-8">
+      <h2 class="text-lg font-medium text-primary mb-4">Database</h2>
+      <div class="rounded-lg border border-default bg-secondary p-5 space-y-4">
+        {#if dbLoading && !dbInfo}
+          <div class="text-sm text-tertiary">Loading...</div>
+        {:else if dbInfo}
+          <!-- Size -->
+          <div class="flex items-center justify-between text-sm">
+            <span class="text-tertiary">Size</span>
+            <span class="text-secondary">
+              {formatFileSize(dbInfo.main_size + dbInfo.wal_size)}
+              {#if dbInfo.wal_size > 0}
+                <span class="text-tertiary ml-1">
+                  ({formatFileSize(dbInfo.main_size)} + {formatFileSize(dbInfo.wal_size)} WAL)
+                </span>
+              {/if}
+            </span>
+          </div>
+
+          <!-- Stats -->
+          <div class="flex items-center justify-between text-sm">
+            <span class="text-tertiary">Assets</span>
+            <span class="text-secondary">{dbInfo.total_assets.toLocaleString()}</span>
+          </div>
+          <div class="flex items-center justify-between text-sm">
+            <span class="text-tertiary">Source folders</span>
+            <span class="text-secondary">{dbInfo.total_folders}</span>
+          </div>
+          {#if dbInfo.freelist_count > 0}
+            <div class="flex items-center justify-between text-sm">
+              <span class="text-tertiary">Reclaimable space</span>
+              <span class="text-secondary">
+                {formatFileSize(dbInfo.freelist_count * dbInfo.page_size)}
+              </span>
+            </div>
+          {/if}
+
+          <!-- Actions -->
+          <div class="flex items-center justify-between pt-3 border-t border-default">
+            <div class="flex items-center gap-2">
+              <button
+                onclick={handleOpenDbFolder}
+                class="px-3 py-1.5 text-xs font-medium rounded-lg border border-default text-secondary hover:text-primary hover:bg-tertiary transition-colors"
+              >
+                Open DB Folder
+              </button>
+              <button
+                onclick={handleVacuum}
+                disabled={vacuumRunning}
+                class="px-3 py-1.5 text-xs font-medium rounded-lg border border-default text-secondary hover:text-primary hover:bg-tertiary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {#if vacuumRunning}
+                  <span class="inline-flex items-center gap-1.5">
+                    <span class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+                    Compacting...
+                  </span>
+                {:else}
+                  Compact Database
+                {/if}
               </button>
             </div>
           </div>
