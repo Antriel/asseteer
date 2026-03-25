@@ -1,9 +1,9 @@
 use crate::commands::scan::{compute_searchable_path, load_search_excludes};
 use crate::models::SourceFolder;
-use crate::AppState;
+use crate::{database, AppState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 /// List all source folders
 #[tauri::command]
@@ -20,12 +20,66 @@ pub async fn list_folders(
     .map_err(|e| format!("Failed to list folders: {}", e))
 }
 
-/// Remove a source folder (CASCADE deletes all its assets + metadata)
+/// Progress event payload for folder removal
+#[derive(Clone, Serialize)]
+pub struct FolderRemoveProgress {
+    pub phase: String,
+    pub deleted: i64,
+    pub total: i64,
+}
+
+const REMOVE_BATCH_SIZE: i64 = 5000;
+
+/// Remove a source folder: batch-delete assets with progress, then remove
+/// the folder row, checkpoint WAL, and VACUUM to reclaim disk space.
 #[tauri::command]
 pub async fn remove_folder(
+    app: AppHandle,
     folder_id: i64,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    // Get total asset count for progress reporting
+    let (total,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM assets WHERE folder_id = ?")
+            .bind(folder_id)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| format!("Failed to count assets: {}", e))?;
+
+    let emit_progress = |phase: &str, deleted: i64| {
+        let _ = app.emit(
+            "folder-remove-progress",
+            FolderRemoveProgress {
+                phase: phase.to_string(),
+                deleted,
+                total,
+            },
+        );
+    };
+
+    // Batch-delete assets to avoid a single huge CASCADE transaction
+    let mut deleted: i64 = 0;
+    emit_progress("deleting", 0);
+
+    loop {
+        let result = sqlx::query(
+            "DELETE FROM assets WHERE id IN (SELECT id FROM assets WHERE folder_id = ? LIMIT ?)",
+        )
+        .bind(folder_id)
+        .bind(REMOVE_BATCH_SIZE)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("Failed to delete assets: {}", e))?;
+
+        let rows = result.rows_affected() as i64;
+        if rows == 0 {
+            break;
+        }
+        deleted += rows;
+        emit_progress("deleting", deleted);
+    }
+
+    // Delete the folder row (remaining CASCADE handles scan_sessions, excludes)
     let result = sqlx::query("DELETE FROM source_folders WHERE id = ?")
         .bind(folder_id)
         .execute(&state.pool)
@@ -35,6 +89,18 @@ pub async fn remove_folder(
     if result.rows_affected() == 0 {
         return Err(format!("Folder with id {} not found", folder_id));
     }
+
+    // Checkpoint WAL to flush deletion pages and reclaim WAL space.
+    // No VACUUM — it rewrites the entire DB into the WAL, which is slow
+    // and leaves a massive WAL behind with auto-checkpoint disabled.
+    // SQLite reuses free pages internally on future inserts.
+    emit_progress("compacting", deleted);
+
+    if let Err(e) = database::checkpoint_truncate(&state.pool).await {
+        eprintln!("[DB] WAL checkpoint after folder removal failed: {}", e);
+    }
+
+    emit_progress("done", deleted);
 
     Ok(())
 }
