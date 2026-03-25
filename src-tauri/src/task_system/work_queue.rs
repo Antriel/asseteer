@@ -153,10 +153,10 @@ impl WorkQueue {
     }
 
     /// Get or create the batch writer, returning a clone of the sender.
-    async fn ensure_db_writer(&self, db: &SqlitePool) -> DbBatchWriter {
+    async fn ensure_db_writer(&self, db_path: &str) -> DbBatchWriter {
         let mut writer = self.db_writer.write().await;
         if writer.is_none() {
-            *writer = Some(DbBatchWriter::new(db.clone()));
+            *writer = Some(DbBatchWriter::new(db_path.to_string()));
         }
         writer.as_ref().unwrap().clone()
     }
@@ -341,6 +341,7 @@ impl WorkQueue {
         category: ProcessingCategory,
         assets: Vec<Asset>,
         db: SqlitePool,
+        db_path: &str,
         app_handle: AppHandle,
         pre_generate_thumbnails: bool,
     ) -> Result<(), String> {
@@ -460,7 +461,7 @@ impl WorkQueue {
             let num_workers = std::cmp::max(2, num_cpus::get().saturating_sub(1));
             println!("[WorkQueue] Starting {} workers (detected {} CPUs)", num_workers, num_cpus::get());
 
-            let batch_writer = self.ensure_db_writer(&db).await;
+            let batch_writer = self.ensure_db_writer(db_path).await;
 
             // Spawn workers
             for worker_id in 0..num_workers {
@@ -471,7 +472,7 @@ impl WorkQueue {
         drop(handles);
 
         // Spawn progress emitter task for this category
-        let batch_writer_for_emitter = self.ensure_db_writer(&db).await;
+        let batch_writer_for_emitter = self.ensure_db_writer(db_path).await;
         self.spawn_progress_emitter(category, app_handle.clone(), batch_writer_for_emitter, db.clone()).await;
 
         Ok(())
@@ -942,6 +943,7 @@ impl WorkQueue {
         category: ProcessingCategory,
         assets: Vec<Asset>,
         db: SqlitePool,
+        db_path: &str,
     ) -> Result<(), String> {
         let state = self.ensure_category_state(category).await;
 
@@ -1008,7 +1010,7 @@ impl WorkQueue {
         let mut handles = self.worker_handles.write().await;
         handles.retain(|h| !h.is_finished());
         if handles.is_empty() {
-            let batch_writer = self.ensure_db_writer(&db).await;
+            let batch_writer = self.ensure_db_writer(db_path).await;
             let num_workers = 2; // fewer workers in tests
             for worker_id in 0..num_workers {
                 let handle = self.spawn_worker(worker_id, db.clone(), batch_writer.clone()).await;
@@ -1323,12 +1325,14 @@ mod tests {
     #[tokio::test]
     async fn test_queue_processes_all_images() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
+        let db_path = dir.path().join("test.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+        let db = create_test_db_file(&db_path_str).await;
         let assets = setup_image_assets(dir.path(), &db, 5).await;
 
         let queue = WorkQueue::new();
         queue
-            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .start_for_test(ProcessingCategory::Image, assets, db.clone(), &db_path_str)
             .await
             .unwrap();
 
@@ -1347,12 +1351,14 @@ mod tests {
     #[tokio::test]
     async fn test_queue_processes_all_audio() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
+        let db_path = dir.path().join("test.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+        let db = create_test_db_file(&db_path_str).await;
         let assets = setup_audio_assets(dir.path(), &db, 3).await;
 
         let queue = WorkQueue::new();
         queue
-            .start_for_test(ProcessingCategory::Audio, assets, db.clone())
+            .start_for_test(ProcessingCategory::Audio, assets, db.clone(), &db_path_str)
             .await
             .unwrap();
 
@@ -1375,12 +1381,14 @@ mod tests {
     #[tokio::test]
     async fn test_queue_progress_tracking() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
+        let db_path = dir.path().join("test.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+        let db = create_test_db_file(&db_path_str).await;
         let assets = setup_image_assets(dir.path(), &db, 3).await;
 
         let queue = WorkQueue::new();
         queue
-            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .start_for_test(ProcessingCategory::Image, assets, db.clone(), &db_path_str)
             .await
             .unwrap();
 
@@ -1404,12 +1412,14 @@ mod tests {
     #[tokio::test]
     async fn test_queue_pause_resume() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
+        let db_path = dir.path().join("test.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+        let db = create_test_db_file(&db_path_str).await;
         let assets = setup_image_assets(dir.path(), &db, 10).await;
 
         let queue = WorkQueue::new();
         queue
-            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .start_for_test(ProcessingCategory::Image, assets, db.clone(), &db_path_str)
             .await
             .unwrap();
 
@@ -1432,12 +1442,14 @@ mod tests {
     #[tokio::test]
     async fn test_queue_stop() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
+        let db_path = dir.path().join("test.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+        let db = create_test_db_file(&db_path_str).await;
         let assets = setup_image_assets(dir.path(), &db, 50).await;
 
         let queue = WorkQueue::new();
         queue
-            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .start_for_test(ProcessingCategory::Image, assets, db.clone(), &db_path_str)
             .await
             .unwrap();
 
@@ -1454,7 +1466,9 @@ mod tests {
     #[tokio::test]
     async fn test_queue_sequential_categories_respawns_workers() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
+        let db_path = dir.path().join("test.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+        let db = create_test_db_file(&db_path_str).await;
 
         let image_assets = setup_image_assets(dir.path(), &db, 3).await;
         let audio_assets = setup_audio_assets(dir.path(), &db, 3).await;
@@ -1463,7 +1477,7 @@ mod tests {
 
         // --- first category ---
         queue
-            .start_for_test(ProcessingCategory::Image, image_assets, db.clone())
+            .start_for_test(ProcessingCategory::Image, image_assets, db.clone(), &db_path_str)
             .await
             .unwrap();
         let ok = queue
@@ -1476,7 +1490,7 @@ mod tests {
 
         // --- second category (workers must respawn) ---
         queue
-            .start_for_test(ProcessingCategory::Audio, audio_assets, db.clone())
+            .start_for_test(ProcessingCategory::Audio, audio_assets, db.clone(), &db_path_str)
             .await
             .unwrap();
         let ok = queue
@@ -1503,17 +1517,19 @@ mod tests {
     #[tokio::test]
     async fn test_queue_double_start_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
+        let db_path = dir.path().join("test.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+        let db = create_test_db_file(&db_path_str).await;
         let assets = setup_image_assets(dir.path(), &db, 5).await;
 
         let queue = WorkQueue::new();
         queue
-            .start_for_test(ProcessingCategory::Image, assets.clone(), db.clone())
+            .start_for_test(ProcessingCategory::Image, assets.clone(), db.clone(), &db_path_str)
             .await
             .unwrap();
 
         let err = queue
-            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .start_for_test(ProcessingCategory::Image, assets, db.clone(), &db_path_str)
             .await;
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("already running"));
@@ -1527,7 +1543,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_failed_assets_tracked() {
-        let db = create_test_db().await;
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+        let db = create_test_db_file(&db_path_str).await;
         let folder_id = insert_source_folder(&db, "/nonexistent/path", "missing").await;
 
         // Assets pointing to non-existent files
@@ -1542,7 +1561,7 @@ mod tests {
 
         let queue = WorkQueue::new();
         queue
-            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .start_for_test(ProcessingCategory::Image, assets, db.clone(), &db_path_str)
             .await
             .unwrap();
 
@@ -1570,12 +1589,14 @@ mod tests {
     #[tokio::test]
     async fn test_queue_no_deadlock_under_load() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
+        let db_path = dir.path().join("test.db");
+        let db_path_str = db_path.to_str().unwrap().to_string();
+        let db = create_test_db_file(&db_path_str).await;
         let assets = setup_image_assets(dir.path(), &db, 20).await;
 
         let queue = WorkQueue::new();
         queue
-            .start_for_test(ProcessingCategory::Image, assets, db.clone())
+            .start_for_test(ProcessingCategory::Image, assets, db.clone(), &db_path_str)
             .await
             .unwrap();
 

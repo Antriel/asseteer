@@ -1,18 +1,18 @@
 /// Batched database writer for asset processing results.
 ///
-/// Instead of each worker doing individual INSERTs (causing ~500 transactions/sec
-/// and heavy SQLite write lock contention), workers send results to a shared
-/// `DbBatchWriter` that flushes them in batched transactions.
+/// Workers send results to a shared `DbBatchWriter` which flushes them in batched
+/// transactions via a synchronous rusqlite connection on `spawn_blocking`.
+/// This mirrors the scan bulk-insert pattern: prepare once, rebind+step+reset in a
+/// tight loop, with `wal_autocheckpoint=0` to avoid mid-processing checkpoint I/O.
 use crate::models::ProcessingCategory;
 use crate::utils::unix_now;
-use sqlx::sqlite::SqliteConnection;
-use sqlx::SqlitePool;
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::{interval, Duration};
+use crossbeam::channel::{self, Receiver, RecvTimeoutError, TryRecvError};
+use rusqlite;
+use std::time::Duration;
+use tokio::sync::oneshot;
 
 const WRITE_BATCH_SIZE: usize = 64;
 const FLUSH_INTERVAL_MS: u64 = 100;
-const CHANNEL_CAPACITY: usize = 2048;
 
 /// Result of CPU-only asset processing, ready to be written to the database.
 pub enum ProcessingOutput {
@@ -43,86 +43,92 @@ enum WriterCommand {
 /// Cloneable handle to the batch writer. Workers send results here.
 #[derive(Clone)]
 pub struct DbBatchWriter {
-    tx: mpsc::Sender<WriterCommand>,
+    tx: channel::Sender<WriterCommand>,
 }
 
 impl DbBatchWriter {
-    /// Create a new batch writer that spawns a background writer task.
-    pub fn new(db: SqlitePool) -> Self {
-        let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
-        tokio::spawn(writer_task(db, rx));
+    /// Create a new batch writer backed by a synchronous rusqlite connection.
+    /// Spawns a blocking thread that owns the connection and processes writes.
+    pub fn new(db_path: String) -> Self {
+        let (tx, rx) = channel::unbounded();
+        tokio::task::spawn_blocking(move || writer_task_sync(&db_path, rx));
         Self { tx }
     }
 
     /// Send a processing result to be written in the next batch.
+    /// Non-blocking: crossbeam unbounded send is O(1).
     pub async fn send(&self, item: ProcessingOutput) {
-        let _ = self.tx.send(WriterCommand::Write(item)).await;
+        let _ = self.tx.send(WriterCommand::Write(item));
     }
 
     /// Flush all buffered writes and wait for the transaction to commit.
     pub async fn flush(&self) {
         let (tx, rx) = oneshot::channel();
-        if self.tx.send(WriterCommand::Flush(tx)).await.is_ok() {
+        if self.tx.send(WriterCommand::Flush(tx)).is_ok() {
             let _ = rx.await;
         }
     }
 }
 
-/// Background task that receives write items and flushes them in batched transactions.
-async fn writer_task(db: SqlitePool, mut rx: mpsc::Receiver<WriterCommand>) {
+/// Synchronous writer task running on a blocking thread.
+/// Opens its own rusqlite connection with WAL mode and disabled auto-checkpoint.
+fn writer_task_sync(db_path: &str, rx: Receiver<WriterCommand>) {
+    let conn = match rusqlite::Connection::open(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[DbBatchWriter] Failed to open database: {}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=30000; PRAGMA wal_autocheckpoint=0;",
+    ) {
+        eprintln!("[DbBatchWriter] Failed to set PRAGMAs: {}", e);
+        return;
+    }
+
     let mut buffer: Vec<ProcessingOutput> = Vec::with_capacity(WRITE_BATCH_SIZE);
     let mut flush_waiters: Vec<oneshot::Sender<()>> = Vec::new();
-    let mut tick = interval(Duration::from_millis(FLUSH_INTERVAL_MS));
-    // First tick fires immediately — skip it so we don't flush an empty buffer
-    tick.tick().await;
 
     loop {
-        tokio::select! {
-            biased;
-
-            cmd = rx.recv() => {
-                match cmd {
-                    Some(WriterCommand::Write(item)) => {
-                        buffer.push(item);
-                        if buffer.len() >= WRITE_BATCH_SIZE {
-                            flush_batch(&db, &mut buffer).await;
-                            notify_waiters(&mut flush_waiters);
-                        }
-                    }
-                    Some(WriterCommand::Flush(waiter)) => {
-                        // Drain any remaining items from channel before flushing
-                        drain_channel(&mut rx, &mut buffer, &mut flush_waiters);
-                        if !buffer.is_empty() {
-                            flush_batch(&db, &mut buffer).await;
-                        }
-                        let _ = waiter.send(());
-                        notify_waiters(&mut flush_waiters);
-                    }
-                    None => {
-                        // Channel closed — flush remaining items
-                        if !buffer.is_empty() {
-                            flush_batch(&db, &mut buffer).await;
-                        }
-                        notify_waiters(&mut flush_waiters);
-                        break;
-                    }
-                }
-            }
-            _ = tick.tick() => {
-                // Also drain any pending items before the periodic flush
-                drain_channel(&mut rx, &mut buffer, &mut flush_waiters);
-                if !buffer.is_empty() {
-                    flush_batch(&db, &mut buffer).await;
+        match rx.recv_timeout(Duration::from_millis(FLUSH_INTERVAL_MS)) {
+            Ok(WriterCommand::Write(item)) => {
+                buffer.push(item);
+                if buffer.len() >= WRITE_BATCH_SIZE {
+                    flush_batch_sync(&conn, &mut buffer);
                     notify_waiters(&mut flush_waiters);
                 }
+            }
+            Ok(WriterCommand::Flush(waiter)) => {
+                drain_channel_sync(&rx, &mut buffer, &mut flush_waiters);
+                if !buffer.is_empty() {
+                    flush_batch_sync(&conn, &mut buffer);
+                }
+                let _ = waiter.send(());
+                notify_waiters(&mut flush_waiters);
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                drain_channel_sync(&rx, &mut buffer, &mut flush_waiters);
+                if !buffer.is_empty() {
+                    flush_batch_sync(&conn, &mut buffer);
+                    notify_waiters(&mut flush_waiters);
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                if !buffer.is_empty() {
+                    flush_batch_sync(&conn, &mut buffer);
+                }
+                notify_waiters(&mut flush_waiters);
+                break;
             }
         }
     }
 }
 
 /// Drain all immediately-available items from the channel into the buffer.
-fn drain_channel(
-    rx: &mut mpsc::Receiver<WriterCommand>,
+fn drain_channel_sync(
+    rx: &Receiver<WriterCommand>,
     buffer: &mut Vec<ProcessingOutput>,
     flush_waiters: &mut Vec<oneshot::Sender<()>>,
 ) {
@@ -130,7 +136,7 @@ fn drain_channel(
         match rx.try_recv() {
             Ok(WriterCommand::Write(item)) => buffer.push(item),
             Ok(WriterCommand::Flush(waiter)) => flush_waiters.push(waiter),
-            Err(_) => break,
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
         }
     }
 }
@@ -143,31 +149,28 @@ fn notify_waiters(waiters: &mut Vec<oneshot::Sender<()>>) {
 }
 
 /// Flush all buffered items in a single SQLite transaction.
-async fn flush_batch(db: &SqlitePool, buffer: &mut Vec<ProcessingOutput>) {
+fn flush_batch_sync(conn: &rusqlite::Connection, buffer: &mut Vec<ProcessingOutput>) {
     let items: Vec<ProcessingOutput> = buffer.drain(..).collect();
     let count = items.len();
 
-    let mut tx = match db.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            eprintln!(
-                "[DbBatchWriter] Failed to begin transaction ({} items): {}",
-                count, e
-            );
-            // Fall back to individual writes (each gets its own implicit transaction)
-            for item in items {
-                write_item_to_pool(db, item).await;
-            }
-            return;
+    if let Err(e) = conn.execute_batch("BEGIN") {
+        eprintln!(
+            "[DbBatchWriter] Failed to begin transaction ({} items): {}",
+            count, e
+        );
+        // Fall back to individual writes (each in its own implicit transaction)
+        for item in items {
+            write_item_sync(conn, item, unix_now());
         }
-    };
+        return;
+    }
 
     let now = unix_now();
     for item in items {
-        write_item(&mut *tx, item, now).await;
+        write_item_sync(conn, item, now);
     }
 
-    if let Err(e) = tx.commit().await {
+    if let Err(e) = conn.execute_batch("COMMIT") {
         eprintln!(
             "[DbBatchWriter] Failed to commit ({} items): {}",
             count, e
@@ -175,8 +178,8 @@ async fn flush_batch(db: &SqlitePool, buffer: &mut Vec<ProcessingOutput>) {
     }
 }
 
-/// Execute a single write item within a transaction.
-async fn write_item(conn: &mut SqliteConnection, item: ProcessingOutput, now: i64) {
+/// Execute a single write item using cached prepared statements.
+fn write_item_sync(conn: &rusqlite::Connection, item: ProcessingOutput, now: i64) {
     match item {
         ProcessingOutput::ImageSuccess {
             asset_id,
@@ -184,9 +187,9 @@ async fn write_item(conn: &mut SqliteConnection, item: ProcessingOutput, now: i6
             height,
             thumbnail,
         } => {
-            let _ = sqlx::query(
+            if let Ok(mut stmt) = conn.prepare_cached(
                 "INSERT INTO image_metadata (asset_id, width, height, thumbnail_data, processed_at)
-                 VALUES (?, ?, ?, ?, ?)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT (asset_id) DO UPDATE SET
                      width = excluded.width,
                      height = excluded.height,
@@ -195,22 +198,21 @@ async fn write_item(conn: &mut SqliteConnection, item: ProcessingOutput, now: i6
                          WHEN image_metadata.thumbnail_data IS NULL THEN excluded.thumbnail_data
                          ELSE image_metadata.thumbnail_data
                      END",
-            )
-            .bind(asset_id)
-            .bind(width)
-            .bind(height)
-            .bind(thumbnail.as_deref())
-            .bind(now)
-            .execute(&mut *conn)
-            .await;
+            ) {
+                let _ = stmt.execute(rusqlite::params![
+                    asset_id,
+                    width,
+                    height,
+                    thumbnail.as_deref(),
+                    now,
+                ]);
+            }
 
-            let _ = sqlx::query(
-                "UPDATE processing_errors SET resolved_at = ? WHERE asset_id = ? AND resolved_at IS NULL",
-            )
-            .bind(now)
-            .bind(asset_id)
-            .execute(&mut *conn)
-            .await;
+            if let Ok(mut stmt) = conn.prepare_cached(
+                "UPDATE processing_errors SET resolved_at = ?1 WHERE asset_id = ?2 AND resolved_at IS NULL",
+            ) {
+                let _ = stmt.execute(rusqlite::params![now, asset_id]);
+            }
         }
         ProcessingOutput::AudioSuccess {
             asset_id,
@@ -218,70 +220,65 @@ async fn write_item(conn: &mut SqliteConnection, item: ProcessingOutput, now: i6
             sample_rate,
             channels,
         } => {
-            let _ = sqlx::query(
+            if let Ok(mut stmt) = conn.prepare_cached(
                 "INSERT INTO audio_metadata (asset_id, duration_ms, sample_rate, channels, processed_at)
-                 VALUES (?, ?, ?, ?, ?)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT (asset_id) DO UPDATE SET
                      duration_ms = excluded.duration_ms,
                      sample_rate = excluded.sample_rate,
                      channels = excluded.channels,
                      processed_at = excluded.processed_at",
-            )
-            .bind(asset_id)
-            .bind(duration_ms)
-            .bind(sample_rate)
-            .bind(channels)
-            .bind(now)
-            .execute(&mut *conn)
-            .await;
+            ) {
+                let _ = stmt.execute(rusqlite::params![
+                    asset_id, duration_ms, sample_rate, channels, now,
+                ]);
+            }
 
-            let _ = sqlx::query(
-                "UPDATE processing_errors SET resolved_at = ? WHERE asset_id = ? AND resolved_at IS NULL",
-            )
-            .bind(now)
-            .bind(asset_id)
-            .execute(&mut *conn)
-            .await;
+            if let Ok(mut stmt) = conn.prepare_cached(
+                "UPDATE processing_errors SET resolved_at = ?1 WHERE asset_id = ?2 AND resolved_at IS NULL",
+            ) {
+                let _ = stmt.execute(rusqlite::params![now, asset_id]);
+            }
         }
         ProcessingOutput::Failure {
             asset_id,
             category,
             error,
         } => {
-            let _ = sqlx::query(
+            if let Ok(mut stmt) = conn.prepare_cached(
                 "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
-                 VALUES (?, ?, ?, ?, 0)",
-            )
-            .bind(asset_id)
-            .bind(category.as_str())
-            .bind(&error)
-            .bind(now)
-            .execute(&mut *conn)
-            .await;
+                 VALUES (?1, ?2, ?3, ?4, 0)",
+            ) {
+                let _ = stmt.execute(rusqlite::params![
+                    asset_id,
+                    category.as_str(),
+                    &error,
+                    now,
+                ]);
+            }
         }
     }
-}
-
-/// Fallback: write a single item using the pool (each gets its own implicit transaction).
-async fn write_item_to_pool(db: &SqlitePool, item: ProcessingOutput) {
-    let mut conn = match db.acquire().await {
-        Ok(conn) => conn,
-        Err(e) => {
-            eprintln!("[DbBatchWriter] Failed to acquire connection: {}", e);
-            return;
-        }
-    };
-    write_item(&mut *conn, item, unix_now()).await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_helpers::*;
+    use std::time::Duration;
+
+    /// Create a file-backed test DB and return pool, path, and tempdir handle.
+    /// The tempdir handle must be kept alive for the duration of the test.
+    async fn test_db_with_path() -> (sqlx::SqlitePool, String, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        let path_str = path.to_str().unwrap().to_string();
+        let pool = create_test_db_file(&path_str).await;
+        (pool, path_str, dir)
+    }
 
     #[tokio::test]
     async fn test_batch_writer_flushes_on_explicit_flush() {
-        let db = create_test_db().await;
+        let (db, db_path, _dir) = test_db_with_path().await;
         let folder_id = insert_source_folder(&db, "/test", "test").await;
 
         for i in 0..3 {
@@ -289,7 +286,7 @@ mod tests {
             insert_asset(&db, &asset).await;
         }
 
-        let writer = DbBatchWriter::new(db.clone());
+        let writer = DbBatchWriter::new(db_path);
 
         for i in 1..=3i64 {
             writer
@@ -313,7 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_writer_flushes_on_batch_size() {
-        let db = create_test_db().await;
+        let (db, db_path, _dir) = test_db_with_path().await;
         let folder_id = insert_source_folder(&db, "/test", "test").await;
 
         for i in 0..WRITE_BATCH_SIZE {
@@ -327,7 +324,7 @@ mod tests {
             insert_asset(&db, &asset).await;
         }
 
-        let writer = DbBatchWriter::new(db.clone());
+        let writer = DbBatchWriter::new(db_path);
 
         for i in 1..=(WRITE_BATCH_SIZE as i64) {
             writer
@@ -353,12 +350,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_writer_handles_errors() {
-        let db = create_test_db().await;
+        let (db, db_path, _dir) = test_db_with_path().await;
         let folder_id = insert_source_folder(&db, "/test", "test").await;
         let asset = make_asset("bad.png", folder_id, "", "image", "png");
         let id = insert_asset(&db, &asset).await;
 
-        let writer = DbBatchWriter::new(db.clone());
+        let writer = DbBatchWriter::new(db_path);
 
         writer
             .send(ProcessingOutput::Failure {
@@ -379,12 +376,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_batch_writer_handles_audio() {
-        let db = create_test_db().await;
+        let (db, db_path, _dir) = test_db_with_path().await;
         let folder_id = insert_source_folder(&db, "/test", "test").await;
         let asset = make_asset("test.wav", folder_id, "", "audio", "wav");
         let id = insert_asset(&db, &asset).await;
 
-        let writer = DbBatchWriter::new(db.clone());
+        let writer = DbBatchWriter::new(db_path);
 
         writer
             .send(ProcessingOutput::AudioSuccess {
