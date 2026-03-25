@@ -59,12 +59,16 @@
 
 <div class="flex flex-col gap-3 pt-3 border-t border-default">
   <!-- Current file being processed -->
-  {#if currentFile && isRunning}
+  {#if isRunning}
     <div class="flex items-center gap-2 text-sm min-w-0">
       <span class="text-secondary shrink-0">Processing:</span>
-      <span class="font-mono text-xs text-primary truncate [direction:rtl]" title={currentFile}>
-        {currentFile}
-      </span>
+      {#if currentFile}
+        <span class="font-mono text-xs text-primary truncate [direction:rtl]" title={currentFile}>
+          {currentFile}
+        </span>
+      {:else}
+        <span class="text-xs text-tertiary">Starting...</span>
+      {/if}
     </div>
   {/if}
 

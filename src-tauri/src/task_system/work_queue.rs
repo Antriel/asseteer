@@ -312,33 +312,44 @@ impl WorkQueue {
                     });
                 }
 
-                // Regular ZIP assets: group by ZIP path for staged dispatch
-                // (avoids concurrent workers all parsing the same ZIP's central directory)
-                let regular_zip_asset_count: usize = regular_zip_map.values().map(|g| g.len()).sum();
-                if regular_zip_asset_count > 0 {
-                    println!(
-                        "[WorkQueue] Grouped {} non-nested ZIP assets into {} ZIP file groups for staged dispatch",
-                        regular_zip_asset_count,
-                        regular_zip_map.len(),
-                    );
-                }
+                // Regular ZIP assets: large groups use staged dispatch (shared archive
+                // avoids repeated CD parsing); small groups go direct to workers.
+                const MIN_BATCHES_FOR_STAGED: usize = 3;
+                let mut staged_groups = 0usize;
+                let mut direct_batches = 0usize;
                 for (zip_path, group) in regular_zip_map {
-                    let batches = group
+                    let batch_count = (group.len() + REGULAR_ZIP_BATCH_SIZE - 1) / REGULAR_ZIP_BATCH_SIZE;
+                    let batches: Vec<WorkBatch> = group
                         .chunks(REGULAR_ZIP_BATCH_SIZE)
                         .map(|chunk| WorkBatch {
                             category,
                             generation,
                             assets: chunk.to_vec(),
                             pre_generate_thumbnails,
-                            group_completion: None, // set by dispatcher
-                            preloaded_bytes: None,  // set by dispatcher for regular ZIPs
+                            group_completion: None,
+                            preloaded_bytes: None,
                         })
                         .collect();
-                    zip_groups.push(ZipBatchGroup {
-                        key: zip_path.clone(),
-                        batches,
-                        zip_path: Some(zip_path),
-                    });
+
+                    if batch_count >= MIN_BATCHES_FOR_STAGED {
+                        // Large group: staged dispatch with shared archive handle
+                        zip_groups.push(ZipBatchGroup {
+                            key: zip_path.clone(),
+                            batches,
+                            zip_path: Some(zip_path),
+                        });
+                        staged_groups += 1;
+                    } else {
+                        // Small group (1-2 batches): direct to workers, no staging overhead
+                        direct_batches += batches.len();
+                        non_zip.extend(batches);
+                    }
+                }
+                if staged_groups > 0 || direct_batches > 0 {
+                    println!(
+                        "[WorkQueue] Regular ZIP assets: {} groups staged, {} batches direct to workers",
+                        staged_groups, direct_batches,
+                    );
                 }
 
                 BatchPlan {
@@ -681,11 +692,6 @@ impl WorkQueue {
 
                     let results = process_clap_embedding_batch(&batch_assets, &db).await;
 
-                    {
-                        let mut current = state.current_file.write().await;
-                        *current = None;
-                    }
-
                     for result in results {
                         if result.success {
                             state.completed_assets.fetch_add(1, Ordering::SeqCst);
@@ -795,11 +801,6 @@ impl WorkQueue {
                             process_asset_cpu(&asset, pre_generate_thumbnails).await
                         };
 
-                        {
-                            let mut current = state.current_file.write().await;
-                            *current = None;
-                        }
-
                         match &output {
                             ProcessingOutput::Failure { error, .. } => {
                                 state.failed_assets.fetch_add(1, Ordering::SeqCst);
@@ -836,6 +837,22 @@ impl WorkQueue {
             let mut started = state.started_at.write().await;
             *started = Some(start_time);
         }
+
+        // Emit initial progress immediately so the UI updates without waiting for the first tick
+        let total = state.total_assets.load(Ordering::SeqCst);
+        let initial_progress = ProcessingProgress {
+            category: category_str.clone(),
+            total,
+            completed: 0,
+            failed: 0,
+            is_paused: false,
+            is_running: true,
+            current_file: None,
+            processing_rate: 0.0,
+            eta_seconds: None,
+        };
+        let event_name = format!("processing-progress-{}", category_str);
+        let _ = app_handle.emit(&event_name, initial_progress);
 
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(BATCH_UPDATE_INTERVAL_SEC));
@@ -907,8 +924,12 @@ impl WorkQueue {
                     // that other categories may still be using)
                     zip_cache::evict_unpinned();
 
-                    // Mark as not running
+                    // Mark as not running and clear stale current_file
                     state.is_running.store(false, Ordering::SeqCst);
+                    {
+                        let mut current = state.current_file.write().await;
+                        *current = None;
+                    }
 
                     // Emit final progress
                     let final_progress = ProcessingProgress {
@@ -951,6 +972,10 @@ impl WorkQueue {
             state.stop_signal.store(true, Ordering::SeqCst);
             state.pause_signal.store(false, Ordering::SeqCst); // Clear pause state when stopping
             state.is_running.store(false, Ordering::SeqCst);
+            {
+                let mut current = state.current_file.write().await;
+                *current = None;
+            }
 
             // Invalidate embedding cache when CLAP processing is stopped
             if category == ProcessingCategory::Clap {
