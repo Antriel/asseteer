@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ProcessingCategory, CategoryProgress } from '$lib/types';
   import { processingState, getCategoryStatus, formatElapsed } from '$lib/state/tasks.svelte';
+  import { settings } from '$lib/state/settings.svelte';
   import ProcessingDetails from './ProcessingDetails.svelte';
 
   interface Props {
@@ -186,6 +187,29 @@
       <span class="text-secondary">Pending:</span>
       <span class="font-semibold text-primary">{pendingCount} assets</span>
     </div>
+    {#if category === 'image'}
+      <div class="flex items-center justify-between pt-2 border-t border-default">
+        <div>
+          <div class="text-sm text-primary">Pre-generate thumbnails</div>
+          <div class="text-xs text-tertiary mt-0.5">
+            Generate thumbnails during processing instead of on scroll. Slower processing, faster browsing.
+          </div>
+        </div>
+        <button
+          role="switch"
+          aria-label="Pre-generate thumbnails"
+          aria-checked={settings.preGenerateThumbnails}
+          onclick={() => settings.setPreGenerateThumbnails(!settings.preGenerateThumbnails)}
+          class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors
+            {settings.preGenerateThumbnails ? 'bg-accent' : 'bg-tertiary'}"
+        >
+          <span
+            class="inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform
+              {settings.preGenerateThumbnails ? 'translate-x-4' : 'translate-x-1'}"
+          ></span>
+        </button>
+      </div>
+    {/if}
   {:else if status === 'idle' && pendingCount === 0}
     <!-- No pending items -->
     <div class="text-sm text-secondary">No assets to process</div>

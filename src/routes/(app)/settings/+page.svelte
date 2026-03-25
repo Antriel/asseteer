@@ -1,7 +1,6 @@
 <script lang="ts">
   import { clapState, type ClapSetupStatus, type ClapStartupPhase } from '$lib/state/clap.svelte';
   import { checkClapSetupState } from '$lib/database/queries';
-  import { settings } from '$lib/state/settings.svelte';
   import { showToast, showConfirm } from '$lib/state/ui.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { openPath } from '@tauri-apps/plugin-opener';
@@ -286,35 +285,6 @@
             </div>
           </div>
         {/if}
-      </div>
-    </section>
-
-    <!-- Processing Section -->
-    <section class="mb-8">
-      <h2 class="text-lg font-medium text-primary mb-4">Processing</h2>
-      <div class="rounded-lg border border-default bg-secondary p-5">
-        <div class="flex items-center justify-between">
-          <div>
-            <div class="text-sm font-medium text-primary">Pre-generate thumbnails</div>
-            <div class="text-xs text-tertiary mt-0.5">
-              Generate thumbnails during processing instead of lazily on scroll. Slower scan, faster
-              browsing.
-            </div>
-          </div>
-          <button
-            role="switch"
-            aria-label="Pre-generate thumbnails"
-            aria-checked={settings.preGenerateThumbnails}
-            onclick={() => settings.setPreGenerateThumbnails(!settings.preGenerateThumbnails)}
-            class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors
-              {settings.preGenerateThumbnails ? 'bg-accent' : 'bg-tertiary'}"
-          >
-            <span
-              class="inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform
-                {settings.preGenerateThumbnails ? 'translate-x-4' : 'translate-x-1'}"
-            ></span>
-          </button>
-        </div>
       </div>
     </section>
 
