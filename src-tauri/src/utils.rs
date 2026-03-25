@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek};
 use std::time::UNIX_EPOCH;
@@ -126,6 +127,59 @@ fn find_nested_zip_boundary(path: &str) -> Option<usize> {
     let path_lower = path.to_lowercase();
 
     path_lower.find(".zip/").map(|pos| pos + 4) // Position after ".zip"
+}
+
+/// Load multiple entries from the same ZIP archive in one pass.
+/// Opens the archive once and extracts all requested entries, avoiding
+/// repeated central-directory parsing that dominates per-entry I/O cost.
+///
+/// Returns a map from asset_id to the extracted bytes (or an error string).
+pub fn bulk_load_from_zip(zip_path: &str, entries: &[(i64, &str)]) -> HashMap<i64, Result<Vec<u8>, String>> {
+    let mut results = HashMap::with_capacity(entries.len());
+
+    let zip_file = match File::open(zip_path) {
+        Ok(f) => f,
+        Err(e) => {
+            let err = format!("Failed to open zip file {}: {}", zip_path, e);
+            for &(id, _) in entries {
+                results.insert(id, Err(err.clone()));
+            }
+            return results;
+        }
+    };
+
+    let mut archive = match ZipArchive::new(std::io::BufReader::new(zip_file)) {
+        Ok(a) => a,
+        Err(e) => {
+            let err = format!("Failed to read zip archive {}: {}", zip_path, e);
+            for &(id, _) in entries {
+                results.insert(id, Err(err.clone()));
+            }
+            return results;
+        }
+    };
+
+    for &(id, entry_path) in entries {
+        let result = match archive.by_name(entry_path) {
+            Ok(mut entry) => {
+                let mut buffer = Vec::with_capacity(entry.size() as usize);
+                match entry.read_to_end(&mut buffer) {
+                    Ok(_) => Ok(buffer),
+                    Err(e) => Err(format!(
+                        "Failed to read entry {} from {}: {}",
+                        entry_path, zip_path, e
+                    )),
+                }
+            }
+            Err(e) => Err(format!(
+                "Failed to find entry {} in {}: {}",
+                entry_path, zip_path, e
+            )),
+        };
+        results.insert(id, result);
+    }
+
+    results
 }
 
 // ===========================================================================

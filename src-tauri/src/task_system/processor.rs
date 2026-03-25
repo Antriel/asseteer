@@ -160,6 +160,24 @@ pub async fn process_asset_cpu(
     }
 }
 
+/// Process an asset with pre-loaded bytes (skips the file/ZIP loading step).
+/// Used for batched non-nested ZIP processing where bytes are bulk-extracted.
+pub async fn process_asset_cpu_with_bytes(
+    asset: &Asset,
+    bytes: Vec<u8>,
+    pre_generate_thumbnails: bool,
+) -> ProcessingOutput {
+    match asset.asset_type.as_str() {
+        "image" => process_image_cpu_with_bytes(asset.id, bytes, pre_generate_thumbnails).await,
+        "audio" => process_audio_cpu_with_bytes(asset.id, bytes, asset.format.clone()).await,
+        _ => ProcessingOutput::Failure {
+            asset_id: asset.id,
+            category: crate::models::ProcessingCategory::Image,
+            error: format!("Unsupported asset type: {}", asset.asset_type),
+        },
+    }
+}
+
 /// Image processing: decode, extract dimensions, optionally generate thumbnail.
 /// Does NOT write to the database.
 async fn process_image_cpu(
@@ -367,6 +385,130 @@ async fn process_audio_cpu(asset: &Asset) -> ProcessingOutput {
             asset_id,
             category: crate::models::ProcessingCategory::Audio,
             error: format!("Processing timed out after {}s", timeout.as_secs()),
+        },
+    }
+}
+
+/// Image processing from pre-loaded bytes (skips file/ZIP loading).
+async fn process_image_cpu_with_bytes(
+    asset_id: i64,
+    bytes: Vec<u8>,
+    pre_generate_thumbnails: bool,
+) -> ProcessingOutput {
+    let result = tokio::time::timeout(
+        PROCESSING_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| format!("Failed to decode image: {}", e))?;
+            let (width, height) = img.dimensions();
+            let thumbnail = if pre_generate_thumbnails && (width > 128 || height > 128) {
+                Some(generate_thumbnail(&img, 128)?)
+            } else {
+                None
+            };
+            Ok::<_, String>((width, height, thumbnail))
+        }),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(Ok((width, height, thumbnail)))) => ProcessingOutput::ImageSuccess {
+            asset_id,
+            width: width as i32,
+            height: height as i32,
+            thumbnail,
+        },
+        Ok(Ok(Err(e))) => ProcessingOutput::Failure {
+            asset_id,
+            category: crate::models::ProcessingCategory::Image,
+            error: e,
+        },
+        Ok(Err(e)) => ProcessingOutput::Failure {
+            asset_id,
+            category: crate::models::ProcessingCategory::Image,
+            error: format!("Task join error: {}", e),
+        },
+        Err(_) => ProcessingOutput::Failure {
+            asset_id,
+            category: crate::models::ProcessingCategory::Image,
+            error: "Processing timed out".to_string(),
+        },
+    }
+}
+
+/// Audio processing from pre-loaded bytes (skips file/ZIP loading).
+async fn process_audio_cpu_with_bytes(
+    asset_id: i64,
+    bytes: Vec<u8>,
+    format_ext: String,
+) -> ProcessingOutput {
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
+
+    let blocking_task = tokio::task::spawn_blocking(move || {
+        let cursor = std::io::Cursor::new(bytes);
+        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+
+        let mut hint = Hint::new();
+        hint.with_extension(&format_ext);
+
+        let probed = symphonia::default::get_probe()
+            .format(
+                &hint,
+                mss,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
+            .map_err(|e| format!("Failed to probe audio format: {}", e))?;
+
+        let format = probed.format;
+        let track = format
+            .default_track()
+            .ok_or_else(|| "No audio track found".to_string())?;
+
+        let codec_params = &track.codec_params;
+        let sample_rate = codec_params.sample_rate.unwrap_or(0) as i32;
+        let channels = codec_params
+            .channels
+            .map(|c| c.count() as i32)
+            .unwrap_or(0);
+
+        let duration_ms = if let Some(n_frames) = codec_params.n_frames {
+            if sample_rate > 0 {
+                (n_frames as f64 / sample_rate as f64 * 1000.0) as i64
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        Ok::<_, String>((duration_ms, sample_rate, channels))
+    });
+
+    match tokio::time::timeout(PROCESSING_TIMEOUT, blocking_task).await {
+        Ok(Ok(Ok((duration_ms, sample_rate, channels)))) => ProcessingOutput::AudioSuccess {
+            asset_id,
+            duration_ms,
+            sample_rate,
+            channels,
+        },
+        Ok(Ok(Err(e))) => ProcessingOutput::Failure {
+            asset_id,
+            category: crate::models::ProcessingCategory::Audio,
+            error: e,
+        },
+        Ok(Err(e)) => ProcessingOutput::Failure {
+            asset_id,
+            category: crate::models::ProcessingCategory::Audio,
+            error: format!("Task join error: {}", e),
+        },
+        Err(_) => ProcessingOutput::Failure {
+            asset_id,
+            category: crate::models::ProcessingCategory::Audio,
+            error: format!("Processing timed out after {}s", PROCESSING_TIMEOUT.as_secs()),
         },
     }
 }

@@ -2,7 +2,7 @@
 use crate::database;
 use crate::models::{Asset, ProcessingCategory};
 use crate::task_system::db_writer::{DbBatchWriter, ProcessingOutput};
-use crate::task_system::processor::{process_asset_cpu, process_clap_embedding_batch};
+use crate::task_system::processor::{process_asset_cpu, process_asset_cpu_with_bytes, process_clap_embedding_batch};
 use crate::utils::unix_now;
 use crate::zip_cache;
 use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
@@ -18,6 +18,7 @@ use tokio::time::{interval, Duration};
 const BATCH_UPDATE_INTERVAL_SEC: u64 = 2;
 const CLAP_BATCH_SIZE: usize = 16;
 const NESTED_ZIP_BATCH_SIZE: usize = 8;
+const REGULAR_ZIP_BATCH_SIZE: usize = 16;
 
 /// Tracks completion of a group of ZIP batches for staged dispatch.
 /// The dispatcher waits on `done` until all batches in the group finish processing.
@@ -276,17 +277,55 @@ impl WorkQueue {
                     b_total.cmp(&a_total)
                 });
 
-                // Create non-ZIP batches (one per asset)
-                let non_zip = non_zip_assets
-                    .into_iter()
-                    .map(|asset| WorkBatch {
+                // Separate non-nested ZIP assets from pure filesystem assets
+                let mut regular_zip_map: HashMap<String, Vec<Asset>> = HashMap::new();
+                let mut filesystem_assets: Vec<Asset> = Vec::new();
+
+                for asset in non_zip_assets {
+                    if asset.zip_file.is_some() {
+                        let key = crate::utils::resolve_zip_path(&asset);
+                        regular_zip_map.entry(key).or_default().push(asset);
+                    } else {
+                        filesystem_assets.push(asset);
+                    }
+                }
+
+                let mut non_zip: Vec<WorkBatch> = Vec::new();
+
+                // Filesystem assets: one per batch (fast direct I/O)
+                for asset in filesystem_assets {
+                    non_zip.push(WorkBatch {
                         category,
                         generation,
                         assets: vec![asset],
                         pre_generate_thumbnails,
                         group_completion: None,
-                    })
-                    .collect();
+                    });
+                }
+
+                // Regular ZIP assets: group by ZIP path for bulk extraction
+                let regular_zip_batch_count: usize = regular_zip_map.values()
+                    .map(|g| (g.len() + REGULAR_ZIP_BATCH_SIZE - 1) / REGULAR_ZIP_BATCH_SIZE)
+                    .sum();
+                if regular_zip_batch_count > 0 {
+                    println!(
+                        "[WorkQueue] Grouped {} non-nested ZIP assets into {} batches from {} ZIP files",
+                        regular_zip_map.values().map(|g| g.len()).sum::<usize>(),
+                        regular_zip_batch_count,
+                        regular_zip_map.len(),
+                    );
+                }
+                for (_zip_path, group) in regular_zip_map {
+                    for chunk in group.chunks(REGULAR_ZIP_BATCH_SIZE) {
+                        non_zip.push(WorkBatch {
+                            category,
+                            generation,
+                            assets: chunk.to_vec(),
+                            pre_generate_thumbnails,
+                            group_completion: None,
+                        });
+                    }
+                }
 
                 BatchPlan {
                     zip_groups,
@@ -567,6 +606,32 @@ impl WorkQueue {
                     }
                 } else {
                     // Image/Audio: CPU-only processing, DB writes batched via DbBatchWriter
+
+                    // Bulk-extract bytes for non-nested ZIP batches (avoids re-opening
+                    // the ZIP and re-parsing the central directory for every entry)
+                    let mut preloaded: Option<HashMap<i64, Result<Vec<u8>, String>>> =
+                        if batch_assets.len() > 1 && batch_assets[0].zip_file.is_some() {
+                            let zip_path = crate::utils::resolve_zip_path(&batch_assets[0]);
+                            let entries: Vec<(i64, String)> = batch_assets
+                                .iter()
+                                .filter_map(|a| {
+                                    a.zip_entry.as_ref().map(|e| (a.id, e.clone()))
+                                })
+                                .collect();
+                            match tokio::task::spawn_blocking(move || {
+                                let refs: Vec<(i64, &str)> =
+                                    entries.iter().map(|(id, e)| (*id, e.as_str())).collect();
+                                crate::utils::bulk_load_from_zip(&zip_path, &refs)
+                            })
+                            .await
+                            {
+                                Ok(map) => Some(map),
+                                Err(_) => None, // fall back to per-asset loading
+                            }
+                        } else {
+                            None
+                        };
+
                     for asset in batch_assets {
                         while state.pause_signal.load(Ordering::SeqCst)
                             && !state.stop_signal.load(Ordering::SeqCst)
@@ -587,7 +652,30 @@ impl WorkQueue {
                             });
                         }
 
-                        let output = process_asset_cpu(&asset, pre_generate_thumbnails).await;
+                        // Use pre-loaded bytes if available, otherwise load per-asset
+                        let output = if let Some(ref mut loaded) = preloaded {
+                            if let Some(bytes_result) = loaded.remove(&asset.id) {
+                                match bytes_result {
+                                    Ok(bytes) => {
+                                        process_asset_cpu_with_bytes(
+                                            &asset,
+                                            bytes,
+                                            pre_generate_thumbnails,
+                                        )
+                                        .await
+                                    }
+                                    Err(e) => ProcessingOutput::Failure {
+                                        asset_id: asset.id,
+                                        category,
+                                        error: e,
+                                    },
+                                }
+                            } else {
+                                process_asset_cpu(&asset, pre_generate_thumbnails).await
+                            }
+                        } else {
+                            process_asset_cpu(&asset, pre_generate_thumbnails).await
+                        };
 
                         {
                             let mut current = state.current_file.write().await;
