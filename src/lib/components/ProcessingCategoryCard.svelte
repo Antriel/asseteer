@@ -35,57 +35,17 @@
   let durationMs = $derived(processingState.categoryDurationMs.get(category));
   let isStarting = $derived(isCategoryStarting(processingState, category));
 
-  // Status badge configuration
-  let statusConfig = $derived.by(() => {
-    if (isStarting) {
-      return {
-        label: 'Starting...',
-        bgClass: 'bg-blue-100 dark:bg-blue-900/30',
-        textClass: 'text-blue-700 dark:text-blue-300',
-      };
-    }
-
-    switch (status) {
-      case 'running':
-        if (isStopping) {
-          return {
-            label: 'Stopping...',
-            bgClass: 'bg-yellow-100 dark:bg-yellow-900/30',
-            textClass: 'text-yellow-700 dark:text-yellow-300',
-          };
-        }
-        return {
-          label: 'Running',
-          bgClass: 'bg-blue-100 dark:bg-blue-900/30',
-          textClass: 'text-blue-700 dark:text-blue-300',
-        };
-      case 'paused':
-        if (isStopping) {
-          return {
-            label: 'Stopping...',
-            bgClass: 'bg-yellow-100 dark:bg-yellow-900/30',
-            textClass: 'text-yellow-700 dark:text-yellow-300',
-          };
-        }
-        return {
-          label: 'Paused',
-          bgClass: 'bg-orange-100 dark:bg-orange-900/30',
-          textClass: 'text-orange-700 dark:text-orange-300',
-        };
-      case 'completed':
-        return {
-          label: 'Completed',
-          bgClass: 'bg-green-100 dark:bg-green-900/30',
-          textClass: 'text-green-700 dark:text-green-300',
-        };
-      default:
-        return {
-          label: 'Idle',
-          bgClass: 'bg-gray-100 dark:bg-gray-700',
-          textClass: 'text-gray-700 dark:text-gray-300',
-        };
-    }
-  });
+  // Category icon (matches ClapProcessingCard style)
+  let categoryIcon = $derived(
+    category === 'image'
+      ? 'M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z'
+      : 'M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3',
+  );
+  let iconColor = $derived(
+    category === 'image'
+      ? 'text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/30'
+      : 'text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/30',
+  );
 
   // Stopping wind-down state
   let isStopping = $derived(processingState.stoppingCategories.has(category));
@@ -134,19 +94,23 @@
   class="flex flex-col gap-3 p-4 bg-primary border border-default rounded-lg transition-opacity"
   class:opacity-50={disabled}
 >
-  <!-- Header: Category name and status -->
+  <!-- Header: Category name and controls -->
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-3">
+      <div class="w-8 h-8 flex items-center justify-center rounded {iconColor}">
+        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={categoryIcon} />
+        </svg>
+      </div>
       <div>
         <h4 class="text-base font-semibold text-primary">{categoryLabel}</h4>
-        <p class="text-xs text-secondary">{categoryDescription}</p>
+        <p class="text-xs text-secondary">
+          {categoryDescription}
+          {#if status === 'completed' && durationMs}
+            <span class="text-tertiary">&middot; completed in {formatElapsed(durationMs)}</span>
+          {/if}
+        </p>
       </div>
-      <span class="text-xs px-2 py-1 rounded {statusConfig.bgClass} {statusConfig.textClass}">
-        {statusConfig.label}
-      </span>
-      {#if status === 'completed' && durationMs}
-        <span class="text-xs text-tertiary">in {formatElapsed(durationMs)}</span>
-      {/if}
     </div>
 
     <!-- Control buttons -->

@@ -29,8 +29,8 @@
   let ratio = $derived(total === 0 ? 0 : processed / total);
   let percentage = $derived(Math.floor(ratio * 100));
 
-  // Status configuration
-  let statusConfig = $derived.by(() => {
+  // Server status badge — only shown for server-level states, not processing states
+  let serverBadge = $derived.by(() => {
     if (!clapState.serverAvailable && !clapState.serverStarting) {
       return {
         label: 'Server Offline',
@@ -38,67 +38,14 @@
         textClass: 'text-gray-700 dark:text-gray-300',
       };
     }
-    switch (status) {
-      case 'running':
-        if (isStopping) {
-          return {
-            label: 'Stopping...',
-            bgClass: 'bg-yellow-100 dark:bg-yellow-900/30',
-            textClass: 'text-yellow-700 dark:text-yellow-300',
-          };
-        }
-        return {
-          label: 'Running',
-          bgClass: 'bg-blue-100 dark:bg-blue-900/30',
-          textClass: 'text-blue-700 dark:text-blue-300',
-        };
-      case 'paused':
-        if (isStopping) {
-          return {
-            label: 'Stopping...',
-            bgClass: 'bg-yellow-100 dark:bg-yellow-900/30',
-            textClass: 'text-yellow-700 dark:text-yellow-300',
-          };
-        }
-        return {
-          label: 'Paused',
-          bgClass: 'bg-orange-100 dark:bg-orange-900/30',
-          textClass: 'text-orange-700 dark:text-orange-300',
-        };
-      case 'completed':
-        if (failed > 0) {
-          return {
-            label: 'Completed with errors',
-            bgClass: 'bg-red-100 dark:bg-red-900/30',
-            textClass: 'text-red-700 dark:text-red-300',
-          };
-        }
-        return {
-          label: 'Completed',
-          bgClass: 'bg-green-100 dark:bg-green-900/30',
-          textClass: 'text-green-700 dark:text-green-300',
-        };
-      default:
-        if (isStarting) {
-          return {
-            label: 'Starting...',
-            bgClass: 'bg-blue-100 dark:bg-blue-900/30',
-            textClass: 'text-blue-700 dark:text-blue-300',
-          };
-        }
-        if (pendingCount === 0) {
-          return {
-            label: 'Ready',
-            bgClass: 'bg-green-100 dark:bg-green-900/30',
-            textClass: 'text-green-700 dark:text-green-300',
-          };
-        }
-        return {
-          label: 'Idle',
-          bgClass: 'bg-gray-100 dark:bg-gray-700',
-          textClass: 'text-gray-700 dark:text-gray-300',
-        };
+    if (clapState.serverStarting) {
+      return {
+        label: 'Server Starting',
+        bgClass: 'bg-purple-100 dark:bg-purple-900/30',
+        textClass: 'text-purple-700 dark:text-purple-300',
+      };
     }
+    return null;
   });
 
   // Stopping wind-down state
@@ -195,10 +142,12 @@
       </div>
     </div>
 
-    <!-- Status badge -->
-    <span class="text-xs px-2 py-1 rounded {statusConfig.bgClass} {statusConfig.textClass}">
-      {statusConfig.label}
-    </span>
+    <!-- Server status badge (only shown when server is offline/starting) -->
+    {#if serverBadge}
+      <span class="text-xs px-2 py-1 rounded {serverBadge.bgClass} {serverBadge.textClass}">
+        {serverBadge.label}
+      </span>
+    {/if}
   </div>
 
   <!-- Server status and controls -->

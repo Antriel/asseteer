@@ -439,6 +439,7 @@
 </script>
 
 <div class="flex flex-col h-full overflow-auto p-6">
+  <div class="w-full max-w-3xl mx-auto">
   <!-- Header -->
   <div class="flex items-center justify-between mb-6">
     <div>
@@ -597,6 +598,7 @@
                       />
                     </svg>
                   </button>
+                  <div class="w-px h-5 bg-[var(--color-border-default)] mx-0.5"></div>
                   <button
                     onclick={() => removeFolder(folder)}
                     disabled={removingId !== null}
@@ -702,4 +704,5 @@
       {/each}
     </div>
   {/if}
+  </div>
 </div>

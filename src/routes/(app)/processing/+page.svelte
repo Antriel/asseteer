@@ -10,7 +10,7 @@
   import ProcessingCategoryCard from '$lib/components/ProcessingCategoryCard.svelte';
   import ClapProcessingCard from '$lib/components/ClapProcessingCard.svelte';
   import { onMount } from 'svelte';
-  import { slide } from 'svelte/transition';
+
 
   // Refresh state on mount (listeners already initialized in root layout)
   onMount(async () => {
@@ -64,6 +64,7 @@
 </script>
 
 <div class="flex flex-col h-full overflow-auto p-6">
+  <div class="w-full max-w-3xl mx-auto">
   <!-- Page Header -->
   <div class="mb-6">
     <div class="flex items-center justify-between">
@@ -113,23 +114,21 @@
       </div>
     </div>
 
-    <!-- Inline progress bar (slides in below header when processing) -->
-    {#if anyRunning && overallProgress.total > 0}
-      <div transition:slide={{ duration: 200 }} class="mt-4">
-        <div class="flex items-center justify-between mb-1.5 text-xs">
-          <span class="text-secondary font-medium">Overall progress</span>
-          <span class="text-primary font-medium">
-            {overallProgress.completed + overallProgress.failed} / {overallProgress.total} &middot; {overallProgress.percentage}%{#if overallProgress.failed > 0} &middot; <span class="text-error">{overallProgress.failed} failed</span>{/if}
-          </span>
-        </div>
-        <div class="h-1.5 bg-tertiary rounded-full overflow-hidden">
-          <div
-            class="h-full bg-accent transition-all duration-300"
-            style="width: {overallProgress.percentage}%"
-          ></div>
-        </div>
+    <!-- Overall progress bar (always reserves space to avoid layout shift) -->
+    <div class="mt-4 transition-opacity duration-200" class:opacity-0={!anyRunning || overallProgress.total === 0}>
+      <div class="flex items-center justify-between mb-1.5 text-xs">
+        <span class="text-secondary font-medium">Overall progress</span>
+        <span class="text-primary font-medium">
+          {overallProgress.completed + overallProgress.failed} / {overallProgress.total} &middot; {overallProgress.percentage}%{#if overallProgress.failed > 0} &middot; <span class="text-error">{overallProgress.failed} failed</span>{/if}
+        </span>
       </div>
-    {/if}
+      <div class="h-1.5 bg-tertiary rounded-full overflow-hidden">
+        <div
+          class="h-full bg-accent transition-all duration-300"
+          style="width: {overallProgress.percentage}%"
+        ></div>
+      </div>
+    </div>
   </div>
 
   <!-- Category cards -->
@@ -193,4 +192,5 @@
       </span>
     </div>
   {/if}
+  </div>
 </div>
