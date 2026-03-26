@@ -2,8 +2,8 @@
   import { onMount, untrack } from 'svelte';
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { loadAssetBlobUrl } from '$lib/utils/assetBlob';
-  import { openPath } from '@tauri-apps/plugin-opener';
-  import { getAssetFilePath, getAssetDisplayPath, getAssetDirectoryPath } from '$lib/types';
+  import { getAssetFilePath, getAssetDisplayPath } from '$lib/types';
+  import { openDirectory } from '$lib/actions/assetActions';
   import type { Asset, FolderLocation } from '$lib/types';
   import { viewState } from '$lib/state/view.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
@@ -17,22 +17,6 @@
   }
 
   let { asset, onClose, onNext, onPrev }: Props = $props();
-
-  async function openInExplorer() {
-    try {
-      let dirPath: string;
-      if (asset.zip_file) {
-        dirPath = asset.rel_path
-          ? asset.folder_path + '\\' + asset.rel_path.replace(/\//g, '\\')
-          : asset.folder_path;
-      } else {
-        dirPath = getAssetDirectoryPath(asset).replace(/\//g, '\\');
-      }
-      await openPath(dirPath);
-    } catch (error) {
-      console.error('[ImageLightbox] Failed to open in explorer:', error);
-    }
-  }
 
   async function showInFolder() {
     viewState.openFolderSidebar();
@@ -263,7 +247,7 @@
         /></svg
       >
     </button>
-    <button class="btn-lightbox-tool" onclick={openInExplorer} title="Open in file explorer">
+    <button class="btn-lightbox-tool" onclick={() => openDirectory(asset)} title="Open in file explorer">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
         ><path
           stroke-linecap="round"

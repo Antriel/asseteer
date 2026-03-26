@@ -1,7 +1,7 @@
 <script lang="ts">
   import { exploreState, type DirectoryNode } from '$lib/state/explore.svelte';
   import { ChevronIcon, FolderIcon } from '$lib/components/icons';
-  import { openPath } from '@tauri-apps/plugin-opener';
+  import { openLocationInExplorer } from '$lib/actions/assetActions';
   import DirectoryTree from './DirectoryTree.svelte';
 
   interface Props {
@@ -26,24 +26,7 @@
   async function openInExplorer(node: DirectoryNode) {
     const folderBase = exploreState.folderPaths.get(node.location.folderId);
     if (!folderBase) return;
-
-    let dirPath: string;
-    if (node.location.type === 'zip') {
-      // Open the directory containing the ZIP file
-      dirPath = node.location.relPath
-        ? folderBase + '\\' + node.location.relPath.replace(/\//g, '\\')
-        : folderBase;
-    } else {
-      dirPath = node.location.relPath
-        ? folderBase + '\\' + node.location.relPath.replace(/\//g, '\\')
-        : folderBase;
-    }
-
-    try {
-      await openPath(dirPath);
-    } catch (error) {
-      console.error('Failed to open in explorer:', error);
-    }
+    await openLocationInExplorer(folderBase, node.location);
   }
 </script>
 
