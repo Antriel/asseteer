@@ -438,7 +438,10 @@ export async function getFolderChildren(
     [folderId, relPathPattern, parentRelPath],
   );
 
-  // Update childCount for directories that contain ZIPs
+  // Update childCount for directories that contain ZIPs, or create new nodes
+  // for directories that only contain ZIPs (no loose assets)
+  const zipOnlyDirs = new Map<string, { zipCount: number; subDirs: Set<string> }>();
+
   for (const row of zipInChildRows) {
     const segments = row.rel_path.split('/');
     if (segments.length <= parentDepth) continue;
@@ -446,9 +449,33 @@ export async function getFolderChildren(
     const node = nodes.find(
       (n) => n.location.type === 'folder' && n.location.relPath === childRelPath,
     );
-    if (node && node.childCount === 0) {
-      node.childCount = 1; // has at least ZIP children
+    if (node) {
+      if (node.childCount === 0) {
+        node.childCount = 1; // has at least ZIP children
+      }
+    } else {
+      // Directory only contains ZIPs — track it for node creation
+      if (!zipOnlyDirs.has(childRelPath)) {
+        zipOnlyDirs.set(childRelPath, { zipCount: 0, subDirs: new Set() });
+      }
+      const entry = zipOnlyDirs.get(childRelPath)!;
+      entry.zipCount += row.zip_count;
+      if (segments.length > parentDepth + 1) {
+        entry.subDirs.add(segments[parentDepth + 1]);
+      }
     }
+  }
+
+  // Create nodes for zip-only directories
+  for (const [relPath, data] of zipOnlyDirs) {
+    const name = relPath.split('/').pop()!;
+    nodes.push({
+      key: `folder:${folderId}:${relPath}`,
+      name,
+      childCount: data.zipCount + data.subDirs.size,
+      assetCount: 0,
+      location: { type: 'folder', folderId, relPath },
+    });
   }
 
   return nodes.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));

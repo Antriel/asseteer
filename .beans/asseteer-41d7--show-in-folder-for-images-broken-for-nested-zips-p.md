@@ -1,11 +1,11 @@
 ---
 # asseteer-41d7
 title: 'Show in Folder for images broken for nested ZIPs: path display wrong and tree doesn''t expand fully'
-status: todo
+status: completed
 type: bug
 priority: normal
 created_at: 2026-03-25T12:48:53Z
-updated_at: 2026-03-26T07:44:21Z
+updated_at: 2026-03-26T09:00:02Z
 blocking:
     - asseteer-cz2f
 ---
