@@ -36,7 +36,8 @@ unsafe impl Sync for JobHandle {}
 impl JobHandle {
     fn new() -> Result<Self, String> {
         unsafe {
-            let handle = CreateJobObjectW(std::ptr::null::<SECURITY_ATTRIBUTES>(), std::ptr::null());
+            let handle =
+                CreateJobObjectW(std::ptr::null::<SECURITY_ATTRIBUTES>(), std::ptr::null());
             if handle.is_null() {
                 return Err("CreateJobObjectW returned null".to_string());
             }

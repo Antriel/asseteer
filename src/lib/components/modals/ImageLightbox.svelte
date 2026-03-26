@@ -247,7 +247,11 @@
         /></svg
       >
     </button>
-    <button class="btn-lightbox-tool" onclick={() => openDirectory(asset)} title="Open in file explorer">
+    <button
+      class="btn-lightbox-tool"
+      onclick={() => openDirectory(asset)}
+      title="Open in file explorer"
+    >
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
         ><path
           stroke-linecap="round"

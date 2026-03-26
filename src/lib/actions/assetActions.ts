@@ -30,7 +30,9 @@ export async function showInFolder(asset: Asset, assetType: 'image' | 'audio') {
 export async function openLocationInExplorer(folderBase: string, location: FolderLocation) {
   const join = (...parts: string[]) => parts.join(sep());
   const normalize = (p: string) => p.replace(/[\\/]/g, sep());
-  const base = location.relPath ? join(normalize(folderBase), location.relPath) : normalize(folderBase);
+  const base = location.relPath
+    ? join(normalize(folderBase), location.relPath)
+    : normalize(folderBase);
   let dirPath: string;
   if (location.type === 'zip') {
     const zipParts = location.zipFile.split('/');

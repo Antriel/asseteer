@@ -100,15 +100,13 @@ pub async fn add_folder(
         .to_string_lossy()
         .to_string();
 
-    sqlx::query(
-        "INSERT OR IGNORE INTO source_folders (path, label, added_at) VALUES (?1, ?2, ?3)",
-    )
-    .bind(&normalized_path)
-    .bind(&label)
-    .bind(now)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    sqlx::query("INSERT OR IGNORE INTO source_folders (path, label, added_at) VALUES (?1, ?2, ?3)")
+        .bind(&normalized_path)
+        .bind(&label)
+        .bind(now)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let folder_id: i64 = sqlx::query_scalar("SELECT id FROM source_folders WHERE path = ?1")
         .bind(&normalized_path)
@@ -122,11 +120,10 @@ pub async fn add_folder(
     let search_excludes = load_search_excludes(&state.pool, folder_id).await?;
 
     // Snapshot max asset id before insertion — used to scope FTS population
-    let max_id_before: i64 =
-        sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM assets")
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+    let max_id_before: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM assets")
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let (tx, mut rx) = mpsc::channel::<Vec<DiscoveredAsset>>(32);
 
@@ -143,7 +140,16 @@ pub async fn add_folder(
     let discover_progress = progress.clone();
     let discover_folder_path = normalized_path.clone();
     let discovery_handle = tokio::task::spawn_blocking(move || {
-        discover_files_streaming(&discover_app, &root_path_buf, folder_id, tx, &discover_progress, "scan-progress", &search_excludes, Some(&discover_folder_path))
+        discover_files_streaming(
+            &discover_app,
+            &root_path_buf,
+            folder_id,
+            tx,
+            &discover_progress,
+            "scan-progress",
+            &search_excludes,
+            Some(&discover_folder_path),
+        )
     });
 
     // Synchronous bulk insertion via rusqlite on a blocking thread.
@@ -154,8 +160,9 @@ pub async fn add_folder(
     let insertion_handle = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=30000; PRAGMA wal_autocheckpoint=0;"
-        ).map_err(|e| e.to_string())?;
+            "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=30000; PRAGMA wal_autocheckpoint=0;",
+        )
+        .map_err(|e| e.to_string())?;
         conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
 
         let now = SystemTime::now()
@@ -163,13 +170,15 @@ pub async fn add_folder(
             .map_err(|e| e.to_string())?
             .as_secs() as i64;
 
-        let mut stmt = conn.prepare(
-            "INSERT OR IGNORE INTO assets (
+        let mut stmt = conn
+            .prepare(
+                "INSERT OR IGNORE INTO assets (
                 filename, folder_id, rel_path, zip_file, zip_entry, zip_compression,
                 searchable_path, asset_type, format, file_size, fs_modified_at,
                 created_at, modified_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
 
         while let Some(chunk) = rx.blocking_recv() {
             let chunk_len = chunk.len();
@@ -188,7 +197,8 @@ pub async fn add_folder(
                     asset.fs_modified_at,
                     now,
                     now,
-                ]).map_err(|e| e.to_string())?;
+                ])
+                .map_err(|e| e.to_string())?;
             }
             insert_progress
                 .files_inserted
@@ -240,7 +250,8 @@ pub async fn add_folder(
         .map_err(|e| format!("Discovery task panicked: {}", e))?
         .map_err(|e| e)?;
 
-    let warnings: Vec<String> = progress.warnings
+    let warnings: Vec<String> = progress
+        .warnings
         .lock()
         .map(|mut w| w.drain(..).collect())
         .unwrap_or_default();
@@ -249,11 +260,21 @@ pub async fn add_folder(
     // for performance — trigram+unicode61 per-row indexing was the biggest write
     // amplifier). Scoped by folder_id + max_id to be safe with concurrent scans.
     // Batched with progress events so the UI doesn't appear stuck.
-    populate_fts_batched(&app, &pool, folder_id, max_id_before, Some(&normalized_path)).await?;
+    populate_fts_batched(
+        &app,
+        &pool,
+        folder_id,
+        max_id_before,
+        Some(&normalized_path),
+    )
+    .await?;
 
     // Populate precomputed directory tree for instant folder browsing (non-fatal)
     if let Err(e) = populate_directories(&pool, &state.db_path, folder_id).await {
-        eprintln!("[Scan] Failed to populate directories for folder {}: {}", folder_id, e);
+        eprintln!(
+            "[Scan] Failed to populate directories for folder {}: {}",
+            folder_id, e
+        );
     }
 
     // WAL auto-checkpoint is disabled globally (via after_connect); run a
@@ -306,20 +327,22 @@ pub async fn add_folder(
 }
 
 /// Create a new scan session
-async fn create_scan_session(state: &State<'_, AppState>, source_folder_id: i64) -> Result<i64, String> {
+async fn create_scan_session(
+    state: &State<'_, AppState>,
+    source_folder_id: i64,
+) -> Result<i64, String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs() as i64;
 
-    let result = sqlx::query(
-        "INSERT INTO scan_sessions (source_folder_id, started_at) VALUES (?1, ?2)",
-    )
-    .bind(source_folder_id)
-    .bind(now)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let result =
+        sqlx::query("INSERT INTO scan_sessions (source_folder_id, started_at) VALUES (?1, ?2)")
+            .bind(source_folder_id)
+            .bind(now)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| e.to_string())?;
 
     Ok(result.last_insert_rowid())
 }
@@ -422,10 +445,7 @@ pub(crate) fn discover_files_streaming(
                 continue;
             }
 
-            let filename = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy();
+            let filename = path.file_name().unwrap_or_default().to_string_lossy();
 
             // Skip macOS metadata files (._filename) and hidden files
             if filename.starts_with("._") || filename.starts_with('.') {
@@ -439,8 +459,13 @@ pub(crate) fn discover_files_streaming(
                     let metadata = match entry.metadata() {
                         Ok(m) => m,
                         Err(e) => {
-                            eprintln!("Warning: Failed to read metadata for {}: {}", path.display(), e);
-                            let rel = path.strip_prefix(root_path)
+                            eprintln!(
+                                "Warning: Failed to read metadata for {}: {}",
+                                path.display(),
+                                e
+                            );
+                            let rel = path
+                                .strip_prefix(root_path)
                                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                                 .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"));
                             if let Ok(mut w) = progress.warnings.lock() {
@@ -456,7 +481,8 @@ pub(crate) fn discover_files_streaming(
                         .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
                         .unwrap_or(0);
 
-                    let searchable_path = compute_searchable_path(&rel_path, None, None, search_excludes);
+                    let searchable_path =
+                        compute_searchable_path(&rel_path, None, None, search_excludes);
                     chunk.push(DiscoveredAsset {
                         filename: filename.to_string(),
                         folder_id,
@@ -483,7 +509,8 @@ pub(crate) fn discover_files_streaming(
                     let zip_path = path.to_path_buf();
                     let zip_rel_path = compute_rel_path(root_path, path);
                     let zip_filename = filename.to_string();
-                    let zip_mtime = entry.metadata()
+                    let zip_mtime = entry
+                        .metadata()
                         .ok()
                         .and_then(|m| m.modified().ok())
                         .map(|t| t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
@@ -492,8 +519,16 @@ pub(crate) fn discover_files_streaming(
 
                     s.spawn(move |s| {
                         discover_zip_parallel(
-                            s, &zip_path, folder_id, &zip_rel_path, &zip_filename,
-                            zip_mtime, &tx_zip, progress, search_excludes, &fatal_error,
+                            s,
+                            &zip_path,
+                            folder_id,
+                            &zip_rel_path,
+                            &zip_filename,
+                            zip_mtime,
+                            &tx_zip,
+                            progress,
+                            search_excludes,
+                            &fatal_error,
                         );
                     });
                 }
@@ -531,7 +566,9 @@ pub(crate) fn discover_files_streaming(
     // rayon::scope blocks until all tasks (walk + all ZIP tasks) complete
 
     // Check for fatal errors from any task
-    let error = fatal_error.into_inner().map_err(|e| format!("Lock poisoned: {}", e))?;
+    let error = fatal_error
+        .into_inner()
+        .map_err(|e| format!("Lock poisoned: {}", e))?;
     if let Some(err) = error {
         return Err(err);
     }
@@ -639,7 +676,11 @@ fn discover_zip_parallel<'scope>(
         Ok(f) => f,
         Err(e) => {
             eprintln!("Warning: Failed to open zip {}: {}", zip_path.display(), e);
-            let rel = if rel_path.is_empty() { zip_filename.to_string() } else { format!("{}/{}", rel_path, zip_filename) };
+            let rel = if rel_path.is_empty() {
+                zip_filename.to_string()
+            } else {
+                format!("{}/{}", rel_path, zip_filename)
+            };
             if let Ok(mut w) = progress.warnings.lock() {
                 w.push(format!("{}: {}", rel, e));
             }
@@ -649,8 +690,16 @@ fn discover_zip_parallel<'scope>(
     let mut archive = match ZipArchive::new(file) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("Warning: Failed to read zip archive {}: {}", zip_path.display(), e);
-            let rel = if rel_path.is_empty() { zip_filename.to_string() } else { format!("{}/{}", rel_path, zip_filename) };
+            eprintln!(
+                "Warning: Failed to read zip archive {}: {}",
+                zip_path.display(),
+                e
+            );
+            let rel = if rel_path.is_empty() {
+                zip_filename.to_string()
+            } else {
+                format!("{}/{}", rel_path, zip_filename)
+            };
             if let Ok(mut w) = progress.warnings.lock() {
                 w.push(format!("{}: {}", rel, e));
             }
@@ -661,9 +710,19 @@ fn discover_zip_parallel<'scope>(
     let outer_zip_path_str = zip_path.to_string_lossy().replace('\\', "/");
 
     enumerate_zip_entries_parallel(
-        scope, &mut archive, &outer_zip_path_str, "",
-        folder_id, rel_path, zip_filename, zip_mtime, "",
-        tx, progress, search_excludes, fatal_error,
+        scope,
+        &mut archive,
+        &outer_zip_path_str,
+        "",
+        folder_id,
+        rel_path,
+        zip_filename,
+        zip_mtime,
+        "",
+        tx,
+        progress,
+        search_excludes,
+        fatal_error,
     );
 
     progress.zips_scanned.fetch_add(1, Ordering::Relaxed);
@@ -686,20 +745,25 @@ fn discover_nested_zip_parallel<'scope>(
     fatal_error: &'scope Mutex<Option<String>>,
 ) {
     // Load through ZipCache for memory bounding and cache warming
-    let (bytes, _guard) = match crate::zip_cache::load_for_scan(outer_zip_path, cache_path, size_hint) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!(
-                "Warning: Failed to load nested zip {}/{}: {}",
-                outer_zip_path, cache_path, e
-            );
-            let rel = if rel_path.is_empty() { format!("{}/{}", zip_filename, cache_path) } else { format!("{}/{}/{}", rel_path, zip_filename, cache_path) };
-            if let Ok(mut w) = progress.warnings.lock() {
-                w.push(format!("{}: {}", rel, e));
+    let (bytes, _guard) =
+        match crate::zip_cache::load_for_scan(outer_zip_path, cache_path, size_hint) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to load nested zip {}/{}: {}",
+                    outer_zip_path, cache_path, e
+                );
+                let rel = if rel_path.is_empty() {
+                    format!("{}/{}", zip_filename, cache_path)
+                } else {
+                    format!("{}/{}/{}", rel_path, zip_filename, cache_path)
+                };
+                if let Ok(mut w) = progress.warnings.lock() {
+                    w.push(format!("{}: {}", rel, e));
+                }
+                return;
             }
-            return;
-        }
-    };
+        };
 
     let mut archive = match ZipArchive::new(Cursor::new(bytes.as_slice())) {
         Ok(a) => a,
@@ -708,7 +772,11 @@ fn discover_nested_zip_parallel<'scope>(
                 "Warning: Failed to open nested zip {}/{}: {}",
                 outer_zip_path, cache_path, e
             );
-            let rel = if rel_path.is_empty() { format!("{}/{}", zip_filename, cache_path) } else { format!("{}/{}/{}", rel_path, zip_filename, cache_path) };
+            let rel = if rel_path.is_empty() {
+                format!("{}/{}", zip_filename, cache_path)
+            } else {
+                format!("{}/{}/{}", rel_path, zip_filename, cache_path)
+            };
             if let Ok(mut w) = progress.warnings.lock() {
                 w.push(format!("{}: {}", rel, e));
             }
@@ -717,9 +785,19 @@ fn discover_nested_zip_parallel<'scope>(
     };
 
     enumerate_zip_entries_parallel(
-        scope, &mut archive, outer_zip_path, cache_path,
-        folder_id, rel_path, zip_filename, zip_mtime, prefix,
-        tx, progress, search_excludes, fatal_error,
+        scope,
+        &mut archive,
+        outer_zip_path,
+        cache_path,
+        folder_id,
+        rel_path,
+        zip_filename,
+        zip_mtime,
+        prefix,
+        tx,
+        progress,
+        search_excludes,
+        fatal_error,
     );
 }
 
@@ -792,15 +870,28 @@ fn enumerate_zip_entries_parallel<'scope, R: Read + Seek>(
 
                 scope.spawn(move |scope| {
                     discover_nested_zip_parallel(
-                        scope, &outer, &nested_cache_path, entry_size,
-                        folder_id, &rel, &zfn, zip_mtime, &nested_prefix,
-                        &tx_nested, progress, search_excludes, fatal_error,
+                        scope,
+                        &outer,
+                        &nested_cache_path,
+                        entry_size,
+                        folder_id,
+                        &rel,
+                        &zfn,
+                        zip_mtime,
+                        &nested_prefix,
+                        &tx_nested,
+                        progress,
+                        search_excludes,
+                        fatal_error,
                     );
                 });
             } else if let Some(asset_type) = detect_asset_type_from_ext(&ext_str) {
                 let full_entry_path = format!("{}{}", prefix, entry_name);
                 let searchable_path = compute_searchable_path(
-                    rel_path, Some(zip_filename), Some(&full_entry_path), search_excludes,
+                    rel_path,
+                    Some(zip_filename),
+                    Some(&full_entry_path),
+                    search_excludes,
                 );
 
                 chunk.push(DiscoveredAsset {
@@ -955,7 +1046,6 @@ async fn populate_fts_batched(
     Ok(())
 }
 
-
 /// Populate the `directories` table for a folder by querying the assets table.
 /// Runs after asset insertion (scan or rescan). Replaces all directory rows for
 /// the folder — safe because the directory set is small (hundreds to low thousands).
@@ -1000,13 +1090,7 @@ pub(crate) async fn populate_directories(
     // Do the heavy lifting on a blocking thread with rusqlite for fast bulk insert
     let db_path = db_path.to_string();
     tokio::task::spawn_blocking(move || {
-        populate_directories_blocking(
-            &db_path,
-            folder_id,
-            &fs_rows,
-            &zip_rows,
-            &zip_entry_rows,
-        )
+        populate_directories_blocking(&db_path, folder_id, &fs_rows, &zip_rows, &zip_entry_rows)
     })
     .await
     .map_err(|e| format!("populate_directories: task panicked: {}", e))?
@@ -1033,8 +1117,10 @@ fn populate_directories_blocking(
     use std::collections::HashMap;
 
     let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=30000; PRAGMA wal_autocheckpoint=0;")
-        .map_err(|e| e.to_string())?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=30000; PRAGMA wal_autocheckpoint=0;",
+    )
+    .map_err(|e| e.to_string())?;
     conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
 
     // Clear existing directories for this folder
@@ -1088,7 +1174,8 @@ fn populate_directories_blocking(
     // Extract leaf directory from each zip_entry, then ensure all ancestor zip dirs exist
     {
         // Collect unique (rel_path, zip_file, leaf_dir) tuples
-        let mut zip_dirs: HashMap<(String, String), std::collections::HashSet<String>> = HashMap::new();
+        let mut zip_dirs: HashMap<(String, String), std::collections::HashSet<String>> =
+            HashMap::new();
         for (rel_path, zip_file, zip_entry) in zip_entry_rows {
             if let Some(last_slash) = zip_entry.rfind('/') {
                 let leaf_dir = &zip_entry[..last_slash];
@@ -1173,7 +1260,11 @@ fn populate_directories_blocking(
     sorted_keys.sort_by_key(|k| match k {
         DirKey::Fs(rp) => (0, rp.matches('/').count(), rp.clone()),
         DirKey::Zip(rp, zf) => (1, rp.matches('/').count(), format!("{}\0{}", rp, zf)),
-        DirKey::ZipDir(rp, zf, zp) => (2, rp.matches('/').count() + zp.matches('/').count(), format!("{}\0{}\0{}", rp, zf, zp)),
+        DirKey::ZipDir(rp, zf, zp) => (
+            2,
+            rp.matches('/').count() + zp.matches('/').count(),
+            format!("{}\0{}\0{}", rp, zf, zp),
+        ),
     });
 
     // --- Compute cumulative asset counts ---
@@ -1231,7 +1322,14 @@ fn populate_directories_blocking(
                     None
                 };
                 let parent_id = parent_key.and_then(|pk| id_map.get(&pk).copied());
-                (parent_id, name, rp.clone(), None::<String>, None::<String>, "dir")
+                (
+                    parent_id,
+                    name,
+                    rp.clone(),
+                    None::<String>,
+                    None::<String>,
+                    "dir",
+                )
             }
             DirKey::Zip(rp, zf) => {
                 let parent_key = if rp.is_empty() {
@@ -1240,18 +1338,36 @@ fn populate_directories_blocking(
                     Some(DirKey::Fs(rp.clone()))
                 };
                 let parent_id = parent_key.and_then(|pk| id_map.get(&pk).copied());
-                (parent_id, zf.clone(), rp.clone(), Some(zf.clone()), None::<String>, "zip")
+                (
+                    parent_id,
+                    zf.clone(),
+                    rp.clone(),
+                    Some(zf.clone()),
+                    None::<String>,
+                    "zip",
+                )
             }
             DirKey::ZipDir(rp, zf, zp) => {
                 let trimmed = zp.trim_end_matches('/');
                 let name = trimmed.rsplit('/').next().unwrap_or(trimmed).to_string();
                 let parent_key = if let Some(last_slash) = trimmed.rfind('/') {
-                    DirKey::ZipDir(rp.clone(), zf.clone(), trimmed[..last_slash].to_string() + "/")
+                    DirKey::ZipDir(
+                        rp.clone(),
+                        zf.clone(),
+                        trimmed[..last_slash].to_string() + "/",
+                    )
                 } else {
                     DirKey::Zip(rp.clone(), zf.clone())
                 };
                 let parent_id = id_map.get(&parent_key).copied();
-                (parent_id, name, rp.clone(), Some(zf.clone()), Some(zp.clone()), "zipdir")
+                (
+                    parent_id,
+                    name,
+                    rp.clone(),
+                    Some(zf.clone()),
+                    Some(zp.clone()),
+                    "zipdir",
+                )
             }
         };
 
@@ -1260,16 +1376,7 @@ fn populate_directories_blocking(
         let cc = child_counts.get(key).copied().unwrap_or(0);
 
         stmt.execute(rusqlite::params![
-            folder_id,
-            parent_id,
-            name,
-            rel_path,
-            zip_file,
-            zip_prefix,
-            ac,
-            cac,
-            cc,
-            dir_type,
+            folder_id, parent_id, name, rel_path, zip_file, zip_prefix, ac, cac, cc, dir_type,
         ])
         .map_err(|e| e.to_string())?;
 

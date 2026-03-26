@@ -166,7 +166,11 @@ impl WorkerState {
     fn stats(&self) -> ThumbnailStats {
         let now = now_millis();
         let cutoff = now.saturating_sub(5000);
-        let recent = self.recent_timestamps.iter().filter(|&&t| t > cutoff).count();
+        let recent = self
+            .recent_timestamps
+            .iter()
+            .filter(|&&t| t > cutoff)
+            .count();
         ThumbnailStats {
             queued: self.pending.len(),
             processing: self.processing,
@@ -249,11 +253,20 @@ async fn worker_loop(
         for &id in &batch {
             if !missing_set.contains(&id) {
                 state.record_success(id);
-                let _ = app.emit("thumbnail-ready", ThumbnailReady { asset_id: id, success: true });
+                let _ = app.emit(
+                    "thumbnail-ready",
+                    ThumbnailReady {
+                        asset_id: id,
+                        success: true,
+                    },
+                );
             }
         }
 
-        let missing_ids: Vec<i64> = batch.into_iter().filter(|id| missing_set.contains(id)).collect();
+        let missing_ids: Vec<i64> = batch
+            .into_iter()
+            .filter(|id| missing_set.contains(id))
+            .collect();
         if missing_ids.is_empty() {
             continue;
         }
@@ -280,7 +293,13 @@ async fn worker_loop(
             let app_c = app.clone();
             handles.push(tauri::async_runtime::spawn(async move {
                 let success = process_single_thumbnail(&asset, &pool_c).await;
-                let _ = app_c.emit("thumbnail-ready", ThumbnailReady { asset_id: asset.id, success });
+                let _ = app_c.emit(
+                    "thumbnail-ready",
+                    ThumbnailReady {
+                        asset_id: asset.id,
+                        success,
+                    },
+                );
                 (asset.id, success)
             }));
         }
@@ -410,4 +429,3 @@ async fn load_assets(pool: &SqlitePool, ids: &[i64]) -> Vec<Asset> {
     }
     result
 }
-

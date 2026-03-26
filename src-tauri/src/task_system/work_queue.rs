@@ -2,7 +2,9 @@
 use crate::database;
 use crate::models::{Asset, ProcessingCategory};
 use crate::task_system::db_writer::{DbBatchWriter, ProcessingOutput};
-use crate::task_system::processor::{process_asset_cpu, process_asset_cpu_with_bytes, process_clap_embedding_batch};
+use crate::task_system::processor::{
+    process_asset_cpu, process_asset_cpu_with_bytes, process_clap_embedding_batch,
+};
 use crate::utils::unix_now;
 use crate::zip_cache;
 use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
@@ -59,7 +61,6 @@ struct BatchPlan {
     /// Non-ZIP batches (individual assets) + CLAP batches
     non_zip: Vec<WorkBatch>,
 }
-
 
 // Error recording is now handled by DbBatchWriter
 
@@ -169,16 +170,19 @@ impl WorkQueue {
     /// Get or create category state
     async fn ensure_category_state(&self, category: ProcessingCategory) -> CategoryState {
         let mut states = self.category_states.write().await;
-        states.entry(category).or_insert_with(|| {
-            // CLAP uses 2 workers: while batch 1 is in GPU forward pass, batch 2
-            // preprocesses audio on CPU (server handles concurrency via thread pool)
-            // Image/Audio use many workers (CPU-bound work benefits from parallelism)
-            let max_concurrent = match category {
-                ProcessingCategory::Clap => 2,
-                ProcessingCategory::Image | ProcessingCategory::Audio => 100, // effectively unlimited
-            };
-            CategoryState::new(max_concurrent)
-        }).clone()
+        states
+            .entry(category)
+            .or_insert_with(|| {
+                // CLAP uses 2 workers: while batch 1 is in GPU forward pass, batch 2
+                // preprocesses audio on CPU (server handles concurrency via thread pool)
+                // Image/Audio use many workers (CPU-bound work benefits from parallelism)
+                let max_concurrent = match category {
+                    ProcessingCategory::Clap => 2,
+                    ProcessingCategory::Image | ProcessingCategory::Audio => 100, // effectively unlimited
+                };
+                CategoryState::new(max_concurrent)
+            })
+            .clone()
     }
 
     /// Build a dispatch plan that separates ZIP-grouped and non-ZIP batches.
@@ -274,7 +278,11 @@ impl WorkQueue {
                                 preloaded_bytes: None,  // nested ZIPs use zip_cache
                             })
                             .collect();
-                        ZipBatchGroup { key, batches, zip_path: None }
+                        ZipBatchGroup {
+                            key,
+                            batches,
+                            zip_path: None,
+                        }
                     })
                     .collect();
 
@@ -318,7 +326,8 @@ impl WorkQueue {
                 let mut staged_groups = 0usize;
                 let mut direct_batches = 0usize;
                 for (zip_path, group) in regular_zip_map {
-                    let batch_count = (group.len() + REGULAR_ZIP_BATCH_SIZE - 1) / REGULAR_ZIP_BATCH_SIZE;
+                    let batch_count =
+                        (group.len() + REGULAR_ZIP_BATCH_SIZE - 1) / REGULAR_ZIP_BATCH_SIZE;
                     let batches: Vec<WorkBatch> = group
                         .chunks(REGULAR_ZIP_BATCH_SIZE)
                         .map(|chunk| WorkBatch {
@@ -379,7 +388,10 @@ impl WorkQueue {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
-            return Err(format!("Processing for category '{}' is already running", category.as_str()));
+            return Err(format!(
+                "Processing for category '{}' is already running",
+                category.as_str()
+            ));
         }
 
         // Reset signals and counters for this category
@@ -415,15 +427,14 @@ impl WorkQueue {
             let gen = state.generation.clone();
 
             // Separate nested and regular ZIP groups for different concurrency limits
-            let (nested_groups, regular_groups): (Vec<_>, Vec<_>) =
-                plan.zip_groups.into_iter().partition(|g| g.zip_path.is_none());
+            let (nested_groups, regular_groups): (Vec<_>, Vec<_>) = plan
+                .zip_groups
+                .into_iter()
+                .partition(|g| g.zip_path.is_none());
 
             let dispatcher = tokio::spawn(async move {
                 // Nested ZIP groups: bounded by memory budget (~1 per GB of RAM)
-                let nested_max = std::cmp::max(
-                    1,
-                    zip_cache::budget_bytes() / (1024 * 1024 * 1024),
-                );
+                let nested_max = std::cmp::max(1, zip_cache::budget_bytes() / (1024 * 1024 * 1024));
                 // Regular ZIP groups: higher concurrency (no zip_cache memory, just I/O)
                 let regular_max = std::cmp::max(2, num_cpus::get() / 2);
                 println!(
@@ -450,7 +461,11 @@ impl WorkQueue {
                     }
 
                     let is_regular = group.zip_path.is_some();
-                    let sem = if is_regular { regular_sem.clone() } else { nested_sem.clone() };
+                    let sem = if is_regular {
+                        regular_sem.clone()
+                    } else {
+                        nested_sem.clone()
+                    };
                     let permit = match sem.acquire_owned().await {
                         Ok(p) => p,
                         Err(_) => break, // semaphore closed
@@ -482,9 +497,8 @@ impl WorkQueue {
                             let stop_ext = stop.clone();
                             let gen_ext = gen_clone.clone();
                             let extract_handle = tokio::task::spawn_blocking(move || {
-                                let archive_opt = std::fs::File::open(&zip_path)
-                                    .ok()
-                                    .and_then(|f| {
+                                let archive_opt =
+                                    std::fs::File::open(&zip_path).ok().and_then(|f| {
                                         zip::ZipArchive::new(std::io::BufReader::new(f)).ok()
                                     });
                                 let mut archive_opt = archive_opt;
@@ -497,8 +511,10 @@ impl WorkQueue {
                                     }
 
                                     if let Some(ref mut archive) = archive_opt {
-                                        let preloaded =
-                                            crate::utils::bulk_load_from_archive(archive, &batch.assets);
+                                        let preloaded = crate::utils::bulk_load_from_archive(
+                                            archive,
+                                            &batch.assets,
+                                        );
                                         batch.preloaded_bytes = Some(Arc::new(preloaded));
                                     }
                                     // Blocks if PIPELINE_DEPTH batches are buffered (backpressure)
@@ -573,13 +589,19 @@ impl WorkQueue {
         if needs_workers {
             // Calculate number of workers based on CPU cores (leave 1 core free for system/UI)
             let num_workers = std::cmp::max(2, num_cpus::get().saturating_sub(1));
-            println!("[WorkQueue] Starting {} workers (detected {} CPUs)", num_workers, num_cpus::get());
+            println!(
+                "[WorkQueue] Starting {} workers (detected {} CPUs)",
+                num_workers,
+                num_cpus::get()
+            );
 
             let batch_writer = self.ensure_db_writer(db_path).await;
 
             // Spawn workers
             for worker_id in 0..num_workers {
-                let handle = self.spawn_worker(worker_id, db.clone(), batch_writer.clone()).await;
+                let handle = self
+                    .spawn_worker(worker_id, db.clone(), batch_writer.clone())
+                    .await;
                 handles.push(handle);
             }
         }
@@ -587,14 +609,25 @@ impl WorkQueue {
 
         // Spawn progress emitter task for this category
         let batch_writer_for_emitter = self.ensure_db_writer(db_path).await;
-        self.spawn_progress_emitter(category, app_handle.clone(), batch_writer_for_emitter, db.clone()).await;
+        self.spawn_progress_emitter(
+            category,
+            app_handle.clone(),
+            batch_writer_for_emitter,
+            db.clone(),
+        )
+        .await;
 
         Ok(())
     }
 
     /// Spawn a worker task that processes assets from both channels.
     /// Workers check the ZIP channel first (priority) then fall back to non-ZIP.
-    async fn spawn_worker(&self, _worker_id: usize, _db: SqlitePool, batch_writer: DbBatchWriter) -> tokio::task::JoinHandle<()> {
+    async fn spawn_worker(
+        &self,
+        _worker_id: usize,
+        _db: SqlitePool,
+        batch_writer: DbBatchWriter,
+    ) -> tokio::task::JoinHandle<()> {
         let zip_rx = self.zip_rx.clone();
         let nonzip_rx = self.nonzip_rx.clone();
         let category_states = self.category_states.clone();
@@ -616,7 +649,9 @@ impl WorkQueue {
                                 // Check if all categories are stopped
                                 let all_stopped = {
                                     let states = category_states.read().await;
-                                    states.values().all(|s| !s.is_running.load(Ordering::SeqCst))
+                                    states
+                                        .values()
+                                        .all(|s| !s.is_running.load(Ordering::SeqCst))
                                 };
 
                                 if all_stopped && zip_rx.is_empty() && nonzip_rx.is_empty() {
@@ -645,7 +680,9 @@ impl WorkQueue {
                         Some(s) => s.clone(),
                         None => {
                             // Signal completion even for unknown categories
-                            if let Some(c) = &group_completion { c.batch_done(); }
+                            if let Some(c) = &group_completion {
+                                c.batch_done();
+                            }
                             continue;
                         }
                     }
@@ -653,30 +690,40 @@ impl WorkQueue {
 
                 // Skip stale items from a previous run
                 if generation != state.generation.load(Ordering::SeqCst) {
-                    if let Some(c) = &group_completion { c.batch_done(); }
+                    if let Some(c) = &group_completion {
+                        c.batch_done();
+                    }
                     continue;
                 }
 
                 // Check stop signal for this category
                 if state.stop_signal.load(Ordering::SeqCst) {
-                    if let Some(c) = &group_completion { c.batch_done(); }
+                    if let Some(c) = &group_completion {
+                        c.batch_done();
+                    }
                     continue;
                 }
 
                 // Wait while paused
-                while state.pause_signal.load(Ordering::SeqCst) && !state.stop_signal.load(Ordering::SeqCst) {
+                while state.pause_signal.load(Ordering::SeqCst)
+                    && !state.stop_signal.load(Ordering::SeqCst)
+                {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
 
                 // Check again if stopped after pause
                 if state.stop_signal.load(Ordering::SeqCst) {
-                    if let Some(c) = &group_completion { c.batch_done(); }
+                    if let Some(c) = &group_completion {
+                        c.batch_done();
+                    }
                     continue;
                 }
 
                 // Acquire concurrency permit (limits parallel processing per category)
                 let Ok(_permit) = state.concurrency_limiter.acquire().await else {
-                    if let Some(c) = &group_completion { c.batch_done(); }
+                    if let Some(c) = &group_completion {
+                        c.batch_done();
+                    }
                     break;
                 };
 
@@ -684,16 +731,18 @@ impl WorkQueue {
                 if category == ProcessingCategory::Clap {
                     {
                         let mut current = state.current_file.write().await;
-                        *current = batch_assets.first().map(|a| {
-                            crate::utils::format_asset_display_path(a)
-                        });
+                        *current = batch_assets
+                            .first()
+                            .map(|a| crate::utils::format_asset_display_path(a));
                     }
 
                     let outputs = process_clap_embedding_batch(&batch_assets).await;
 
                     for output in outputs {
                         match output {
-                            crate::task_system::db_writer::ProcessingOutput::ClapSuccess { .. } => {
+                            crate::task_system::db_writer::ProcessingOutput::ClapSuccess {
+                                ..
+                            } => {
                                 state.completed_assets.fetch_add(1, Ordering::SeqCst);
                                 batch_writer.send(output).await;
                             }
@@ -704,21 +753,29 @@ impl WorkQueue {
                             } => {
                                 state.failed_assets.fetch_add(1, Ordering::SeqCst);
                                 batch_writer
-                                    .send(crate::task_system::db_writer::ProcessingOutput::Failure {
-                                        asset_id,
-                                        category,
-                                        error,
-                                    })
+                                    .send(
+                                        crate::task_system::db_writer::ProcessingOutput::Failure {
+                                            asset_id,
+                                            category,
+                                            error,
+                                        },
+                                    )
                                     .await;
                             }
                             _ => {
                                 state.failed_assets.fetch_add(1, Ordering::SeqCst);
                                 batch_writer
-                                    .send(crate::task_system::db_writer::ProcessingOutput::Failure {
-                                        asset_id: batch_assets.first().map(|a| a.id).unwrap_or(0),
-                                        category,
-                                        error: "Unexpected processing output for CLAP batch".to_string(),
-                                    })
+                                    .send(
+                                        crate::task_system::db_writer::ProcessingOutput::Failure {
+                                            asset_id: batch_assets
+                                                .first()
+                                                .map(|a| a.id)
+                                                .unwrap_or(0),
+                                            category,
+                                            error: "Unexpected processing output for CLAP batch"
+                                                .to_string(),
+                                        },
+                                    )
                                     .await;
                             }
                         }
@@ -735,23 +792,25 @@ impl WorkQueue {
                             let mut batch_map = HashMap::with_capacity(batch_assets.len());
                             for asset in &batch_assets {
                                 if let Some(result) = shared.get(&asset.id) {
-                                    batch_map.insert(asset.id, match result {
-                                        Ok(bytes) => Ok(bytes.clone()),
-                                        Err(e) => Err(e.clone()),
-                                    });
+                                    batch_map.insert(
+                                        asset.id,
+                                        match result {
+                                            Ok(bytes) => Ok(bytes.clone()),
+                                            Err(e) => Err(e.clone()),
+                                        },
+                                    );
                                 }
                             }
                             Some(batch_map)
-                        } else if batch_assets.len() > 1 && batch_assets[0].zip_file.is_some()
+                        } else if batch_assets.len() > 1
+                            && batch_assets[0].zip_file.is_some()
                             && zip_cache::nested_zip_group_key(&batch_assets[0]).is_none()
                         {
                             // Fallback: bulk-extract for non-nested ZIP batches not from dispatcher
                             let zip_path = crate::utils::resolve_zip_path(&batch_assets[0]);
                             let entries: Vec<(i64, String)> = batch_assets
                                 .iter()
-                                .filter_map(|a| {
-                                    a.zip_entry.as_ref().map(|e| (a.id, e.clone()))
-                                })
+                                .filter_map(|a| a.zip_entry.as_ref().map(|e| (a.id, e.clone())))
                                 .collect();
                             match tokio::task::spawn_blocking(move || {
                                 let refs: Vec<(i64, &str)> =
@@ -834,7 +893,13 @@ impl WorkQueue {
     }
 
     /// Spawn a task that periodically emits progress events for a category
-    async fn spawn_progress_emitter(&self, category: ProcessingCategory, app_handle: AppHandle, batch_writer: DbBatchWriter, pool: SqlitePool) {
+    async fn spawn_progress_emitter(
+        &self,
+        category: ProcessingCategory,
+        app_handle: AppHandle,
+        batch_writer: DbBatchWriter,
+        pool: SqlitePool,
+    ) {
         let state = self.ensure_category_state(category).await;
         let category_str = category.as_str().to_string();
 
@@ -1008,7 +1073,9 @@ impl WorkQueue {
         // Check if all categories are stopped
         let all_stopped = {
             let states = self.category_states.read().await;
-            states.values().all(|s| !s.is_running.load(Ordering::SeqCst))
+            states
+                .values()
+                .all(|s| !s.is_running.load(Ordering::SeqCst))
         };
 
         // If all categories stopped, wait for workers to finish gracefully
@@ -1039,7 +1106,10 @@ impl WorkQueue {
     }
 
     /// Get processing progress for a specific category or all categories
-    pub async fn get_progress(&self, category: Option<ProcessingCategory>) -> Vec<ProcessingProgress> {
+    pub async fn get_progress(
+        &self,
+        category: Option<ProcessingCategory>,
+    ) -> Vec<ProcessingProgress> {
         let states = self.category_states.read().await;
 
         match category {
@@ -1070,18 +1140,16 @@ impl WorkQueue {
                 // Return progress for all categories
                 states
                     .iter()
-                    .map(|(cat, state)| {
-                        ProcessingProgress {
-                            category: cat.as_str().to_string(),
-                            total: state.total_assets.load(Ordering::SeqCst),
-                            completed: state.completed_assets.load(Ordering::SeqCst),
-                            failed: state.failed_assets.load(Ordering::SeqCst),
-                            is_paused: state.pause_signal.load(Ordering::SeqCst),
-                            is_running: state.is_running.load(Ordering::SeqCst),
-                            current_file: None,
-                            processing_rate: 0.0,
-                            eta_seconds: None,
-                        }
+                    .map(|(cat, state)| ProcessingProgress {
+                        category: cat.as_str().to_string(),
+                        total: state.total_assets.load(Ordering::SeqCst),
+                        completed: state.completed_assets.load(Ordering::SeqCst),
+                        failed: state.failed_assets.load(Ordering::SeqCst),
+                        is_paused: state.pause_signal.load(Ordering::SeqCst),
+                        is_running: state.is_running.load(Ordering::SeqCst),
+                        current_file: None,
+                        processing_rate: 0.0,
+                        eta_seconds: None,
                     })
                     .collect()
             }
@@ -1129,10 +1197,7 @@ impl WorkQueue {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
-            return Err(format!(
-                "Category '{}' already running",
-                category.as_str()
-            ));
+            return Err(format!("Category '{}' already running", category.as_str()));
         }
 
         // Reset signals / counters
@@ -1192,7 +1257,9 @@ impl WorkQueue {
             let batch_writer = self.ensure_db_writer(db_path).await;
             let num_workers = 2; // fewer workers in tests
             for worker_id in 0..num_workers {
-                let handle = self.spawn_worker(worker_id, db.clone(), batch_writer.clone()).await;
+                let handle = self
+                    .spawn_worker(worker_id, db.clone(), batch_writer.clone())
+                    .await;
                 handles.push(handle);
             }
         }
@@ -1259,9 +1326,6 @@ impl WorkQueue {
 /// At α=0.1 with 2s ticks, effective window is ~20 ticks (~40s).
 const EWMA_ALPHA: f64 = 0.1;
 
-/// Blend factor for display rate: 70% EWMA + 30% global average.
-const EWMA_BLEND: f64 = 0.7;
-
 /// State for EWMA-based rate estimation, local to each progress emitter run.
 struct RateEstimator {
     prev_processed: usize,
@@ -1311,11 +1375,7 @@ impl RateEstimator {
             self.ewma_rate = EWMA_ALPHA * instant_rate + (1.0 - EWMA_ALPHA) * self.ewma_rate;
         }
 
-        // Global average rate
-        let global_rate = processed as f64 / elapsed_secs;
-
-        // Blend EWMA with global average for stability
-        let display_rate = EWMA_BLEND * self.ewma_rate + (1.0 - EWMA_BLEND) * global_rate;
+        let display_rate = self.ewma_rate;
 
         let remaining = total.saturating_sub(processed);
         if display_rate > 0.0 {
@@ -1455,8 +1515,22 @@ mod tests {
         // 2 ZIP groups (pack_a with 3 assets, pack_b with 2)
         assert_eq!(plan.zip_groups.len(), 2);
         // Sorted by size descending: pack_a (3) before pack_b (2)
-        assert_eq!(plan.zip_groups[0].batches.iter().map(|b| b.assets.len()).sum::<usize>(), 3);
-        assert_eq!(plan.zip_groups[1].batches.iter().map(|b| b.assets.len()).sum::<usize>(), 2);
+        assert_eq!(
+            plan.zip_groups[0]
+                .batches
+                .iter()
+                .map(|b| b.assets.len())
+                .sum::<usize>(),
+            3
+        );
+        assert_eq!(
+            plan.zip_groups[1]
+                .batches
+                .iter()
+                .map(|b| b.assets.len())
+                .sum::<usize>(),
+            2
+        );
 
         // 1 non-ZIP batch (plain.wav)
         assert_eq!(plan.non_zip.len(), 1);
@@ -1486,14 +1560,30 @@ mod tests {
 
         // Both ZIP groups should exist with ALL their assets (globally grouped)
         assert_eq!(plan.zip_groups.len(), 2);
-        let total_zip_assets: usize = plan.zip_groups.iter()
+        let total_zip_assets: usize = plan
+            .zip_groups
+            .iter()
             .flat_map(|g| &g.batches)
             .map(|b| b.assets.len())
             .sum();
         assert_eq!(total_zip_assets, 5);
         // pack_a has 3, pack_b has 2
-        assert_eq!(plan.zip_groups[0].batches.iter().map(|b| b.assets.len()).sum::<usize>(), 3);
-        assert_eq!(plan.zip_groups[1].batches.iter().map(|b| b.assets.len()).sum::<usize>(), 2);
+        assert_eq!(
+            plan.zip_groups[0]
+                .batches
+                .iter()
+                .map(|b| b.assets.len())
+                .sum::<usize>(),
+            3
+        );
+        assert_eq!(
+            plan.zip_groups[1]
+                .batches
+                .iter()
+                .map(|b| b.assets.len())
+                .sum::<usize>(),
+            2
+        );
         assert_eq!(plan.non_zip.len(), 0);
     }
 
@@ -1512,7 +1602,11 @@ mod tests {
         let plan = WorkQueue::build_batch_plan(ProcessingCategory::Audio, 3, assets, false);
 
         assert_eq!(plan.zip_groups.len(), 1);
-        let batch_sizes: Vec<usize> = plan.zip_groups[0].batches.iter().map(|b| b.assets.len()).collect();
+        let batch_sizes: Vec<usize> = plan.zip_groups[0]
+            .batches
+            .iter()
+            .map(|b| b.assets.len())
+            .collect();
         assert_eq!(batch_sizes, vec![NESTED_ZIP_BATCH_SIZE, 2]);
     }
 
@@ -1532,12 +1626,17 @@ mod tests {
 
         // No batch should contain assets from different ZIP keys
         for batch in &plan.non_zip {
-            let keys: Vec<_> = batch.assets.iter()
+            let keys: Vec<_> = batch
+                .assets
+                .iter()
                 .map(|a| zip_cache::nested_zip_group_key(a))
                 .collect();
             let first = &keys[0];
-            assert!(keys.iter().all(|k| k == first),
-                "CLAP batch should not cross key boundaries: {:?}", keys);
+            assert!(
+                keys.iter().all(|k| k == first),
+                "CLAP batch should not cross key boundaries: {:?}",
+                keys
+            );
         }
     }
 
@@ -1714,7 +1813,12 @@ mod tests {
 
         // --- first category ---
         queue
-            .start_for_test(ProcessingCategory::Image, image_assets, db.clone(), &db_path_str)
+            .start_for_test(
+                ProcessingCategory::Image,
+                image_assets,
+                db.clone(),
+                &db_path_str,
+            )
             .await
             .unwrap();
         let ok = queue
@@ -1727,13 +1831,21 @@ mod tests {
 
         // --- second category (workers must respawn) ---
         queue
-            .start_for_test(ProcessingCategory::Audio, audio_assets, db.clone(), &db_path_str)
+            .start_for_test(
+                ProcessingCategory::Audio,
+                audio_assets,
+                db.clone(),
+                &db_path_str,
+            )
             .await
             .unwrap();
         let ok = queue
             .wait_for_category_completion(ProcessingCategory::Audio, Duration::from_secs(30))
             .await;
-        assert!(ok, "Audio processing should complete after images (workers must respawn)");
+        assert!(
+            ok,
+            "Audio processing should complete after images (workers must respawn)"
+        );
 
         let (img_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM image_metadata")
             .fetch_one(&db)
@@ -1761,7 +1873,12 @@ mod tests {
 
         let queue = WorkQueue::new();
         queue
-            .start_for_test(ProcessingCategory::Image, assets.clone(), db.clone(), &db_path_str)
+            .start_for_test(
+                ProcessingCategory::Image,
+                assets.clone(),
+                db.clone(),
+                &db_path_str,
+            )
             .await
             .unwrap();
 
@@ -1811,11 +1928,10 @@ mod tests {
         assert_eq!(progress[0].failed, 3);
         assert_eq!(progress[0].completed, 0);
 
-        let (err_count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM processing_errors")
-                .fetch_one(&db)
-                .await
-                .unwrap();
+        let (err_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM processing_errors")
+            .fetch_one(&db)
+            .await
+            .unwrap();
         assert_eq!(err_count, 3);
     }
 

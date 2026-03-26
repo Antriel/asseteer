@@ -1,9 +1,9 @@
+use crate::models::Asset;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek};
 use std::time::UNIX_EPOCH;
 use zip::ZipArchive;
-use crate::models::Asset;
 
 /// Seconds since Unix epoch as i64.
 pub fn unix_now() -> i64 {
@@ -27,7 +27,10 @@ pub fn resolve_asset_fs_path(asset: &Asset) -> String {
     if asset.rel_path.is_empty() {
         format!("{}/{}", asset.folder_path, asset.filename)
     } else {
-        format!("{}/{}/{}", asset.folder_path, asset.rel_path, asset.filename)
+        format!(
+            "{}/{}/{}",
+            asset.folder_path, asset.rel_path, asset.filename
+        )
     }
 }
 
@@ -75,8 +78,7 @@ pub fn load_asset_bytes(asset: &Asset) -> Result<Vec<u8>, String> {
 
 /// Load bytes from a regular filesystem path
 fn load_from_filesystem(path: &str) -> Result<Vec<u8>, String> {
-    std::fs::read(path)
-        .map_err(|e| format!("Failed to read file {}: {}", path, e))
+    std::fs::read(path).map_err(|e| format!("Failed to read file {}: {}", path, e))
 }
 
 /// Load bytes from a zip archive entry (supports nested zips)
@@ -84,8 +86,8 @@ fn load_from_filesystem(path: &str) -> Result<Vec<u8>, String> {
 /// The entry_path can contain nested zips, e.g., "inner.zip/folder/image.png"
 /// which means: open inner.zip inside the outer zip, then extract folder/image.png
 fn load_from_zip(zip_path: &str, entry_path: &str) -> Result<Vec<u8>, String> {
-    let zip_file = File::open(zip_path)
-        .map_err(|e| format!("Failed to open zip file {}: {}", zip_path, e))?;
+    let zip_file =
+        File::open(zip_path).map_err(|e| format!("Failed to open zip file {}: {}", zip_path, e))?;
 
     let archive = ZipArchive::new(zip_file)
         .map_err(|e| format!("Failed to read zip archive {}: {}", zip_path, e))?;
@@ -97,7 +99,7 @@ fn load_from_zip(zip_path: &str, entry_path: &str) -> Result<Vec<u8>, String> {
 fn load_from_zip_recursive<R: Read + Seek>(
     mut archive: ZipArchive<R>,
     entry_path: &str,
-    context: &str,  // For error messages
+    context: &str, // For error messages
 ) -> Result<Vec<u8>, String> {
     // Check if entry_path contains a nested zip
     // We look for ".zip/" pattern which indicates a nested zip to traverse
@@ -106,28 +108,45 @@ fn load_from_zip_recursive<R: Read + Seek>(
         let remaining_path = &remaining_path[1..]; // Skip the '/'
 
         // Extract the nested zip into memory
-        let mut entry = archive.by_name(nested_zip_path)
-            .map_err(|e| format!("Failed to find nested zip {} in {}: {}", nested_zip_path, context, e))?;
+        let mut entry = archive.by_name(nested_zip_path).map_err(|e| {
+            format!(
+                "Failed to find nested zip {} in {}: {}",
+                nested_zip_path, context, e
+            )
+        })?;
 
         let mut buffer = Vec::new();
-        entry.read_to_end(&mut buffer)
-            .map_err(|e| format!("Failed to read nested zip {} from {}: {}", nested_zip_path, context, e))?;
+        entry.read_to_end(&mut buffer).map_err(|e| {
+            format!(
+                "Failed to read nested zip {} from {}: {}",
+                nested_zip_path, context, e
+            )
+        })?;
 
         // Open the nested zip and continue recursively
         let cursor = Cursor::new(buffer);
-        let nested_archive = ZipArchive::new(cursor)
-            .map_err(|e| format!("Failed to open nested zip {} from {}: {}", nested_zip_path, context, e))?;
+        let nested_archive = ZipArchive::new(cursor).map_err(|e| {
+            format!(
+                "Failed to open nested zip {} from {}: {}",
+                nested_zip_path, context, e
+            )
+        })?;
 
         let nested_context = format!("{}/{}", context, nested_zip_path);
         load_from_zip_recursive(nested_archive, remaining_path, &nested_context)
     } else {
         // No more nested zips, extract the final file
-        let mut entry = archive.by_name(entry_path)
+        let mut entry = archive
+            .by_name(entry_path)
             .map_err(|e| format!("Failed to find entry {} in {}: {}", entry_path, context, e))?;
 
         let mut buffer = Vec::new();
-        entry.read_to_end(&mut buffer)
-            .map_err(|e| format!("Failed to read entry {} from {}: {}", entry_path, context, e))?;
+        entry.read_to_end(&mut buffer).map_err(|e| {
+            format!(
+                "Failed to read entry {} from {}: {}",
+                entry_path, context, e
+            )
+        })?;
 
         Ok(buffer)
     }
@@ -150,7 +169,10 @@ fn find_nested_zip_boundary(path: &str) -> Option<usize> {
 /// repeated central-directory parsing that dominates per-entry I/O cost.
 ///
 /// Returns a map from asset_id to the extracted bytes (or an error string).
-pub fn bulk_load_from_zip(zip_path: &str, entries: &[(i64, &str)]) -> HashMap<i64, Result<Vec<u8>, String>> {
+pub fn bulk_load_from_zip(
+    zip_path: &str,
+    entries: &[(i64, &str)],
+) -> HashMap<i64, Result<Vec<u8>, String>> {
     let mut results = HashMap::with_capacity(entries.len());
 
     let zip_file = match File::open(zip_path) {
@@ -218,7 +240,10 @@ pub fn bulk_load_from_archive<R: Read + Seek>(
                         )),
                     }
                 }
-                Err(e) => Err(format!("Failed to find entry {} in archive: {}", entry_path, e)),
+                Err(e) => Err(format!(
+                    "Failed to find entry {} in archive: {}",
+                    entry_path, e
+                )),
             };
             results.insert(asset.id, result);
         }
@@ -256,10 +281,7 @@ mod tests {
 
     #[test]
     fn test_zip_boundary_case_insensitive() {
-        assert_eq!(
-            find_nested_zip_boundary("ARCHIVE.ZIP/image.png"),
-            Some(11)
-        );
+        assert_eq!(find_nested_zip_boundary("ARCHIVE.ZIP/image.png"), Some(11));
     }
 
     #[test]
@@ -291,7 +313,10 @@ mod tests {
             modified_at: 0,
             folder_path: "D:/Assets".into(),
         };
-        assert_eq!(resolve_asset_fs_path(&asset), "D:/Assets/Packs/textures/grass.png");
+        assert_eq!(
+            resolve_asset_fs_path(&asset),
+            "D:/Assets/Packs/textures/grass.png"
+        );
     }
 
     #[test]

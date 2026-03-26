@@ -64,21 +64,26 @@ pub async fn open_reader_pool(path: &str) -> SqlitePool {
 
 /// Insert a source folder and return its ID.
 pub async fn insert_source_folder(pool: &SqlitePool, path: &str, label: &str) -> i64 {
-    let result = sqlx::query(
-        "INSERT INTO source_folders (path, label, added_at) VALUES (?, ?, 1000000)",
-    )
-    .bind(path)
-    .bind(label)
-    .execute(pool)
-    .await
-    .expect("Failed to insert test source folder");
+    let result =
+        sqlx::query("INSERT INTO source_folders (path, label, added_at) VALUES (?, ?, 1000000)")
+            .bind(path)
+            .bind(label)
+            .execute(pool)
+            .await
+            .expect("Failed to insert test source folder");
 
     result.last_insert_rowid()
 }
 
 /// Build an Asset struct. ID will be 0; call `insert_asset` to get a real ID.
 /// `folder_id` must reference an existing source_folder row.
-pub fn make_asset(filename: &str, folder_id: i64, rel_path: &str, asset_type: &str, format: &str) -> Asset {
+pub fn make_asset(
+    filename: &str,
+    folder_id: i64,
+    rel_path: &str,
+    asset_type: &str,
+    format: &str,
+) -> Asset {
     Asset {
         id: 0,
         filename: filename.to_string(),
@@ -124,9 +129,7 @@ pub async fn insert_asset(pool: &SqlitePool, asset: &Asset) -> i64 {
 /// Create a 64x48 RGBA test PNG at `dir/<name>`.
 pub fn create_test_png(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
-    let img = image::RgbaImage::from_fn(64, 48, |x, y| {
-        image::Rgba([x as u8, y as u8, 128, 255])
-    });
+    let img = image::RgbaImage::from_fn(64, 48, |x, y| image::Rgba([x as u8, y as u8, 128, 255]));
     img.save(&path).expect("Failed to save test PNG");
     path
 }

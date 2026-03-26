@@ -100,9 +100,7 @@ class ProcessingState {
     }
 
     if (!anyRunning && total > 0) {
-      const durationMs = this.processingStartedAt
-        ? Date.now() - this.processingStartedAt
-        : 0;
+      const durationMs = this.processingStartedAt ? Date.now() - this.processingStartedAt : 0;
       this.lastRunResult = { total, completed, failed, durationMs };
       this.processingStartedAt = null;
     }
@@ -541,7 +539,11 @@ export function canStartCategory(state: ProcessingState, category: ProcessingCat
   const pendingCount = state.getPendingCountForCategory(category);
 
   // Can start if: has pending items AND not currently running
-  return pendingCount > 0 && !state.startingCategories.has(category) && (!progress || !progress.isRunning);
+  return (
+    pendingCount > 0 &&
+    !state.startingCategories.has(category) &&
+    (!progress || !progress.isRunning)
+  );
 }
 
 /**

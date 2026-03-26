@@ -118,13 +118,11 @@ async fn test_search_not_blocked_by_thumbnail_writes() {
     let write_handle = tokio::spawn(async move {
         let fake_thumb = vec![0u8; 5_000]; // ~5 KB thumbnail
         for i in 1i64..=200 {
-            let _ = sqlx::query(
-                "UPDATE image_metadata SET thumbnail_data = ? WHERE asset_id = ?",
-            )
-            .bind(&fake_thumb)
-            .bind(i)
-            .execute(&writer)
-            .await;
+            let _ = sqlx::query("UPDATE image_metadata SET thumbnail_data = ? WHERE asset_id = ?")
+                .bind(&fake_thumb)
+                .bind(i)
+                .execute(&writer)
+                .await;
             // Small delay to spread writes over time
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -192,13 +190,11 @@ async fn test_search_not_blocked_without_busy_timeout() {
     let write_handle = tokio::spawn(async move {
         let fake_thumb = vec![0u8; 5_000];
         for i in 1i64..=100 {
-            let _ = sqlx::query(
-                "UPDATE image_metadata SET thumbnail_data = ? WHERE asset_id = ?",
-            )
-            .bind(&fake_thumb)
-            .bind(i)
-            .execute(&writer)
-            .await;
+            let _ = sqlx::query("UPDATE image_metadata SET thumbnail_data = ? WHERE asset_id = ?")
+                .bind(&fake_thumb)
+                .bind(i)
+                .execute(&writer)
+                .await;
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
     });
@@ -246,7 +242,10 @@ async fn test_search_not_blocked_without_busy_timeout() {
 
     match search_result {
         Ok(Ok(rows)) => {
-            println!("Search returned {} rows (no busy_timeout reader)", rows.len());
+            println!(
+                "Search returned {} rows (no busy_timeout reader)",
+                rows.len()
+            );
         }
         Ok(Err(e)) => {
             let msg = e.to_string();

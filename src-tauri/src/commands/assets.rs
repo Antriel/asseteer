@@ -1,6 +1,6 @@
+use crate::models::Asset;
 use crate::zip_cache;
 use crate::AppState;
-use crate::models::Asset;
 use tauri::ipc::Response;
 use tauri::State;
 
@@ -16,7 +16,7 @@ pub async fn get_asset_bytes(
         "SELECT a.*, sf.path as folder_path
          FROM assets a
          JOIN source_folders sf ON a.folder_id = sf.id
-         WHERE a.id = ?"
+         WHERE a.id = ?",
     )
     .bind(asset_id)
     .fetch_one(&state.pool)

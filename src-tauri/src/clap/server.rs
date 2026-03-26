@@ -144,14 +144,17 @@ fn detect_pytorch_index() -> Option<String> {
         "https://download.pytorch.org/whl/cu128"
     };
 
-    println!("[CLAP] GPU detected (compute capability {}), using {}", cap_str.trim(), index);
+    println!(
+        "[CLAP] GPU detected (compute capability {}), using {}",
+        cap_str.trim(),
+        index
+    );
     Some(index.to_string())
 }
 
 /// Locate the clap-server directory relative to cwd.
 fn find_clap_server_dir() -> Result<std::path::PathBuf, String> {
-    let cwd =
-        std::env::current_dir().map_err(|e| format!("Failed to get current dir: {}", e))?;
+    let cwd = std::env::current_dir().map_err(|e| format!("Failed to get current dir: {}", e))?;
 
     // Try cwd first, then parent (Tauri runs from src-tauri/)
     if cwd.join("clap-server").exists() {
@@ -175,7 +178,10 @@ fn find_clap_server_dir() -> Result<std::path::PathBuf, String> {
 /// Tries `uv run` first (automatic Python management). If uv download fails
 /// and a manual venv exists, falls back to using the venv directly.
 /// Server output is captured to a log file in the app data directory.
-async fn start_server_process(clap_dir: &std::path::Path, port: u16) -> Result<(Child, PathBuf), String> {
+async fn start_server_process(
+    clap_dir: &std::path::Path,
+    port: u16,
+) -> Result<(Child, PathBuf), String> {
     let (stdout, stderr, log_path) = logs::create_log_file()?;
 
     // Emit download event only if uv isn't already cached
@@ -223,7 +229,8 @@ async fn start_server_process(clap_dir: &std::path::Path, port: u16) -> Result<(
                 "[CLAP] uv not available ({}), trying manual venv fallback...",
                 uv_err
             );
-            let child = start_server_venv_fallback(clap_dir, port, stdout, stderr, log_path.clone())?;
+            let child =
+                start_server_venv_fallback(clap_dir, port, stdout, stderr, log_path.clone())?;
             Ok((child, log_path))
         }
     }
@@ -282,7 +289,10 @@ fn start_server_venv_fallback(
 /// (~500MB CPU / ~8GB GPU) + the HuggingFace model (~1-2GB).
 /// We check process liveness on every iteration for a fast-fail if the
 /// process died, and tail the log every 10s to show download progress.
-async fn wait_for_server_ready(child: &mut Child, log_path: &std::path::Path) -> Result<(), String> {
+async fn wait_for_server_ready(
+    child: &mut Child,
+    log_path: &std::path::Path,
+) -> Result<(), String> {
     println!("[CLAP] Waiting for server to be ready (GPU first-run may take 20+ minutes)...");
 
     // 30 minutes at 500ms intervals
@@ -342,7 +352,16 @@ fn read_log_last_meaningful_line(log_path: &std::path::Path) -> Option<String> {
     let mut buf = String::new();
     file.read_to_string(&mut buf).ok()?;
 
-    let keywords = ["Downloading", "Installing", "Resolved", "Built", "Fetching", "Audited", "error", "Error"];
+    let keywords = [
+        "Downloading",
+        "Installing",
+        "Resolved",
+        "Built",
+        "Fetching",
+        "Audited",
+        "error",
+        "Error",
+    ];
 
     // Prefer a line that looks like uv/pip progress
     let meaningful = buf.lines().rev().find(|l| {
@@ -378,11 +397,7 @@ fn read_log_tail(log_path: &std::path::Path) -> Option<String> {
 /// Call the /preload endpoint to ensure the model is loaded.
 /// Non-fatal — just logs if it fails.
 async fn call_preload() {
-    match get_clap_client()
-        .await
-        .preload()
-        .await
-    {
+    match get_clap_client().await.preload().await {
         Ok(()) => println!("[CLAP] Model preloaded successfully"),
         Err(e) => println!("[CLAP] Preload call failed (non-fatal): {}", e),
     }

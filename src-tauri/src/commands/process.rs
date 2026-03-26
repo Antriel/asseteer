@@ -16,7 +16,10 @@ pub async fn start_processing(
 
     // Check if this category is already running
     if state.work_queue.is_running(cat).await {
-        return Err(format!("Processing for category '{}' is already running", category));
+        return Err(format!(
+            "Processing for category '{}' is already running",
+            category
+        ));
     }
 
     // Get pending assets for this category (with folder_path from JOIN)
@@ -41,22 +44,20 @@ pub async fn start_processing(
                  ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry"
             };
             sqlx::query_as(query)
-            .fetch_all(&state.pool)
-            .await
-            .map_err(|e| format!("Failed to query pending images: {}", e))?
+                .fetch_all(&state.pool)
+                .await
+                .map_err(|e| format!("Failed to query pending images: {}", e))?
         }
-        ProcessingCategory::Audio => {
-            sqlx::query_as(
-                "SELECT a.*, sf.path as folder_path FROM assets a
+        ProcessingCategory::Audio => sqlx::query_as(
+            "SELECT a.*, sf.path as folder_path FROM assets a
                  JOIN source_folders sf ON a.folder_id = sf.id
                  LEFT JOIN audio_metadata am ON a.id = am.asset_id
                  WHERE a.asset_type = 'audio' AND am.asset_id IS NULL
-                 ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry"
-            )
-            .fetch_all(&state.pool)
-            .await
-            .map_err(|e| format!("Failed to query pending audio: {}", e))?
-        }
+                 ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| format!("Failed to query pending audio: {}", e))?,
         ProcessingCategory::Clap => {
             // CLAP embeddings - audio assets without embeddings
             // Sort by folder_id + rel_path + zip_file so files from the same ZIP/nested ZIP
@@ -66,7 +67,7 @@ pub async fn start_processing(
                  JOIN source_folders sf ON a.folder_id = sf.id
                  LEFT JOIN audio_embeddings ae ON a.id = ae.asset_id
                  WHERE a.asset_type = 'audio' AND ae.asset_id IS NULL
-                 ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry"
+                 ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry",
             )
             .fetch_all(&state.pool)
             .await
@@ -75,14 +76,29 @@ pub async fn start_processing(
     };
 
     if assets.is_empty() {
-        return Err(format!("No pending assets to process for category '{}'", category));
+        return Err(format!(
+            "No pending assets to process for category '{}'",
+            category
+        ));
     }
 
-    println!("[ProcessingQueue] Starting processing of {} {} assets", assets.len(), category);
+    println!(
+        "[ProcessingQueue] Starting processing of {} {} assets",
+        assets.len(),
+        category
+    );
 
     // Start the work queue for this category
-    state.work_queue
-        .start(cat, assets, state.pool.clone(), &state.db_path, app.clone(), pre_generate_thumbnails)
+    state
+        .work_queue
+        .start(
+            cat,
+            assets,
+            state.pool.clone(),
+            &state.db_path,
+            app.clone(),
+            pre_generate_thumbnails,
+        )
         .await?;
 
     Ok(())
@@ -98,15 +114,24 @@ pub async fn pause_processing(
     let cat = ProcessingCategory::from_str(&category)?;
 
     if !state.work_queue.is_running(cat).await {
-        return Err(format!("Processing for category '{}' is not running", category));
+        return Err(format!(
+            "Processing for category '{}' is not running",
+            category
+        ));
     }
 
     if state.work_queue.is_paused(cat).await {
-        return Err(format!("Processing for category '{}' is already paused", category));
+        return Err(format!(
+            "Processing for category '{}' is already paused",
+            category
+        ));
     }
 
     state.work_queue.pause(cat).await;
-    println!("[ProcessingQueue] Processing paused for category '{}'", category);
+    println!(
+        "[ProcessingQueue] Processing paused for category '{}'",
+        category
+    );
 
     // Emit immediate progress update with paused state
     let progress = state.work_queue.get_progress(Some(cat)).await;
@@ -128,15 +153,24 @@ pub async fn resume_processing(
     let cat = ProcessingCategory::from_str(&category)?;
 
     if !state.work_queue.is_running(cat).await {
-        return Err(format!("Processing for category '{}' is not running", category));
+        return Err(format!(
+            "Processing for category '{}' is not running",
+            category
+        ));
     }
 
     if !state.work_queue.is_paused(cat).await {
-        return Err(format!("Processing for category '{}' is not paused", category));
+        return Err(format!(
+            "Processing for category '{}' is not paused",
+            category
+        ));
     }
 
     state.work_queue.resume(cat).await;
-    println!("[ProcessingQueue] Processing resumed for category '{}'", category);
+    println!(
+        "[ProcessingQueue] Processing resumed for category '{}'",
+        category
+    );
 
     // Emit immediate progress update with resumed state
     let progress = state.work_queue.get_progress(Some(cat)).await;
@@ -158,11 +192,17 @@ pub async fn stop_processing(
     let cat = ProcessingCategory::from_str(&category)?;
 
     if !state.work_queue.is_running(cat).await {
-        return Err(format!("Processing for category '{}' is not running", category));
+        return Err(format!(
+            "Processing for category '{}' is not running",
+            category
+        ));
     }
 
     state.work_queue.stop(cat, state.pool.clone()).await;
-    println!("[ProcessingQueue] Processing stopped for category '{}'", category);
+    println!(
+        "[ProcessingQueue] Processing stopped for category '{}'",
+        category
+    );
 
     // Emit immediate progress update with stopped state
     let progress = state.work_queue.get_progress(Some(cat)).await;
@@ -203,7 +243,7 @@ pub async fn get_processing_errors(
                  JOIN assets a ON e.asset_id = a.id
                  JOIN source_folders sf ON a.folder_id = sf.id
                  WHERE e.resolved_at IS NULL AND e.category = ?
-                 ORDER BY e.occurred_at DESC"
+                 ORDER BY e.occurred_at DESC",
             )
             .bind(cat)
             .fetch_all(&state.pool)
@@ -217,7 +257,7 @@ pub async fn get_processing_errors(
                  JOIN assets a ON e.asset_id = a.id
                  JOIN source_folders sf ON a.folder_id = sf.id
                  WHERE e.resolved_at IS NULL
-                 ORDER BY e.occurred_at DESC"
+                 ORDER BY e.occurred_at DESC",
             )
             .fetch_all(&state.pool)
             .await
@@ -250,7 +290,7 @@ pub async fn retry_failed_assets(
          JOIN source_folders sf ON a.folder_id = sf.id
          JOIN processing_errors e ON a.id = e.asset_id
          WHERE e.category = ? AND e.resolved_at IS NULL
-         ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry"
+         ORDER BY a.folder_id, a.rel_path, a.zip_file, a.zip_entry",
     )
     .bind(&category)
     .fetch_all(&state.pool)
@@ -274,7 +314,7 @@ pub async fn retry_failed_assets(
     sqlx::query(
         "UPDATE processing_errors
          SET retry_count = retry_count + 1
-         WHERE category = ? AND resolved_at IS NULL"
+         WHERE category = ? AND resolved_at IS NULL",
     )
     .bind(&category)
     .execute(&state.pool)
@@ -300,7 +340,7 @@ pub async fn clear_processing_errors(
     let result = match (&category, only_resolved) {
         (Some(cat), true) => {
             sqlx::query(
-                "DELETE FROM processing_errors WHERE category = ? AND resolved_at IS NOT NULL"
+                "DELETE FROM processing_errors WHERE category = ? AND resolved_at IS NOT NULL",
             )
             .bind(cat)
             .execute(&state.pool)

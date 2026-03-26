@@ -3,20 +3,19 @@ use crate::clap::{embedding_to_blob, ensure_server_running, get_clap_client};
 use crate::models::Asset;
 use crate::task_system::db_writer::ProcessingOutput;
 use crate::utils::resolve_asset_fs_path;
-use crate::zip_cache;
-use image::{DynamicImage, GenericImageView};
-use std::time::{Duration, Instant};
-#[cfg(test)]
-use sqlx::SqlitePool;
 #[cfg(test)]
 use crate::utils::unix_now;
+use crate::zip_cache;
+use image::{DynamicImage, GenericImageView};
+#[cfg(test)]
+use sqlx::SqlitePool;
+use std::time::{Duration, Instant};
 
 /// Timeout for processing a single asset (30 seconds)
 const PROCESSING_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Timeout for nested ZIP assets (processing only — gate/cache wait is excluded)
 const NESTED_ZIP_PROCESSING_TIMEOUT: Duration = Duration::from_secs(60);
-
 
 /// Result of processing an asset
 #[derive(Debug, Clone)]
@@ -29,7 +28,11 @@ pub struct ProcessingResult {
 /// Process a single asset (thumbnail + metadata combined).
 /// Used by unit tests; production path uses `process_asset_cpu` + `DbBatchWriter`.
 #[cfg(test)]
-pub async fn process_asset(asset: &Asset, db: &SqlitePool, pre_generate_thumbnails: bool) -> ProcessingResult {
+pub async fn process_asset(
+    asset: &Asset,
+    db: &SqlitePool,
+    pre_generate_thumbnails: bool,
+) -> ProcessingResult {
     match asset.asset_type.as_str() {
         "image" => process_image(asset, db, pre_generate_thumbnails).await,
         "audio" => process_audio(asset, db).await,
@@ -43,22 +46,43 @@ pub async fn process_asset(asset: &Asset, db: &SqlitePool, pre_generate_thumbnai
 
 /// Process an image asset. Extracts dimensions; optionally generates thumbnail inline.
 #[cfg(test)]
-async fn process_image(asset: &Asset, db: &SqlitePool, pre_generate_thumbnails: bool) -> ProcessingResult {
+async fn process_image(
+    asset: &Asset,
+    db: &SqlitePool,
+    pre_generate_thumbnails: bool,
+) -> ProcessingResult {
     let asset_id = asset.id;
     let uses_nested_zip = zip_cache::is_nested_zip_asset(asset);
 
     // Load bytes outside the processing timeout — gate/cache wait is not counted
     let asset_clone = asset.clone();
-    let bytes = match tokio::task::spawn_blocking(move || {
-        zip_cache::load_asset_bytes_cached(&asset_clone)
-    }).await {
-        Ok(Ok(bytes)) => bytes,
-        Ok(Err(e)) => return ProcessingResult { asset_id, success: false, error: Some(e) },
-        Err(e) => return ProcessingResult { asset_id, success: false, error: Some(format!("Task join error: {}", e)) },
-    };
+    let bytes =
+        match tokio::task::spawn_blocking(move || zip_cache::load_asset_bytes_cached(&asset_clone))
+            .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => {
+                return ProcessingResult {
+                    asset_id,
+                    success: false,
+                    error: Some(e),
+                }
+            }
+            Err(e) => {
+                return ProcessingResult {
+                    asset_id,
+                    success: false,
+                    error: Some(format!("Task join error: {}", e)),
+                }
+            }
+        };
 
     // Timeout covers only CPU-intensive processing (decode + optional thumbnail)
-    let timeout = if uses_nested_zip { NESTED_ZIP_PROCESSING_TIMEOUT } else { PROCESSING_TIMEOUT };
+    let timeout = if uses_nested_zip {
+        NESTED_ZIP_PROCESSING_TIMEOUT
+    } else {
+        PROCESSING_TIMEOUT
+    };
     let result = tokio::time::timeout(
         timeout,
         tokio::task::spawn_blocking(move || {
@@ -148,10 +172,7 @@ async fn process_image(asset: &Asset, db: &SqlitePool, pre_generate_thumbnails: 
 
 /// Process a single asset's CPU work without writing to the database.
 /// Returns a `ProcessingOutput` that should be sent to the `DbBatchWriter`.
-pub async fn process_asset_cpu(
-    asset: &Asset,
-    pre_generate_thumbnails: bool,
-) -> ProcessingOutput {
+pub async fn process_asset_cpu(asset: &Asset, pre_generate_thumbnails: bool) -> ProcessingOutput {
     match asset.asset_type.as_str() {
         "image" => process_image_cpu(asset, pre_generate_thumbnails).await,
         "audio" => process_audio_cpu(asset).await,
@@ -183,36 +204,32 @@ pub async fn process_asset_cpu_with_bytes(
 
 /// Image processing: decode, extract dimensions, optionally generate thumbnail.
 /// Does NOT write to the database.
-async fn process_image_cpu(
-    asset: &Asset,
-    pre_generate_thumbnails: bool,
-) -> ProcessingOutput {
+async fn process_image_cpu(asset: &Asset, pre_generate_thumbnails: bool) -> ProcessingOutput {
     let asset_id = asset.id;
     let uses_nested_zip = zip_cache::is_nested_zip_asset(asset);
 
     // Load bytes outside the processing timeout
     let asset_clone = asset.clone();
-    let bytes = match tokio::task::spawn_blocking(move || {
-        zip_cache::load_asset_bytes_cached(&asset_clone)
-    })
-    .await
-    {
-        Ok(Ok(bytes)) => bytes,
-        Ok(Err(e)) => {
-            return ProcessingOutput::Failure {
-                asset_id,
-                category: crate::models::ProcessingCategory::Image,
-                error: e,
+    let bytes =
+        match tokio::task::spawn_blocking(move || zip_cache::load_asset_bytes_cached(&asset_clone))
+            .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => {
+                return ProcessingOutput::Failure {
+                    asset_id,
+                    category: crate::models::ProcessingCategory::Image,
+                    error: e,
+                }
             }
-        }
-        Err(e) => {
-            return ProcessingOutput::Failure {
-                asset_id,
-                category: crate::models::ProcessingCategory::Image,
-                error: format!("Task join error: {}", e),
+            Err(e) => {
+                return ProcessingOutput::Failure {
+                    asset_id,
+                    category: crate::models::ProcessingCategory::Image,
+                    error: format!("Task join error: {}", e),
+                }
             }
-        }
-    };
+        };
 
     let timeout = if uses_nested_zip {
         NESTED_ZIP_PROCESSING_TIMEOUT
@@ -344,10 +361,7 @@ async fn process_audio_cpu(asset: &Asset) -> ProcessingOutput {
 
         let codec_params = &track.codec_params;
         let sample_rate = codec_params.sample_rate.unwrap_or(0) as i32;
-        let channels = codec_params
-            .channels
-            .map(|c| c.count() as i32)
-            .unwrap_or(0);
+        let channels = codec_params.channels.map(|c| c.count() as i32).unwrap_or(0);
 
         let duration_ms = if let Some(n_frames) = codec_params.n_frames {
             if sample_rate > 0 {
@@ -473,10 +487,7 @@ async fn process_audio_cpu_with_bytes(
 
         let codec_params = &track.codec_params;
         let sample_rate = codec_params.sample_rate.unwrap_or(0) as i32;
-        let channels = codec_params
-            .channels
-            .map(|c| c.count() as i32)
-            .unwrap_or(0);
+        let channels = codec_params.channels.map(|c| c.count() as i32).unwrap_or(0);
 
         let duration_ms = if let Some(n_frames) = codec_params.n_frames {
             if sample_rate > 0 {
@@ -511,28 +522,32 @@ async fn process_audio_cpu_with_bytes(
         Err(_) => ProcessingOutput::Failure {
             asset_id,
             category: crate::models::ProcessingCategory::Audio,
-            error: format!("Processing timed out after {}s", PROCESSING_TIMEOUT.as_secs()),
+            error: format!(
+                "Processing timed out after {}s",
+                PROCESSING_TIMEOUT.as_secs()
+            ),
         },
     }
 }
 
 /// Generate a thumbnail for an asset on demand.
 /// Returns (width, height, thumbnail_data) on success.
-pub async fn generate_thumbnail_for_asset(
-    asset: &Asset,
-) -> Result<(i32, i32, Vec<u8>), String> {
+pub async fn generate_thumbnail_for_asset(asset: &Asset) -> Result<(i32, i32, Vec<u8>), String> {
     let uses_nested_zip = zip_cache::is_nested_zip_asset(asset);
 
     // Load bytes outside the processing timeout — gate/cache wait is not counted
     let asset_clone = asset.clone();
-    let bytes = tokio::task::spawn_blocking(move || {
-        zip_cache::load_asset_bytes_cached(&asset_clone)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))??;
+    let bytes =
+        tokio::task::spawn_blocking(move || zip_cache::load_asset_bytes_cached(&asset_clone))
+            .await
+            .map_err(|e| format!("Task join error: {}", e))??;
 
     // Timeout covers only CPU-intensive processing (decode + resize + encode)
-    let timeout = if uses_nested_zip { NESTED_ZIP_PROCESSING_TIMEOUT } else { PROCESSING_TIMEOUT };
+    let timeout = if uses_nested_zip {
+        NESTED_ZIP_PROCESSING_TIMEOUT
+    } else {
+        PROCESSING_TIMEOUT
+    };
     tokio::time::timeout(
         timeout,
         tokio::task::spawn_blocking(move || {
@@ -601,7 +616,12 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
         let probe_started = Instant::now();
 
         let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+            .format(
+                &hint,
+                mss,
+                &FormatOptions::default(),
+                &MetadataOptions::default(),
+            )
             .map_err(|e| format!("Failed to probe audio format: {}", e))?;
 
         let probe_ms = probe_started.elapsed().as_millis();
@@ -619,10 +639,7 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
 
         let codec_params = &track.codec_params;
         let sample_rate = codec_params.sample_rate.unwrap_or(0) as i32;
-        let channels = codec_params
-            .channels
-            .map(|c| c.count() as i32)
-            .unwrap_or(0);
+        let channels = codec_params.channels.map(|c| c.count() as i32).unwrap_or(0);
 
         let duration_ms = if let Some(n_frames) = codec_params.n_frames {
             if sample_rate > 0 {
@@ -637,14 +654,19 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
         Ok::<_, String>((duration_ms, sample_rate, channels))
     });
 
-    let timeout = if uses_nested_zip { NESTED_ZIP_PROCESSING_TIMEOUT } else { PROCESSING_TIMEOUT };
-    let result: Result<(i64, i32, i32), String> = match tokio::time::timeout(timeout, blocking_task).await {
-        Ok(join_result) => match join_result {
-            Ok(inner) => inner,
-            Err(e) => Err(format!("Task join error: {}", e)),
-        },
-        Err(_) => Err(format!("Processing timed out after {}s", timeout.as_secs())),
+    let timeout = if uses_nested_zip {
+        NESTED_ZIP_PROCESSING_TIMEOUT
+    } else {
+        PROCESSING_TIMEOUT
     };
+    let result: Result<(i64, i32, i32), String> =
+        match tokio::time::timeout(timeout, blocking_task).await {
+            Ok(join_result) => match join_result {
+                Ok(inner) => inner,
+                Err(e) => Err(format!("Task join error: {}", e)),
+            },
+            Err(_) => Err(format!("Processing timed out after {}s", timeout.as_secs())),
+        };
 
     match result {
         Ok((duration_ms, sample_rate, channels)) => {
@@ -876,11 +898,17 @@ fn encode_webp_from_rgba(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>
 
     // WebP encoder panics on invalid dimensions (VP8_ENC_ERROR_BAD_DIMENSION)
     if width == 0 || height == 0 {
-        return Err(format!("Invalid dimensions for WebP encoding: {}x{}", width, height));
+        return Err(format!(
+            "Invalid dimensions for WebP encoding: {}x{}",
+            width, height
+        ));
     }
     // libwebp max dimension is 16383
     if width > 16383 || height > 16383 {
-        return Err(format!("Dimensions too large for WebP encoding: {}x{} (max 16383)", width, height));
+        return Err(format!(
+            "Dimensions too large for WebP encoding: {}x{} (max 16383)",
+            width, height
+        ));
     }
 
     // Create encoder from RGBA pixels
@@ -902,7 +930,13 @@ mod tests {
     use crate::test_helpers::*;
 
     /// Helper: create an asset with folder_path populated for test use
-    fn make_test_asset_with_path(filename: &str, folder_path: &str, folder_id: i64, asset_type: &str, format: &str) -> Asset {
+    fn make_test_asset_with_path(
+        filename: &str,
+        folder_path: &str,
+        folder_id: i64,
+        asset_type: &str,
+        format: &str,
+    ) -> Asset {
         let mut asset = make_asset(filename, folder_id, "", asset_type, format);
         asset.folder_path = folder_path.to_string();
         asset
@@ -920,7 +954,8 @@ mod tests {
         let folder_id = insert_source_folder(&db, &folder_path, "test").await;
         create_test_png(dir.path(), "test.png");
 
-        let mut asset = make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
+        let mut asset =
+            make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
         asset.id = insert_asset(&db, &asset).await;
 
         let result = process_asset(&asset, &db, false).await;
@@ -945,7 +980,8 @@ mod tests {
         let folder_id = insert_source_folder(&db, &folder_path, "test").await;
         create_test_png(dir.path(), "test.png");
 
-        let mut asset = make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
+        let mut asset =
+            make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
         asset.id = insert_asset(&db, &asset).await;
 
         process_asset(&asset, &db, false).await;
@@ -971,7 +1007,8 @@ mod tests {
         let folder_id = insert_source_folder(&db, &folder_path, "test").await;
         create_test_png(dir.path(), "test.png");
 
-        let mut asset = make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
+        let mut asset =
+            make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
         asset.id = insert_asset(&db, &asset).await;
 
         // Pre-populate with a fake thumbnail
@@ -1068,20 +1105,20 @@ mod tests {
         let folder_id = insert_source_folder(&db, &folder_path, "test").await;
         create_test_wav(dir.path(), "test.wav");
 
-        let mut asset = make_test_asset_with_path("test.wav", &folder_path, folder_id, "audio", "wav");
+        let mut asset =
+            make_test_asset_with_path("test.wav", &folder_path, folder_id, "audio", "wav");
         asset.id = insert_asset(&db, &asset).await;
 
         let result = process_asset(&asset, &db, false).await;
         assert!(result.success, "Should succeed: {:?}", result.error);
 
-        let (duration_ms, sample_rate, channels): (i64, Option<i32>, Option<i32>) =
-            sqlx::query_as(
-                "SELECT duration_ms, sample_rate, channels FROM audio_metadata WHERE asset_id = ?",
-            )
-            .bind(asset.id)
-            .fetch_one(&db)
-            .await
-            .expect("Should have audio_metadata row");
+        let (duration_ms, sample_rate, channels): (i64, Option<i32>, Option<i32>) = sqlx::query_as(
+            "SELECT duration_ms, sample_rate, channels FROM audio_metadata WHERE asset_id = ?",
+        )
+        .bind(asset.id)
+        .fetch_one(&db)
+        .await
+        .expect("Should have audio_metadata row");
 
         assert_eq!(sample_rate, Some(44100));
         assert_eq!(channels, Some(1));

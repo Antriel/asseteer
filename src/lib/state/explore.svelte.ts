@@ -1,9 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { getDatabase } from '$lib/database/connection';
-import {
-  getSourceFolderRoots,
-  getDirectoryChildren,
-} from '$lib/database/queries';
+import { getSourceFolderRoots, getDirectoryChildren } from '$lib/database/queries';
 import type { FolderLocation, Asset } from '$lib/types';
 
 export type { DirectoryNode } from '$lib/database/queries';
@@ -65,7 +62,10 @@ class ExploreState {
   }
 
   /** Find a child node by key in the cached children of a parent */
-  private findChildByKey(parentKey: string, childKey: string): import('$lib/database/queries').DirectoryNode | undefined {
+  private findChildByKey(
+    parentKey: string,
+    childKey: string,
+  ): import('$lib/database/queries').DirectoryNode | undefined {
     return this.childrenCache.get(parentKey)?.find((n) => n.key === childKey);
   }
 

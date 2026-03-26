@@ -129,7 +129,6 @@
     return 'idle';
   }
 
-
   async function handleSetup() {
     try {
       const state = await checkClapSetupState();
@@ -396,7 +395,9 @@
               >
                 {#if vacuumRunning}
                   <span class="inline-flex items-center gap-1.5">
-                    <span class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+                    <span
+                      class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"
+                    ></span>
                     Compacting...
                   </span>
                 {:else}

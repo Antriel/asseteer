@@ -56,7 +56,6 @@ pub struct AudioMetadata {
     pub processed_at: i64,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AssetType {
     Image,
@@ -105,7 +104,6 @@ impl ProcessingCategory {
         }
     }
 }
-
 
 /// Processing error stored in database
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

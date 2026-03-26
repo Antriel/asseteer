@@ -1,8 +1,8 @@
 use serde::Serialize;
 use tauri::State;
 
-use crate::AppState;
 use crate::database;
+use crate::AppState;
 
 #[derive(Serialize)]
 pub struct DbInfo {
@@ -21,13 +21,9 @@ pub async fn get_db_info(state: State<'_, AppState>) -> Result<DbInfo, String> {
     let db_path = &state.db_path;
 
     // File sizes
-    let main_size = std::fs::metadata(db_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let main_size = std::fs::metadata(db_path).map(|m| m.len()).unwrap_or(0);
     let wal_path = format!("{}-wal", db_path);
-    let wal_size = std::fs::metadata(&wal_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let wal_size = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
 
     // SQLite PRAGMAs
     let page_count: (i64,) = sqlx::query_as("SELECT page_count FROM pragma_page_count")

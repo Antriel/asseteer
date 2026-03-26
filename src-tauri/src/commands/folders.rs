@@ -7,13 +7,11 @@ use tauri::{AppHandle, Emitter, State};
 
 /// List all source folders
 #[tauri::command]
-pub async fn list_folders(
-    state: State<'_, AppState>,
-) -> Result<Vec<SourceFolder>, String> {
+pub async fn list_folders(state: State<'_, AppState>) -> Result<Vec<SourceFolder>, String> {
     sqlx::query_as::<_, SourceFolder>(
         "SELECT id, path, label, added_at, last_scanned_at, asset_count, status, scan_warnings
          FROM source_folders
-         ORDER BY label COLLATE NOCASE"
+         ORDER BY label COLLATE NOCASE",
     )
     .fetch_all(&state.pool)
     .await
@@ -39,12 +37,11 @@ pub async fn remove_folder(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // Get total asset count for progress reporting
-    let (total,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM assets WHERE folder_id = ?")
-            .bind(folder_id)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|e| format!("Failed to count assets: {}", e))?;
+    let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM assets WHERE folder_id = ?")
+        .bind(folder_id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| format!("Failed to count assets: {}", e))?;
 
     let emit_progress = |phase: &str, deleted: i64| {
         let _ = app.emit(
@@ -179,18 +176,22 @@ pub async fn update_search_excludes(
     // Re-index: load the new excludes, fetch all assets, recompute searchable_path
     let search_excludes = load_search_excludes(&state.pool, folder_id).await?;
 
-    let assets: Vec<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT id, rel_path, zip_file, zip_entry FROM assets WHERE folder_id = ?1",
-    )
-    .bind(folder_id)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let assets: Vec<(i64, String, Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT id, rel_path, zip_file, zip_entry FROM assets WHERE folder_id = ?1")
+            .bind(folder_id)
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|e| e.to_string())?;
 
     // Update in batches within a transaction
     let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
     for (id, rel_path, zip_file, zip_entry) in &assets {
-        let sp = compute_searchable_path(rel_path, zip_file.as_deref(), zip_entry.as_deref(), &search_excludes);
+        let sp = compute_searchable_path(
+            rel_path,
+            zip_file.as_deref(),
+            zip_entry.as_deref(),
+            &search_excludes,
+        );
         sqlx::query("UPDATE assets SET searchable_path = ?1 WHERE id = ?2")
             .bind(&sp)
             .bind(id)
@@ -202,4 +203,3 @@ pub async fn update_search_excludes(
 
     Ok(())
 }
-

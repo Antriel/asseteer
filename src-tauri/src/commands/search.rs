@@ -1,8 +1,8 @@
 //! CLAP-based semantic search commands
 
-use crate::clap::{cache as embedding_cache, ensure_server_running, get_clap_client, HealthInfo};
 use crate::clap::blob_to_embedding;
 use crate::clap::cache::FolderFilter;
+use crate::clap::{cache as embedding_cache, ensure_server_running, get_clap_client, HealthInfo};
 use crate::AppState;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -113,10 +113,7 @@ async fn fetch_asset_metadata(
         for &id in chunk {
             query = query.bind(id);
         }
-        let rows: Vec<AssetMetadataRow> = query
-            .fetch_all(pool)
-            .await
-            .map_err(|e| e.to_string())?;
+        let rows: Vec<AssetMetadataRow> = query.fetch_all(pool).await.map_err(|e| e.to_string())?;
         for row in rows {
             map.insert(row.id, row);
         }
@@ -171,13 +168,12 @@ pub async fn search_audio_by_similarity(
     state: State<'_, AppState>,
 ) -> Result<Vec<SemanticSearchResult>, String> {
     // Fetch the source asset's embedding
-    let source_row: Option<(Vec<u8>,)> = sqlx::query_as(
-        "SELECT embedding FROM audio_embeddings WHERE asset_id = ?",
-    )
-    .bind(asset_id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let source_row: Option<(Vec<u8>,)> =
+        sqlx::query_as("SELECT embedding FROM audio_embeddings WHERE asset_id = ?")
+            .bind(asset_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| e.to_string())?;
 
     let source_embedding = match source_row {
         Some((blob,)) => blob_to_embedding(&blob),
@@ -267,14 +263,12 @@ pub async fn clear_clap_cache() -> Result<(), String> {
 
     let cache_dir = crate::clap::uv::uv_cache_dir();
     if cache_dir.exists() {
-        std::fs::remove_dir_all(&cache_dir)
-            .map_err(|e| format!("Failed to clear cache: {}", e))?;
+        std::fs::remove_dir_all(&cache_dir).map_err(|e| format!("Failed to clear cache: {}", e))?;
     }
     // Also remove the uv binary so it re-downloads fresh
     let uv_path = crate::clap::uv::uv_bin_path();
     if uv_path.exists() {
-        std::fs::remove_file(&uv_path)
-            .map_err(|e| format!("Failed to remove uv binary: {}", e))?;
+        std::fs::remove_file(&uv_path).map_err(|e| format!("Failed to remove uv binary: {}", e))?;
     }
     Ok(())
 }

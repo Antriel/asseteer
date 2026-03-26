@@ -6,9 +6,7 @@ use super::schema::*;
 pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Configure SQLite for optimal performance
     // Note: busy_timeout is now set via SqliteConnectOptions in mod.rs
-    sqlx::query("PRAGMA journal_mode=WAL")
-        .execute(pool)
-        .await?;
+    sqlx::query("PRAGMA journal_mode=WAL").execute(pool).await?;
     sqlx::query("PRAGMA synchronous=NORMAL")
         .execute(pool)
         .await?;
@@ -33,32 +31,28 @@ pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await?;
 
     // Create main assets table
-    sqlx::query(CREATE_ASSETS_TABLE)
-        .execute(pool)
-        .await?;
+    sqlx::query(CREATE_ASSETS_TABLE).execute(pool).await?;
 
     // Create indexes
-    for index_sql in CREATE_ASSETS_INDEXES.split(';').filter(|s| !s.trim().is_empty()) {
-        sqlx::query(index_sql.trim())
-            .execute(pool)
-            .await?;
+    for index_sql in CREATE_ASSETS_INDEXES
+        .split(';')
+        .filter(|s| !s.trim().is_empty())
+    {
+        sqlx::query(index_sql.trim()).execute(pool).await?;
     }
 
     // Create FTS5 virtual tables (dual: trigram for substring, unicode61 for words)
-    sqlx::query(CREATE_ASSETS_FTS_SUB)
-        .execute(pool)
-        .await?;
+    sqlx::query(CREATE_ASSETS_FTS_SUB).execute(pool).await?;
 
-    sqlx::query(CREATE_ASSETS_FTS_WORD)
-        .execute(pool)
-        .await?;
+    sqlx::query(CREATE_ASSETS_FTS_WORD).execute(pool).await?;
 
     // Create FTS triggers (UPDATE + DELETE only; INSERT trigger removed for bulk perf)
-    for trigger_sql in CREATE_FTS_TRIGGERS.split("END;").filter(|s| !s.trim().is_empty()) {
+    for trigger_sql in CREATE_FTS_TRIGGERS
+        .split("END;")
+        .filter(|s| !s.trim().is_empty())
+    {
         let trigger = format!("{} END;", trigger_sql.trim());
-        sqlx::query(&trigger)
-            .execute(pool)
-            .await?;
+        sqlx::query(&trigger).execute(pool).await?;
     }
 
     // Create scan sessions table
@@ -85,22 +79,16 @@ pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .split(';')
         .filter(|s| !s.trim().is_empty())
     {
-        sqlx::query(index_sql.trim())
-            .execute(pool)
-            .await?;
+        sqlx::query(index_sql.trim()).execute(pool).await?;
     }
 
     // Create directories table for precomputed folder tree
-    sqlx::query(CREATE_DIRECTORIES_TABLE)
-        .execute(pool)
-        .await?;
+    sqlx::query(CREATE_DIRECTORIES_TABLE).execute(pool).await?;
     for index_sql in CREATE_DIRECTORIES_INDEXES
         .split(';')
         .filter(|s| !s.trim().is_empty())
     {
-        sqlx::query(index_sql.trim())
-            .execute(pool)
-            .await?;
+        sqlx::query(index_sql.trim()).execute(pool).await?;
     }
 
     // Create audio embeddings table for CLAP semantic search

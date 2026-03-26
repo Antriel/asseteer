@@ -100,7 +100,10 @@ impl ClapClient {
             .map_err(|_| "Port is in use by a different service (not CLAP server)".to_string())?;
 
         if info.status != "ok" {
-            return Err(format!("CLAP server reported unhealthy status: {}", info.status));
+            return Err(format!(
+                "CLAP server reported unhealthy status: {}",
+                info.status
+            ));
         }
 
         Ok(())
@@ -170,7 +173,10 @@ impl ClapClient {
     }
 
     /// Generate audio embeddings for multiple file paths in a single batched request
-    pub async fn embed_audio_batch_paths(&self, paths: &[String]) -> Result<Vec<Result<Vec<f32>, String>>, String> {
+    pub async fn embed_audio_batch_paths(
+        &self,
+        paths: &[String],
+    ) -> Result<Vec<Result<Vec<f32>, String>>, String> {
         let url = format!("{}/embed/audio/batch", self.base_url());
         let request = BatchAudioPathRequest {
             audio_paths: paths.to_vec(),
@@ -267,5 +273,7 @@ static CLAP_CLIENT: OnceCell<ClapClient> = OnceCell::const_new();
 
 /// Get the global CLAP client instance
 pub async fn get_clap_client() -> &'static ClapClient {
-    CLAP_CLIENT.get_or_init(|| async { ClapClient::new() }).await
+    CLAP_CLIENT
+        .get_or_init(|| async { ClapClient::new() })
+        .await
 }

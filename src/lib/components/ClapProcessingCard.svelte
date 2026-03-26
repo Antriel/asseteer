@@ -1,10 +1,6 @@
 <script lang="ts">
   import { clapState } from '$lib/state/clap.svelte';
-  import {
-    processingState,
-    getCategoryStatus,
-    isCategoryStarting,
-  } from '$lib/state/tasks.svelte';
+  import { processingState, getCategoryStatus, isCategoryStarting } from '$lib/state/tasks.svelte';
   import { showToast } from '$lib/state/ui.svelte';
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
@@ -53,10 +49,14 @@
   let isStarting = $derived(isCategoryStarting(processingState, 'clap'));
 
   // Button visibility
-  let canStart = $derived(clapState.serverAvailable && status === 'idle' && pendingCount > 0 && !isStarting);
+  let canStart = $derived(
+    clapState.serverAvailable && status === 'idle' && pendingCount > 0 && !isStarting,
+  );
   let canPause = $derived(status === 'running' && !isStopping && !isStarting);
   let canResume = $derived(status === 'paused' && !isStopping && !isStarting);
-  let canStop = $derived((status === 'running' || status === 'paused') && !isStopping && !isStarting);
+  let canStop = $derived(
+    (status === 'running' || status === 'paused') && !isStopping && !isStarting,
+  );
 
   async function handleStartServer() {
     try {
@@ -203,7 +203,9 @@
       <!-- Control buttons -->
       <div class="flex items-center gap-2">
         {#if isStarting}
-          <span class="px-3 py-1.5 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/30 rounded">
+          <span
+            class="px-3 py-1.5 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/30 rounded"
+          >
             Starting...
           </span>
         {:else if canStart}

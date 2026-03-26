@@ -190,12 +190,12 @@
                   <div
                     class="font-medium text-primary truncate"
                     title={error.zip_entry
-                      ? (error.rel_path
-                          ? `${error.folder_path}/${error.rel_path}/${error.zip_file}/${error.zip_entry}`
-                          : `${error.folder_path}/${error.zip_file}/${error.zip_entry}`)
-                      : (error.rel_path
-                          ? `${error.folder_path}/${error.rel_path}/${error.filename}`
-                          : `${error.folder_path}/${error.filename}`)}
+                      ? error.rel_path
+                        ? `${error.folder_path}/${error.rel_path}/${error.zip_file}/${error.zip_entry}`
+                        : `${error.folder_path}/${error.zip_file}/${error.zip_entry}`
+                      : error.rel_path
+                        ? `${error.folder_path}/${error.rel_path}/${error.filename}`
+                        : `${error.folder_path}/${error.filename}`}
                   >
                     {error.filename}
                   </div>

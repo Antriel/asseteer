@@ -2,14 +2,14 @@ use crate::commands::scan::{
     discover_files_streaming, insert_asset_row, load_search_excludes, populate_directories,
     DiscoveredAsset, ScanProgress, ScanProgressState,
 };
-use crate::AppState;
-use serde_json;
 use crate::utils::now_millis;
+use crate::AppState;
 use serde::Serialize;
+use serde_json;
 use sqlx;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
@@ -22,8 +22,8 @@ const EMIT_INTERVAL_MS: u128 = 100;
 #[derive(Hash, Eq, PartialEq)]
 struct AssetKey {
     rel_path: String,
-    zip_file_key: String,  // COALESCE(zip_file, '')
-    entry_key: String,     // COALESCE(zip_entry, filename)
+    zip_file_key: String, // COALESCE(zip_file, '')
+    entry_key: String,    // COALESCE(zip_entry, filename)
 }
 
 impl AssetKey {
@@ -31,7 +31,10 @@ impl AssetKey {
         Self {
             rel_path: asset.rel_path.clone(),
             zip_file_key: asset.zip_file.clone().unwrap_or_default(),
-            entry_key: asset.zip_entry.clone().unwrap_or_else(|| asset.filename.clone()),
+            entry_key: asset
+                .zip_entry
+                .clone()
+                .unwrap_or_else(|| asset.filename.clone()),
         }
     }
 
@@ -39,7 +42,10 @@ impl AssetKey {
         Self {
             rel_path: asset.rel_path.clone(),
             zip_file_key: asset.zip_file.clone().unwrap_or_default(),
-            entry_key: asset.zip_entry.clone().unwrap_or_else(|| asset.filename.clone()),
+            entry_key: asset
+                .zip_entry
+                .clone()
+                .unwrap_or_else(|| asset.filename.clone()),
         }
     }
 }
@@ -61,7 +67,7 @@ pub(crate) struct CachedRescanPreview {
     #[allow(dead_code)]
     pub folder_id: i64,
     pub added: Vec<DiscoveredAsset>,
-    pub removed: Vec<i64>,                   // asset IDs to delete
+    pub removed: Vec<i64>,                     // asset IDs to delete
     pub modified: Vec<(i64, DiscoveredAsset)>, // (asset_id, new disk data)
     pub unchanged_count: usize,
     pub warnings: Vec<String>,
@@ -96,13 +102,12 @@ pub async fn preview_rescan(
     folder_id: i64,
 ) -> Result<RescanPreviewResult, String> {
     // 1. Get folder path
-    let folder_path: String =
-        sqlx::query_scalar("SELECT path FROM source_folders WHERE id = ?1")
-            .bind(folder_id)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Folder with id {} not found", folder_id))?;
+    let folder_path: String = sqlx::query_scalar("SELECT path FROM source_folders WHERE id = ?1")
+        .bind(folder_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Folder with id {} not found", folder_id))?;
 
     let root_path_buf = PathBuf::from(&folder_path);
     if !root_path_buf.exists() {
@@ -176,7 +181,8 @@ pub async fn preview_rescan(
         .map_err(|e| format!("Discovery task panicked: {}", e))?
         .map_err(|e| e)?;
 
-    let warnings: Vec<String> = progress.warnings
+    let warnings: Vec<String> = progress
+        .warnings
         .lock()
         .map(|mut w| w.drain(..).collect())
         .unwrap_or_default();
@@ -193,8 +199,7 @@ pub async fn preview_rescan(
 
     // 4. Compute diff
     // Build lookup of existing assets by key
-    let mut existing_map: HashMap<AssetKey, ExistingAsset> =
-        HashMap::with_capacity(existing.len());
+    let mut existing_map: HashMap<AssetKey, ExistingAsset> = HashMap::with_capacity(existing.len());
     for asset in existing {
         let key = AssetKey::from_existing(&asset);
         existing_map.insert(key, asset);
@@ -254,7 +259,10 @@ pub async fn preview_rescan(
             phase: "preview-complete".to_string(),
             files_found: result.added_count + result.modified_count + result.unchanged_count,
             files_inserted: 0,
-            files_total: result.added_count + result.removed_count + result.modified_count + result.unchanged_count,
+            files_total: result.added_count
+                + result.removed_count
+                + result.modified_count
+                + result.unchanged_count,
             zips_scanned: progress.zips_scanned.load(Ordering::Relaxed),
             current_path: None,
             warnings: vec![],
@@ -468,7 +476,10 @@ pub async fn apply_rescan(
 
     // Rebuild precomputed directory tree (non-fatal — don't block rescan completion)
     if let Err(e) = populate_directories(&state.pool, &state.db_path, folder_id).await {
-        eprintln!("[Rescan] Failed to populate directories for folder {}: {}", folder_id, e);
+        eprintln!(
+            "[Rescan] Failed to populate directories for folder {}: {}",
+            folder_id, e
+        );
     }
 
     // Encode warnings as JSON (NULL if empty)
@@ -510,4 +521,3 @@ pub async fn apply_rescan(
         updated: modified_count,
     })
 }
-

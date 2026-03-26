@@ -133,8 +133,12 @@ pub fn load_asset_bytes_cached(asset: &Asset) -> Result<Vec<u8>, String> {
     let outer_zip_path = resolve_zip_path(asset);
     let key = compose_cache_key(&outer_zip_path, nested_zip_path);
 
-    let (cached_bytes, _guard) =
-        get_or_load_cached_bytes(&key, &outer_zip_path, nested_zip_path, DEFAULT_ESTIMATED_SIZE)?;
+    let (cached_bytes, _guard) = get_or_load_cached_bytes(
+        &key,
+        &outer_zip_path,
+        nested_zip_path,
+        DEFAULT_ESTIMATED_SIZE,
+    )?;
     load_entry_from_shared_zip_bytes(&cached_bytes, inner_entry, nested_zip_path)
 }
 
@@ -174,9 +178,9 @@ pub fn evict_unpinned() {
         }
 
         // Remove stale Loading entries with no active users
-        cache.entries.retain(|_, e| {
-            !(matches!(e.state, EntryState::Loading) && e.active_users == 0)
-        });
+        cache
+            .entries
+            .retain(|_, e| !(matches!(e.state, EntryState::Loading) && e.active_users == 0));
 
         CACHE_CHANGED.notify_all();
     }
@@ -282,9 +286,12 @@ fn get_or_load_cached_bytes(
                     );
                 }
 
-                return Ok((bytes, ActiveEntryGuard {
-                    key: key.to_string(),
-                }));
+                return Ok((
+                    bytes,
+                    ActiveEntryGuard {
+                        key: key.to_string(),
+                    },
+                ));
             }
             Some(Err(())) => {
                 // Another thread is loading this key — wait for state change
@@ -379,9 +386,12 @@ fn get_or_load_cached_bytes(
             }
 
             CACHE_CHANGED.notify_all();
-            Ok((shared, ActiveEntryGuard {
-                key: key.to_string(),
-            }))
+            Ok((
+                shared,
+                ActiveEntryGuard {
+                    key: key.to_string(),
+                },
+            ))
         }
         Err(err) => {
             // Remove the Loading placeholder, release reservation
@@ -475,8 +485,7 @@ fn load_nested_zip_bytes_from_archive<R: Read + Seek>(
     nested_zip_path: &str,
     context: &str,
 ) -> Result<Vec<u8>, String> {
-    if let Some((nested_zip_name, remaining_path)) =
-        split_first_nested_zip_segment(nested_zip_path)
+    if let Some((nested_zip_name, remaining_path)) = split_first_nested_zip_segment(nested_zip_path)
     {
         let nested_bytes = read_entry_bytes(&mut archive, nested_zip_name, context)?;
         let nested_context = format!("{}/{}", context, nested_zip_name);
@@ -514,8 +523,12 @@ fn load_entry_from_shared_zip_bytes(
     inner_entry: &str,
     nested_zip_path: &str,
 ) -> Result<Vec<u8>, String> {
-    let archive = ZipArchive::new(Cursor::new(zip_bytes.as_slice()))
-        .map_err(|e| format!("Failed to open cached nested zip {}: {}", nested_zip_path, e))?;
+    let archive = ZipArchive::new(Cursor::new(zip_bytes.as_slice())).map_err(|e| {
+        format!(
+            "Failed to open cached nested zip {}: {}",
+            nested_zip_path, e
+        )
+    })?;
     load_entry_from_archive(archive, inner_entry, nested_zip_path)
 }
 

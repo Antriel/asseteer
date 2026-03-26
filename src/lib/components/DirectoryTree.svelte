@@ -104,10 +104,7 @@
       </button>
 
       <!-- Folder name: selects folder (loads assets), does NOT toggle expand -->
-      <button
-        class="flex items-center gap-1 min-w-0 cursor-pointer"
-        onclick={() => onSelect(node)}
-      >
+      <button class="flex items-center gap-1 min-w-0 cursor-pointer" onclick={() => onSelect(node)}>
         {#if isZip}
           <svg
             class="w-4 h-4 flex-shrink-0 {isSelected ? 'text-accent' : 'text-secondary'}"

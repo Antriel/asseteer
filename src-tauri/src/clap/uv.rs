@@ -58,11 +58,12 @@ pub async fn get_or_download_uv() -> Result<PathBuf, String> {
     println!("[UV] Downloading from {}", url);
 
     let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to download uv: {}. Check your internet connection.", e))?;
+    let response = client.get(&url).send().await.map_err(|e| {
+        format!(
+            "Failed to download uv: {}. Check your internet connection.",
+            e
+        )
+    })?;
 
     if !response.status().is_success() {
         return Err(format!(
@@ -82,8 +83,7 @@ pub async fn get_or_download_uv() -> Result<PathBuf, String> {
     let uv_dir = uv_path
         .parent()
         .ok_or_else(|| "uv path has no parent directory".to_string())?;
-    std::fs::create_dir_all(uv_dir)
-        .map_err(|e| format!("Failed to create uv directory: {}", e))?;
+    std::fs::create_dir_all(uv_dir).map_err(|e| format!("Failed to create uv directory: {}", e))?;
 
     extract_uv_binary(&bytes, uv_dir)?;
 
@@ -197,10 +197,7 @@ fn extract_from_tar_gz(bytes: &[u8], dest_dir: &Path) -> Result<(), String> {
             .map_err(|e| format!("Failed to get entry path: {}", e))?
             .to_path_buf();
 
-        let file_name = path_str
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let file_name = path_str.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         // Extract only the uv binary (not uvx)
         if file_name == "uv" {

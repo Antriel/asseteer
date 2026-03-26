@@ -448,7 +448,6 @@ export async function getDirectoryChildren(
   return rows.map(rowToNode);
 }
 
-
 // ============================================================================
 // Search excludes (per-folder/zip segment exclusion from search indexing)
 // ============================================================================
@@ -508,7 +507,6 @@ export async function getZipDirTrees(
   }
   return [...groups.values()];
 }
-
 
 // ============================================================================
 // CLAP Semantic Search (uses Tauri commands, not direct SQL)

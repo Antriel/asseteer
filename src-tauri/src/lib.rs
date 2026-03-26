@@ -8,16 +8,16 @@ mod utils;
 mod zip_cache;
 
 #[cfg(test)]
-mod test_helpers;
-#[cfg(test)]
 mod concurrent_tests;
+#[cfg(test)]
+mod test_helpers;
 
-use database::{initialize_db, close_db, DbPool};
-use task_system::WorkQueue;
-use thumbnail_worker::ThumbnailWorkerHandle;
-use tauri::Manager;
+use database::{close_db, initialize_db, DbPool};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use task_system::WorkQueue;
+use tauri::Manager;
+use thumbnail_worker::ThumbnailWorkerHandle;
 
 /// Application state shared across all commands
 pub struct AppState {
@@ -32,17 +32,19 @@ pub struct AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_sql::Builder::new().build())
         .setup(|app| {
             // Get app data directory
-            let app_dir = app.path().app_data_dir()
+            let app_dir = app
+                .path()
+                .app_data_dir()
                 .expect("Failed to get app data directory");
 
             // Create directory if it doesn't exist
-            std::fs::create_dir_all(&app_dir)
-                .expect("Failed to create app data directory");
+            std::fs::create_dir_all(&app_dir).expect("Failed to create app data directory");
 
             // Initialize uv module with app data directory
             clap::uv::init_app_data_dir(app_dir.clone());
@@ -61,10 +63,7 @@ pub fn run() {
             let work_queue = Arc::new(WorkQueue::new());
 
             // Start thumbnail background worker
-            let thumbnail_worker = thumbnail_worker::start_worker(
-                app.handle(),
-                pool.clone(),
-            );
+            let thumbnail_worker = thumbnail_worker::start_worker(app.handle(), pool.clone());
 
             // Store pool and work queue in app state
             app.manage(AppState {

@@ -175,10 +175,7 @@ fn flush_batch_sync(conn: &rusqlite::Connection, buffer: &mut Vec<ProcessingOutp
     }
 
     if let Err(e) = conn.execute_batch("COMMIT") {
-        eprintln!(
-            "[DbBatchWriter] Failed to commit ({} items): {}",
-            count, e
-        );
+        eprintln!("[DbBatchWriter] Failed to commit ({} items): {}", count, e);
     }
 }
 
@@ -337,13 +334,7 @@ mod tests {
         let folder_id = insert_source_folder(&db, "/test", "test").await;
 
         for i in 0..WRITE_BATCH_SIZE {
-            let asset = make_asset(
-                &format!("img_{}.png", i),
-                folder_id,
-                "",
-                "image",
-                "png",
-            );
+            let asset = make_asset(&format!("img_{}.png", i), folder_id, "", "image", "png");
             insert_asset(&db, &asset).await;
         }
 
