@@ -94,7 +94,7 @@
 <footer class="h-10 flex items-center px-4 bg-secondary border-t border-default text-sm">
   <!-- Scan Status -->
   {#if uiState.isScanning}
-    <a href="/folders" class="flex items-center gap-3 hover:text-accent transition-colors mr-4">
+    <a href="/sources" class="flex items-center gap-3 hover:text-accent transition-colors mr-4">
       <div class="flex items-center gap-2">
         <div class="w-2 h-2 rounded-full bg-accent animate-pulse"></div>
         <span class="text-primary font-medium">Scanning</span>

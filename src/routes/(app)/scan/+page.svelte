@@ -3,6 +3,6 @@
   import { onMount } from 'svelte';
 
   onMount(() => {
-    goto('/folders', { replaceState: true });
+    goto('/sources', { replaceState: true });
   });
 </script>

@@ -38,12 +38,12 @@
   interface NavItem {
     href: string;
     label: string;
-    icon: 'library' | 'processing' | 'folders' | 'settings';
+    icon: 'library' | 'processing' | 'sources' | 'settings';
   }
 
   const navItems: NavItem[] = [
     { href: '/library', label: 'Library', icon: 'library' },
-    { href: '/folders', label: 'Folders', icon: 'folders' },
+    { href: '/sources', label: 'Sources', icon: 'sources' },
     { href: '/processing', label: 'Processing', icon: 'processing' },
   ];
 
@@ -95,7 +95,7 @@
                 d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"
               />
             </svg>
-          {:else if item.icon === 'folders'}
+          {:else if item.icon === 'sources'}
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 stroke-linecap="round"
@@ -165,7 +165,7 @@
     <div class="border-t border-default {collapsed ? 'px-2 py-2' : 'px-2 pt-2 pb-1'}">
       {#if !collapsed}
         <p class="px-2 pb-1 text-xs font-semibold text-tertiary uppercase tracking-wider">
-          Folders
+          Sources
         </p>
       {/if}
       <div class="space-y-0.5">

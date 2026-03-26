@@ -442,7 +442,7 @@
   <!-- Header -->
   <div class="flex items-center justify-between mb-6">
     <div>
-      <h1 class="text-2xl font-semibold text-primary">Folders</h1>
+      <h1 class="text-2xl font-semibold text-primary">Sources</h1>
       <p class="text-sm text-tertiary mt-0.5">Manage source folders for asset scanning</p>
     </div>
     <button
