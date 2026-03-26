@@ -37,6 +37,10 @@ class ProcessingState {
   // Categories that have been asked to stop but are still winding down
   stoppingCategories = $state(new SvelteSet<ProcessingCategory>());
 
+  // Categories where stop was requested while still in starting state —
+  // startProcessing() will stop them as soon as the backend confirms startup
+  pendingStopCategories = $state(new SvelteSet<ProcessingCategory>());
+
   // Pending asset count (from database)
   pendingCount = $state<PendingCount>({ images: 0, audio: 0, clap: 0, total: 0 });
 
@@ -170,8 +174,16 @@ class ProcessingState {
 
       // Query initial progress
       await this.refreshProgress(category);
+
+      // If stop was requested while we were starting, stop immediately
+      if (this.pendingStopCategories.has(category)) {
+        this.pendingStopCategories.delete(category);
+        await this.stop(category);
+        return;
+      }
     } catch (error) {
       this.startingCategories.delete(category);
+      this.pendingStopCategories.delete(category);
       if (previousProgress) {
         this.categoryProgress.set(category, previousProgress);
       } else {
@@ -237,6 +249,14 @@ class ProcessingState {
    * Stop processing for a specific category
    */
   async stop(category: ProcessingCategory, skipPendingRefresh = false) {
+    // If the category is still starting (backend hasn't confirmed running yet),
+    // queue the stop for when startup completes rather than calling the backend
+    if (this.startingCategories.has(category)) {
+      this.pendingStopCategories.add(category);
+      this.stoppingCategories.add(category);
+      return;
+    }
+
     this.stoppingCategories.add(category);
     try {
       await invoke('stop_processing', { category });
@@ -285,9 +305,22 @@ class ProcessingState {
    * Stop all running categories
    */
   async stopAll() {
-    const promises = Array.from(this.categoryProgress.entries())
-      .filter(([_, progress]) => progress.isRunning)
-      .map(([category]) => this.stop(category, true).catch(console.error)); // Skip individual refreshes
+    const promises: Promise<void>[] = [];
+
+    // Stop categories that are already running
+    for (const [category, progress] of this.categoryProgress.entries()) {
+      if (progress.isRunning) {
+        promises.push(this.stop(category, true).catch(console.error) as Promise<void>);
+      }
+    }
+
+    // Queue stop for categories still in starting state
+    for (const category of this.startingCategories) {
+      if (!this.pendingStopCategories.has(category)) {
+        this.pendingStopCategories.add(category);
+        this.stoppingCategories.add(category);
+      }
+    }
 
     await Promise.all(promises);
     // Refresh pending count once after all categories stopped

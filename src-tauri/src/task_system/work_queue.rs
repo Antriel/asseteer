@@ -135,7 +135,7 @@ pub struct WorkQueue {
     nonzip_rx: Receiver<WorkBatch>,
     category_states: Arc<RwLock<HashMap<ProcessingCategory, CategoryState>>>,
     worker_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
-    dispatcher_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    dispatcher_handles: Arc<RwLock<HashMap<ProcessingCategory, tokio::task::JoinHandle<()>>>>,
     /// Batched database writer shared by all workers (created lazily on first start)
     db_writer: RwLock<Option<DbBatchWriter>>,
 }
@@ -152,7 +152,7 @@ impl WorkQueue {
             nonzip_rx,
             category_states: Arc::new(RwLock::new(HashMap::new())),
             worker_handles: Arc::new(RwLock::new(Vec::new())),
-            dispatcher_handle: Arc::new(RwLock::new(None)),
+            dispatcher_handles: Arc::new(RwLock::new(HashMap::new())),
             db_writer: RwLock::new(None),
         }
     }
@@ -558,8 +558,11 @@ impl WorkQueue {
                 while join_set.join_next().await.is_some() {}
             });
 
-            let mut dh = self.dispatcher_handle.write().await;
-            *dh = Some(dispatcher);
+            let mut dh = self.dispatcher_handles.write().await;
+            // Abort any previous dispatcher for this category (shouldn't happen, but be safe)
+            if let Some(old) = dh.insert(category, dispatcher) {
+                old.abort();
+            }
         }
 
         // Check if we need to spawn workers (clean up completed workers first)
@@ -979,8 +982,8 @@ impl WorkQueue {
             zip_cache::evict_unpinned();
         }
 
-        // Abort the staged dispatcher if running
-        if let Some(handle) = self.dispatcher_handle.write().await.take() {
+        // Abort the staged dispatcher for this category (if any)
+        if let Some(handle) = self.dispatcher_handles.write().await.remove(&category) {
             handle.abort();
         }
 
@@ -1158,8 +1161,10 @@ impl WorkQueue {
                 }
             });
 
-            let mut dh = self.dispatcher_handle.write().await;
-            *dh = Some(dispatcher);
+            let mut dh = self.dispatcher_handles.write().await;
+            if let Some(old) = dh.insert(category, dispatcher) {
+                old.abort();
+            }
         }
 
         // Spawn workers (clean up stale handles first)

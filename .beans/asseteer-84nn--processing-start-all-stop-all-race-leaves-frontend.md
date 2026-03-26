@@ -1,11 +1,11 @@
 ---
 # asseteer-84nn
 title: Processing Start All -> Stop All race leaves frontend state inconsistent
-status: todo
+status: completed
 type: bug
 priority: high
 created_at: 2026-03-26T08:06:05Z
-updated_at: 2026-03-26T08:06:05Z
+updated_at: 2026-03-26T09:36:11Z
 ---
 
 ## Summary
@@ -108,8 +108,21 @@ Most likely to reproduce when startup preparation is slow enough to widen the ga
 
 ## Suggested todo list
 
-- [ ] Reproduce the Start All -> immediate Stop All race intentionally.
-- [ ] Decide the desired contract for stopping categories that are still starting.
-- [ ] Fix frontend state logic so Stop All includes categories in startup transition.
-- [ ] Fix backend staged-dispatcher ownership so stop is category-scoped.
-- [ ] Verify no stuck UI state remains after rapid start/stop interactions.
+- [x] Reproduce the Start All -> immediate Stop All race intentionally.
+- [x] Decide the desired contract for stopping categories that are still starting.
+- [x] Fix frontend state logic so Stop All includes categories in startup transition.
+- [x] Fix backend staged-dispatcher ownership so stop is category-scoped.
+- [x] Verify no stuck UI state remains after rapid start/stop interactions.
+
+## Summary of Changes
+
+### Frontend (src/lib/state/tasks.svelte.ts)
+- Added `pendingStopCategories` SvelteSet to track stop intent for categories still starting
+- Modified `stop()` to queue stop for categories in `startingCategories` instead of calling backend (which would fail with "not running")
+- Modified `stopAll()` to also queue stops for all categories in `startingCategories`
+- Modified `startProcessing()` to check `pendingStopCategories` after backend startup completes and immediately stop if flagged
+
+### Backend (src-tauri/src/task_system/work_queue.rs)
+- Changed `dispatcher_handle` from single global `Option<JoinHandle>` to per-category `HashMap<ProcessingCategory, JoinHandle>`
+- `start()` now stores dispatcher handle keyed by category
+- `stop()` now only aborts the dispatcher for the specific category being stopped, not whichever was stored last
