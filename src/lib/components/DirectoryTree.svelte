@@ -129,7 +129,7 @@
       </button>
 
       <span class="text-xs text-tertiary flex-shrink-0 opacity-0 group-hover:opacity-100"
-        >{node.assetCount}</span
+        >{node.cumulativeAssetCount}</span
       >
     </div>
 

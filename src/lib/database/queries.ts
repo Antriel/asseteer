@@ -323,6 +323,8 @@ export interface DirectoryNode {
   name: string;
   childCount: number;
   assetCount: number;
+  /** Total asset count including all descendant directories */
+  cumulativeAssetCount: number;
   /** The FolderLocation this node represents (for filtering assets when selected) */
   location: FolderLocation;
 }
@@ -335,6 +337,7 @@ interface DirectoryRow {
   zip_file: string | null;
   zip_prefix: string | null;
   asset_count: number;
+  cumulative_asset_count: number;
   child_count: number;
   dir_type: string;
   folder_id: number;
@@ -350,6 +353,7 @@ function rowToNode(row: DirectoryRow): DirectoryNode {
       name: row.name,
       childCount: row.child_count,
       assetCount: row.asset_count,
+      cumulativeAssetCount: row.cumulative_asset_count,
       location: {
         type: 'zip',
         folderId,
@@ -365,6 +369,7 @@ function rowToNode(row: DirectoryRow): DirectoryNode {
       name: row.name,
       childCount: row.child_count,
       assetCount: row.asset_count,
+      cumulativeAssetCount: row.cumulative_asset_count,
       location: {
         type: 'zip',
         folderId,
@@ -380,6 +385,7 @@ function rowToNode(row: DirectoryRow): DirectoryNode {
       name: row.name,
       childCount: row.child_count,
       assetCount: row.asset_count,
+      cumulativeAssetCount: row.cumulative_asset_count,
       location: { type: 'folder', folderId, relPath: row.rel_path },
     };
   }
@@ -406,6 +412,7 @@ export async function getSourceFolderRoots(db: Database): Promise<DirectoryNode[
     name: f.label || f.path.split(/[\\/]/).pop() || f.path,
     childCount: countMap.get(f.id) ?? 0,
     assetCount: f.asset_count,
+    cumulativeAssetCount: f.asset_count,
     location: { type: 'folder' as const, folderId: f.id, relPath: '' },
   }));
 }
@@ -423,7 +430,7 @@ export async function getDirectoryChildren(
   if (directoryId === 0) {
     // Root level: children with no parent
     rows = await db.select<DirectoryRow[]>(
-      `SELECT id, name, rel_path, zip_file, zip_prefix, asset_count, child_count, dir_type, folder_id
+      `SELECT id, name, rel_path, zip_file, zip_prefix, asset_count, cumulative_asset_count, child_count, dir_type, folder_id
        FROM directories
        WHERE folder_id = ? AND parent_id IS NULL
        ORDER BY dir_type, name COLLATE NOCASE`,
@@ -431,7 +438,7 @@ export async function getDirectoryChildren(
     );
   } else {
     rows = await db.select<DirectoryRow[]>(
-      `SELECT id, name, rel_path, zip_file, zip_prefix, asset_count, child_count, dir_type, folder_id
+      `SELECT id, name, rel_path, zip_file, zip_prefix, asset_count, cumulative_asset_count, child_count, dir_type, folder_id
        FROM directories
        WHERE parent_id = ?
        ORDER BY dir_type, name COLLATE NOCASE`,

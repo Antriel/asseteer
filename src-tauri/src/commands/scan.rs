@@ -1176,10 +1176,48 @@ fn populate_directories_blocking(
         DirKey::ZipDir(rp, zf, zp) => (2, rp.matches('/').count() + zp.matches('/').count(), format!("{}\0{}\0{}", rp, zf, zp)),
     });
 
+    // --- Compute cumulative asset counts ---
+    // Iterate deepest-first, bubbling each node's count up to its parent.
+    let mut cumulative_counts: HashMap<DirKey, i64> = asset_counts.clone();
+    for key in sorted_keys.iter().rev() {
+        let cum = *cumulative_counts.get(key).unwrap_or(&0);
+        let parent_key = match key {
+            DirKey::Fs(rel_path) => {
+                if let Some(last_slash) = rel_path.rfind('/') {
+                    Some(DirKey::Fs(rel_path[..last_slash].to_string()))
+                } else {
+                    None
+                }
+            }
+            DirKey::Zip(rel_path, _zip_file) => {
+                if rel_path.is_empty() {
+                    None
+                } else {
+                    Some(DirKey::Fs(rel_path.clone()))
+                }
+            }
+            DirKey::ZipDir(rel_path, zip_file, zip_prefix) => {
+                let trimmed = zip_prefix.trim_end_matches('/');
+                if let Some(last_slash) = trimmed.rfind('/') {
+                    Some(DirKey::ZipDir(
+                        rel_path.clone(),
+                        zip_file.clone(),
+                        trimmed[..last_slash].to_string() + "/",
+                    ))
+                } else {
+                    Some(DirKey::Zip(rel_path.clone(), zip_file.clone()))
+                }
+            }
+        };
+        if let Some(pk) = parent_key {
+            *cumulative_counts.entry(pk).or_insert(0) += cum;
+        }
+    }
+
     let mut stmt = conn
         .prepare(
-            "INSERT INTO directories (folder_id, parent_id, name, rel_path, zip_file, zip_prefix, asset_count, child_count, dir_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO directories (folder_id, parent_id, name, rel_path, zip_file, zip_prefix, asset_count, cumulative_asset_count, child_count, dir_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )
         .map_err(|e| e.to_string())?;
 
@@ -1218,6 +1256,7 @@ fn populate_directories_blocking(
         };
 
         let ac = asset_counts.get(key).copied().unwrap_or(0);
+        let cac = cumulative_counts.get(key).copied().unwrap_or(0);
         let cc = child_counts.get(key).copied().unwrap_or(0);
 
         stmt.execute(rusqlite::params![
@@ -1228,6 +1267,7 @@ fn populate_directories_blocking(
             zip_file,
             zip_prefix,
             ac,
+            cac,
             cc,
             dir_type,
         ])

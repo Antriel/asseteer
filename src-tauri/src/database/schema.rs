@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS directories (
     zip_file TEXT,
     zip_prefix TEXT,
     asset_count INTEGER NOT NULL DEFAULT 0,
+    cumulative_asset_count INTEGER NOT NULL DEFAULT 0,
     child_count INTEGER NOT NULL DEFAULT 0,
     dir_type TEXT NOT NULL DEFAULT 'dir'
 )
