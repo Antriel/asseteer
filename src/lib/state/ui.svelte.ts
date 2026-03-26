@@ -1,3 +1,5 @@
+import { SvelteMap } from 'svelte/reactivity';
+
 // Scan progress details
 export interface ScanProgress {
   phase: 'idle' | 'discovering' | 'scanning' | 'inserting' | 'indexing' | 'complete';
@@ -8,60 +10,93 @@ export interface ScanProgress {
   currentPath: string | null;
 }
 
+// Per-folder active scan state
+export interface ActiveScan {
+  folderPath: string;
+  startedAt: number;
+  progressMessage: string;
+  details: ScanProgress;
+}
+
 // UI state for scan operations and feedback
 class UIState {
-  isScanning = $state(false);
-  scanProgress = $state('');
-  scanningFolderPath = $state<string | null>(null);
-  currentSessionId = $state<number | null>(null);
+  // Active scans keyed by normalized folder path
+  activeScans = new SvelteMap<string, ActiveScan>();
 
-  // Elapsed time tracking for scans
-  scanStartedAt = $state<number | null>(null);
-  scanDurationMs = $state<number | null>(null);
+  // Derived: true if any scan is in progress
+  get isScanning(): boolean {
+    return this.activeScans.size > 0;
+  }
 
-  // Detailed scan progress (persists across navigation)
-  scanDetails = $state<ScanProgress>({
-    phase: 'idle',
-    filesFound: 0,
-    filesInserted: 0,
-    filesTotal: 0,
-    zipsScanned: 0,
-    currentPath: null,
-  });
+  // For StatusBar: pick the earliest-started active scan's details
+  get scanDetails(): ScanProgress {
+    if (this.activeScans.size === 0) {
+      return {
+        phase: 'idle',
+        filesFound: 0,
+        filesInserted: 0,
+        filesTotal: 0,
+        zipsScanned: 0,
+        currentPath: null,
+      };
+    }
+    let earliest: ActiveScan | null = null;
+    for (const scan of this.activeScans.values()) {
+      if (!earliest || scan.startedAt < earliest.startedAt) earliest = scan;
+    }
+    return earliest!.details;
+  }
+
+  // For StatusBar: earliest scan start time
+  get scanStartedAt(): number | null {
+    if (this.activeScans.size === 0) return null;
+    let earliest = Infinity;
+    for (const scan of this.activeScans.values()) {
+      if (scan.startedAt < earliest) earliest = scan.startedAt;
+    }
+    return earliest;
+  }
+
+  // Start tracking a new scan
+  startScan(folderPath: string) {
+    this.activeScans.set(folderPath, {
+      folderPath,
+      startedAt: Date.now(),
+      progressMessage: 'Starting scan...',
+      details: {
+        phase: 'idle',
+        filesFound: 0,
+        filesInserted: 0,
+        filesTotal: 0,
+        zipsScanned: 0,
+        currentPath: null,
+      },
+    });
+  }
+
+  // Update progress for a specific scan
+  updateScan(folderPath: string, progressMessage: string, details: ScanProgress) {
+    const scan = this.activeScans.get(folderPath);
+    if (scan) {
+      this.activeScans.set(folderPath, { ...scan, progressMessage, details });
+    }
+  }
+
+  // Stop tracking a scan
+  endScan(folderPath: string) {
+    this.activeScans.delete(folderPath);
+  }
+
+  // Check if a specific folder is being scanned
+  isScanningFolder(folderPath: string): boolean {
+    return this.activeScans.has(folderPath);
+  }
 
   // Toast notifications
   toasts = $state<Toast[]>([]);
 
   // Confirm dialog
   confirm = $state<ConfirmRequest | null>(null);
-
-  // Reset scan details
-  resetScanDetails() {
-    this.scanDetails = {
-      phase: 'idle',
-      filesFound: 0,
-      filesInserted: 0,
-      filesTotal: 0,
-      zipsScanned: 0,
-      currentPath: null,
-    };
-    this.scanStartedAt = null;
-    this.scanDurationMs = null;
-  }
-
-  // Call when a scan begins
-  startScanTimer() {
-    this.scanStartedAt = Date.now();
-    this.scanDurationMs = null;
-  }
-
-  // Call when a scan ends — captures total duration
-  stopScanTimer() {
-    if (this.scanStartedAt) {
-      this.scanDurationMs = Date.now() - this.scanStartedAt;
-    }
-    this.scanStartedAt = null;
-  }
 }
 
 export interface ConfirmRequest {

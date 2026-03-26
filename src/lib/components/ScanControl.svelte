@@ -15,9 +15,12 @@
     files_total: number;
     zips_scanned: number;
     current_path: string | null;
+    folder_path?: string;
   }
 
   let unlisten: UnlistenFn | null = null;
+  let scanningPath = $state<string | null>(null);
+  let progressMessage = $state('');
 
   function formatProgress(progress: ScanProgress): string {
     if (progress.phase === 'discovering') {
@@ -63,18 +66,20 @@
   }
 
   async function startScan(path: string) {
-    uiState.isScanning = true;
-    uiState.scanProgress = 'Starting scan...';
-    uiState.startScanTimer();
+    const normalizedPath = path.replace(/\\/g, '/');
+    scanningPath = normalizedPath;
+    progressMessage = 'Starting scan...';
+    uiState.startScan(normalizedPath);
 
     // Set up progress listener
     unlisten = await listen<ScanProgress>('scan-progress', (event) => {
-      uiState.scanProgress = formatProgress(event.payload);
+      if (event.payload.folder_path === normalizedPath) {
+        progressMessage = formatProgress(event.payload);
+      }
     });
 
     try {
-      const sessionId = await invoke<number>('add_folder', { path });
-      uiState.currentSessionId = sessionId;
+      await invoke('add_folder', { path });
 
       // Reload assets for current tab and refresh pending count
       const currentType = viewState.activeTab === 'images' ? 'image' : 'audio';
@@ -86,14 +91,14 @@
 
       // Clear progress message after delay
       setTimeout(() => {
-        uiState.scanProgress = '';
+        progressMessage = '';
       }, 3000);
     } catch (error) {
       console.error('Failed to scan:', error);
-      uiState.scanProgress = `Error: ${error}`;
+      progressMessage = `Error: ${error}`;
     } finally {
-      uiState.stopScanTimer();
-      uiState.isScanning = false;
+      uiState.endScan(normalizedPath);
+      scanningPath = null;
       // Clean up listener
       if (unlisten) {
         unlisten();
@@ -107,18 +112,18 @@
   <div class="flex items-center gap-4">
     <button
       onclick={selectFolder}
-      disabled={uiState.isScanning}
+      disabled={scanningPath !== null}
       class="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
     >
-      {uiState.isScanning ? 'Scanning...' : 'Scan Folder'}
+      {scanningPath ? 'Scanning...' : 'Scan Folder'}
     </button>
 
-    {#if uiState.scanProgress}
+    {#if progressMessage}
       <div class="flex items-center gap-2">
-        {#if uiState.isScanning}
+        {#if scanningPath}
           <Spinner size="sm" color="blue" />
         {/if}
-        <span class="text-sm text-secondary">{uiState.scanProgress}</span>
+        <span class="text-sm text-secondary">{progressMessage}</span>
       </div>
     {/if}
   </div>

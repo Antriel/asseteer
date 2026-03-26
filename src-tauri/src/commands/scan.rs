@@ -24,6 +24,9 @@ pub struct ScanProgress {
     pub zips_scanned: usize,
     pub current_path: Option<String>,
     pub warnings: Vec<String>,
+    /// Root folder path — used to distinguish concurrent scans on the frontend
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_path: Option<String>,
 }
 
 /// Supported image extensions
@@ -138,8 +141,9 @@ pub async fn add_folder(
     // Spawn discovery on a blocking thread so it doesn't stall the async runtime
     let discover_app = app.clone();
     let discover_progress = progress.clone();
+    let discover_folder_path = normalized_path.clone();
     let discovery_handle = tokio::task::spawn_blocking(move || {
-        discover_files_streaming(&discover_app, &root_path_buf, folder_id, tx, &discover_progress, "scan-progress", &search_excludes)
+        discover_files_streaming(&discover_app, &root_path_buf, folder_id, tx, &discover_progress, "scan-progress", &search_excludes, Some(&discover_folder_path))
     });
 
     // Synchronous bulk insertion via rusqlite on a blocking thread.
@@ -199,6 +203,7 @@ pub async fn add_folder(
     // Emit progress events while discovery + insertion run concurrently
     let emit_progress = progress.clone();
     let emit_app = app.clone();
+    let emit_folder_path = normalized_path.clone();
     let progress_handle = tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_millis(EMIT_INTERVAL_MS as u64)).await;
@@ -216,6 +221,7 @@ pub async fn add_folder(
                     zips_scanned: zips,
                     current_path: None,
                     warnings: vec![],
+                    folder_path: Some(emit_folder_path.clone()),
                 },
             );
         }
@@ -243,7 +249,7 @@ pub async fn add_folder(
     // for performance — trigram+unicode61 per-row indexing was the biggest write
     // amplifier). Scoped by folder_id + max_id to be safe with concurrent scans.
     // Batched with progress events so the UI doesn't appear stuck.
-    populate_fts_batched(&app, &pool, folder_id, max_id_before).await?;
+    populate_fts_batched(&app, &pool, folder_id, max_id_before, Some(&normalized_path)).await?;
 
     // WAL auto-checkpoint is disabled globally (via after_connect); run a
     // TRUNCATE checkpoint to flush WAL → .db and free disk space.
@@ -266,6 +272,7 @@ pub async fn add_folder(
             zips_scanned: progress.zips_scanned.load(Ordering::Relaxed),
             current_path: None,
             warnings: warnings.clone(),
+            folder_path: Some(normalized_path.clone()),
         },
     );
 
@@ -373,6 +380,7 @@ pub(crate) fn discover_files_streaming(
     progress: &ScanProgressState,
     event_name: &str,
     search_excludes: &std::collections::HashSet<String>,
+    folder_path: Option<&str>,
 ) -> Result<(), String> {
     // Initial progress event
     let _ = app.emit(
@@ -385,6 +393,7 @@ pub(crate) fn discover_files_streaming(
             zips_scanned: 0,
             current_path: Some(root_path.to_string_lossy().to_string()),
             warnings: vec![],
+            folder_path: folder_path.map(|s| s.to_string()),
         },
     );
 
@@ -500,6 +509,7 @@ pub(crate) fn discover_files_streaming(
                         zips_scanned: zips,
                         current_path: Some(path.to_string_lossy().to_string()),
                         warnings: vec![],
+                        folder_path: folder_path.map(|s| s.to_string()),
                     },
                 );
                 last_emit = Instant::now();
@@ -863,6 +873,7 @@ async fn populate_fts_batched(
     pool: &sqlx::SqlitePool,
     folder_id: i64,
     min_id_exclusive: i64,
+    folder_path: Option<&str>,
 ) -> Result<(), String> {
     let total: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM assets WHERE folder_id = ?1 AND id > ?2")
@@ -929,6 +940,7 @@ async fn populate_fts_batched(
                 zips_scanned: 0,
                 current_path: None,
                 warnings: vec![],
+                folder_path: folder_path.map(|s| s.to_string()),
             },
         );
 

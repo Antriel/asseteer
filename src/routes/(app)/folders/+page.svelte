@@ -23,6 +23,7 @@
     zips_scanned: number;
     current_path: string | null;
     warnings?: string[];
+    folder_path?: string;
   }
 
   interface RescanPreviewResult {
@@ -55,9 +56,12 @@
   let editingId = $state<number | null>(null);
   let editLabel = $state('');
   let editInput = $state<HTMLInputElement | null>(null);
-  let unlisten: UnlistenFn | null = null;
-  let rescanUnlisten: UnlistenFn | null = null;
+
+  // Single shared listener for all scan progress events
+  let scanUnlisten: UnlistenFn | null = null;
   let unlistenScanComplete: UnlistenFn | null = null;
+
+  let rescanUnlisten: UnlistenFn | null = null;
 
   // Per-folder rescan state (only one at a time)
   let rescanFolderId = $state<number | null>(null);
@@ -70,23 +74,26 @@
 
   onMount(async () => {
     await loadFolders();
-    // Re-subscribe if a scan is already in progress (navigated away and back)
-    if (uiState.isScanning && !unlisten) {
-      unlisten = await listen<ScanProgressEvent>('scan-progress', (event) => {
-        applyScanProgress(event.payload);
-      });
-    }
-    // Reload folders when a scan completes — needed when navigating back mid-scan,
-    // since the originating component's loadFolders() won't update our local state.
+    // Set up a single shared listener for scan-progress events
+    scanUnlisten = await listen<ScanProgressEvent>('scan-progress', (event) => {
+      const e = event.payload;
+      const folderPath = e.folder_path;
+      if (!folderPath) return;
+      // Only update if we're tracking this scan
+      if (!uiState.isScanningFolder(folderPath)) return;
+      applyScanProgress(folderPath, e);
+    });
+
+    // Reload folders when a scan completes — needed when navigating back mid-scan
     unlistenScanComplete = await listen('scan-complete', async () => {
       await loadFolders();
     });
   });
 
   onDestroy(() => {
-    if (unlisten) {
-      unlisten();
-      unlisten = null;
+    if (scanUnlisten) {
+      scanUnlisten();
+      scanUnlisten = null;
     }
     if (rescanUnlisten) {
       rescanUnlisten();
@@ -206,30 +213,32 @@
     }
   }
 
-  function applyScanProgress(e: ScanProgressEvent) {
-    uiState.scanDetails = {
-      phase: e.phase as typeof uiState.scanDetails.phase,
+  function applyScanProgress(folderPath: string, e: ScanProgressEvent) {
+    let progressMessage = '';
+    const details = {
+      phase: e.phase as 'idle' | 'discovering' | 'scanning' | 'inserting' | 'indexing' | 'complete',
       filesFound: e.files_found,
       filesInserted: e.files_inserted,
       filesTotal: e.files_total,
       zipsScanned: e.zips_scanned,
-      currentPath: e.current_path ?? uiState.scanDetails.currentPath,
+      currentPath: e.current_path ?? uiState.activeScans.get(folderPath)?.details.currentPath ?? null,
     };
+
     if (e.phase === 'discovering') {
       const zipInfo = e.zips_scanned > 0 ? ` (${e.zips_scanned} zips)` : '';
-      uiState.scanProgress = `Discovering... ${e.files_found} found${zipInfo}`;
+      progressMessage = `Discovering... ${e.files_found} found${zipInfo}`;
     } else if (e.phase === 'inserting' || e.phase === 'scanning') {
       if (e.files_total > 0) {
         const pct = Math.round((e.files_inserted / e.files_total) * 100);
-        uiState.scanProgress = `Saving... ${e.files_inserted.toLocaleString()}/${e.files_total.toLocaleString()} (${pct}%)`;
+        progressMessage = `Saving... ${e.files_inserted.toLocaleString()}/${e.files_total.toLocaleString()} (${pct}%)`;
       } else {
-        uiState.scanProgress = `Scanning... ${e.files_found.toLocaleString()} found`;
+        progressMessage = `Scanning... ${e.files_found.toLocaleString()} found`;
       }
     } else if (e.phase === 'indexing') {
       const pct = Math.round((e.files_inserted / e.files_total) * 100);
-      uiState.scanProgress = `Indexing for search... ${e.files_inserted.toLocaleString()}/${e.files_total.toLocaleString()} (${pct}%)`;
+      progressMessage = `Indexing for search... ${e.files_inserted.toLocaleString()}/${e.files_total.toLocaleString()} (${pct}%)`;
     } else {
-      uiState.scanProgress = `Done! ${e.files_found} assets.`;
+      progressMessage = `Done! ${e.files_found} assets.`;
       if (e.warnings && e.warnings.length > 0) {
         const count = e.warnings.length;
         const msg =
@@ -239,11 +248,14 @@
         showToast(msg, 'warning', 8000);
       }
     }
+
+    uiState.updateScan(folderPath, progressMessage, details);
   }
 
-  // Add folder
+  // Add folder — supports concurrent scans
   async function addFolder() {
     let succeeded = false;
+    let selectedPath: string | null = null;
     try {
       const selected = await open({
         directory: true,
@@ -252,20 +264,8 @@
       });
       if (!selected || typeof selected !== 'string') return;
 
-      uiState.scanProgress = 'Starting scan...';
-      uiState.isScanning = true;
-      uiState.scanningFolderPath = selected.replace(/\\/g, '/');
-      uiState.resetScanDetails();
-      uiState.startScanTimer();
-
-      if (unlisten) {
-        unlisten();
-        unlisten = null;
-      }
-
-      unlisten = await listen<ScanProgressEvent>('scan-progress', (event) => {
-        applyScanProgress(event.payload);
-      });
+      selectedPath = selected.replace(/\\/g, '/');
+      uiState.startScan(selectedPath);
 
       await invoke('add_folder', { path: selected });
       showToast('Folder added successfully', 'success');
@@ -273,17 +273,12 @@
     } catch (error) {
       showToast('Failed to add folder: ' + error, 'error');
     } finally {
-      uiState.stopScanTimer();
-      uiState.isScanning = false;
-      uiState.scanProgress = '';
-      uiState.scanningFolderPath = null;
-      if (unlisten) {
-        unlisten();
-        unlisten = null;
+      if (selectedPath) {
+        uiState.endScan(selectedPath);
       }
     }
 
-    // Reload folder list after isScanning is cleared so the new card appears immediately
+    // Reload folder list after scan ends so the new card appears immediately
     await loadFolders();
     if (succeeded) {
       exploreState.clearCache();
@@ -425,23 +420,22 @@
     }
   }
 
-  // Live elapsed time ticker for scan
-  let scanElapsedMs = $state(0);
-  $effect(() => {
-    const startedAt = uiState.scanStartedAt;
-    if (startedAt) {
-      scanElapsedMs = Date.now() - startedAt;
-      const interval = setInterval(() => {
-        scanElapsedMs = Date.now() - startedAt;
-      }, 1000);
-      return () => clearInterval(interval);
-    }
-  });
-
   function folderName(path: string): string {
     const parts = path.replace(/\\/g, '/').split('/');
     return parts[parts.length - 1] || path;
   }
+
+  // Tick counter that updates every second while any scan is active, for elapsed time display
+  let nowMs = $state(Date.now());
+  $effect(() => {
+    if (uiState.isScanning) {
+      nowMs = Date.now();
+      const interval = setInterval(() => {
+        nowMs = Date.now();
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  });
 </script>
 
 <div class="flex flex-col h-full overflow-auto p-6">
@@ -453,8 +447,7 @@
     </div>
     <button
       onclick={addFolder}
-      disabled={uiState.isScanning}
-      class="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-50"
+      class="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors"
     >
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
@@ -463,36 +456,38 @@
     </button>
   </div>
 
-  <!-- Scanning indicator (for add folder) -->
-  {#if uiState.isScanning && uiState.scanProgress}
+  <!-- Active scan progress cards -->
+  {#each [...uiState.activeScans.values()] as scan (scan.folderPath)}
+    {@const elapsed = nowMs - scan.startedAt}
     <div class="mb-4 rounded-lg border border-default bg-secondary p-4 flex items-center gap-3">
       <Spinner size="sm" />
       <div class="flex flex-col min-w-0">
         <div class="flex items-center gap-2">
-          <span class="text-sm text-secondary">{uiState.scanProgress}</span>
-          {#if scanElapsedMs > 0}
-            <span class="text-xs text-tertiary">{formatElapsed(scanElapsedMs)}</span>
+          <span class="text-sm font-medium text-primary">{folderName(scan.folderPath)}</span>
+          <span class="text-sm text-secondary">{scan.progressMessage}</span>
+          {#if elapsed > 0}
+            <span class="text-xs text-tertiary">{formatElapsed(elapsed)}</span>
           {/if}
         </div>
-        {#if uiState.scanDetails.currentPath}
+        {#if scan.details.currentPath}
           <span
             class="text-xs text-tertiary overflow-hidden whitespace-nowrap text-ellipsis block"
             style="direction: rtl;"
-            title={uiState.scanDetails.currentPath}
+            title={scan.details.currentPath}
           >
-            {uiState.scanDetails.currentPath}
+            {scan.details.currentPath}
           </span>
         {/if}
       </div>
     </div>
-  {/if}
+  {/each}
 
   <!-- Folder list -->
   {#if loading}
     <div class="flex items-center justify-center py-16">
       <Spinner size="lg" />
     </div>
-  {:else if folders.length === 0}
+  {:else if folders.length === 0 && !uiState.isScanning}
     <div class="flex flex-col items-center justify-center py-16 text-center">
       <div class="w-16 h-16 rounded-full bg-tertiary flex items-center justify-center mb-4">
         <FolderIcon class="w-8 h-8 text-tertiary" />
@@ -508,7 +503,7 @@
     </div>
   {:else}
     <div class="space-y-2">
-      {#each folders.filter((f) => !(uiState.isScanning && uiState.scanningFolderPath === f.path)) as folder (folder.id)}
+      {#each folders.filter((f) => !uiState.isScanningFolder(f.path)) as folder (folder.id)}
         <div class="rounded-lg border border-default bg-secondary transition-colors">
           <div class="p-4">
             <div class="flex items-start justify-between gap-4">

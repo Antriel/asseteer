@@ -137,6 +137,7 @@ pub async fn preview_rescan(
             &discover_progress,
             "rescan-progress",
             &search_excludes,
+            None,
         )
     });
 
@@ -163,6 +164,7 @@ pub async fn preview_rescan(
                     zips_scanned: zips,
                     current_path: None,
                     warnings: vec![],
+                    folder_path: None,
                 },
             );
             last_emit = Instant::now();
@@ -256,6 +258,7 @@ pub async fn preview_rescan(
             zips_scanned: progress.zips_scanned.load(Ordering::Relaxed),
             current_path: None,
             warnings: vec![],
+            folder_path: None,
         },
     );
 
@@ -311,6 +314,7 @@ pub async fn apply_rescan(
             zips_scanned: 0,
             current_path: None,
             warnings: vec![],
+            folder_path: None,
         },
     );
 
@@ -339,6 +343,7 @@ pub async fn apply_rescan(
                     zips_scanned: 0,
                     current_path: None,
                     warnings: vec![],
+                    folder_path: None,
                 },
             );
             last_emit = Instant::now();
@@ -395,6 +400,7 @@ pub async fn apply_rescan(
                     zips_scanned: 0,
                     current_path: None,
                     warnings: vec![],
+                    folder_path: None,
                 },
             );
             last_emit = Instant::now();
@@ -426,6 +432,7 @@ pub async fn apply_rescan(
                     zips_scanned: 0,
                     current_path: None,
                     warnings: vec![],
+                    folder_path: None,
                 },
             );
             last_emit = Instant::now();
@@ -488,6 +495,7 @@ pub async fn apply_rescan(
             zips_scanned: 0,
             current_path: None,
             warnings: vec![],
+            folder_path: None,
         },
     );
 
