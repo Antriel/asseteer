@@ -851,6 +851,7 @@ impl WorkQueue {
 
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(BATCH_UPDATE_INTERVAL_SEC));
+            let mut estimator = RateEstimator::new();
 
             loop {
                 ticker.tick().await;
@@ -871,9 +872,14 @@ impl WorkQueue {
                 let current_file = state.current_file.read().await.clone();
                 let started_at = *state.started_at.read().await;
 
-                // Calculate processing rate and ETA
-                let (processing_rate, eta_seconds) =
-                    calculate_eta(started_at, completed + failed, total, is_paused);
+                // Calculate processing rate and ETA using EWMA estimator
+                let (processing_rate, eta_seconds) = estimator.update(
+                    started_at,
+                    completed + failed,
+                    total,
+                    is_paused,
+                    BATCH_UPDATE_INTERVAL_SEC as f64,
+                );
 
                 // Emit progress event with category-specific event name
                 let progress = ProcessingProgress {
@@ -1237,36 +1243,75 @@ impl WorkQueue {
     }
 }
 
-/// Calculate processing rate and ETA
-fn calculate_eta(
-    started_at: Option<i64>,
-    processed: usize,
-    total: usize,
-    is_paused: bool,
-) -> (f64, Option<u64>) {
-    if is_paused || processed == 0 {
-        return (0.0, None);
+/// EWMA smoothing factor — lower = smoother.
+/// At α=0.1 with 2s ticks, effective window is ~20 ticks (~40s).
+const EWMA_ALPHA: f64 = 0.1;
+
+/// Blend factor for display rate: 70% EWMA + 30% global average.
+const EWMA_BLEND: f64 = 0.7;
+
+/// State for EWMA-based rate estimation, local to each progress emitter run.
+struct RateEstimator {
+    prev_processed: usize,
+    ewma_rate: f64,
+}
+
+impl RateEstimator {
+    fn new() -> Self {
+        Self {
+            prev_processed: 0,
+            ewma_rate: 0.0,
+        }
     }
 
-    let Some(start) = started_at else {
-        return (0.0, None);
-    };
+    /// Update the EWMA rate and return (display_rate, eta_seconds).
+    /// `interval_secs` is the time between ticks (typically BATCH_UPDATE_INTERVAL_SEC).
+    fn update(
+        &mut self,
+        started_at: Option<i64>,
+        processed: usize,
+        total: usize,
+        is_paused: bool,
+        interval_secs: f64,
+    ) -> (f64, Option<u64>) {
+        if is_paused || processed == 0 {
+            return (0.0, None);
+        }
 
-    let now = unix_now();
+        let Some(start) = started_at else {
+            return (0.0, None);
+        };
 
-    let elapsed_secs = (now - start) as f64;
-    if elapsed_secs <= 0.0 {
-        return (0.0, None);
-    }
+        let elapsed_secs = (unix_now() - start) as f64;
+        if elapsed_secs <= 0.0 {
+            return (0.0, None);
+        }
 
-    let rate = processed as f64 / elapsed_secs;
-    let remaining = total.saturating_sub(processed);
+        // Instant rate from items completed since last tick
+        let delta = processed.saturating_sub(self.prev_processed);
+        self.prev_processed = processed;
+        let instant_rate = delta as f64 / interval_secs;
 
-    if rate > 0.0 {
-        let eta = (remaining as f64 / rate).ceil() as u64;
-        (rate, Some(eta))
-    } else {
-        (0.0, None)
+        // Update EWMA (seed from instant rate on first update)
+        if self.ewma_rate == 0.0 {
+            self.ewma_rate = instant_rate;
+        } else {
+            self.ewma_rate = EWMA_ALPHA * instant_rate + (1.0 - EWMA_ALPHA) * self.ewma_rate;
+        }
+
+        // Global average rate
+        let global_rate = processed as f64 / elapsed_secs;
+
+        // Blend EWMA with global average for stability
+        let display_rate = EWMA_BLEND * self.ewma_rate + (1.0 - EWMA_BLEND) * global_rate;
+
+        let remaining = total.saturating_sub(processed);
+        if display_rate > 0.0 {
+            let eta = (remaining as f64 / display_rate).ceil() as u64;
+            (display_rate, Some(eta))
+        } else {
+            (0.0, None)
+        }
     }
 }
 
@@ -1339,28 +1384,47 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // calculate_eta (pure function)
+    // RateEstimator
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_calculate_eta_paused_returns_zero() {
-        let (rate, eta) = calculate_eta(Some(100), 50, 100, true);
+    fn test_rate_estimator_paused_returns_zero() {
+        let mut est = RateEstimator::new();
+        let (rate, eta) = est.update(Some(100), 50, 100, true, 2.0);
         assert_eq!(rate, 0.0);
         assert!(eta.is_none());
     }
 
     #[test]
-    fn test_calculate_eta_no_progress_returns_zero() {
-        let (rate, eta) = calculate_eta(Some(100), 0, 100, false);
+    fn test_rate_estimator_no_progress_returns_zero() {
+        let mut est = RateEstimator::new();
+        let (rate, eta) = est.update(Some(100), 0, 100, false, 2.0);
         assert_eq!(rate, 0.0);
         assert!(eta.is_none());
     }
 
     #[test]
-    fn test_calculate_eta_no_start_time_returns_zero() {
-        let (rate, eta) = calculate_eta(None, 50, 100, false);
+    fn test_rate_estimator_no_start_time_returns_zero() {
+        let mut est = RateEstimator::new();
+        let (rate, eta) = est.update(None, 50, 100, false, 2.0);
         assert_eq!(rate, 0.0);
         assert!(eta.is_none());
+    }
+
+    #[test]
+    fn test_rate_estimator_ewma_smoothing() {
+        let mut est = RateEstimator::new();
+        let start = unix_now() - 10; // started 10 seconds ago
+
+        // First tick: 20 items processed in 2s → instant rate = 10/s
+        let (rate1, eta1) = est.update(Some(start), 20, 100, false, 2.0);
+        assert!(rate1 > 0.0);
+        assert!(eta1.is_some());
+
+        // Second tick: 0 new items (stall) — EWMA should decrease but not crash to zero
+        let (rate2, _) = est.update(Some(start), 20, 100, false, 2.0);
+        assert!(rate2 > 0.0, "rate should stay positive after a stall");
+        assert!(rate2 < rate1, "rate should decrease after a stall");
     }
 
     #[test]
