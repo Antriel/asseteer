@@ -105,7 +105,7 @@
 
       <!-- Folder name: selects folder (loads assets), does NOT toggle expand -->
       <button
-        class="flex items-center gap-1 flex-1 min-w-0 cursor-pointer"
+        class="flex items-center gap-1 min-w-0 cursor-pointer"
         onclick={() => onSelect(node)}
       >
         {#if isZip}
@@ -125,7 +125,7 @@
         {:else}
           <FolderIcon size="sm" class={isSelected ? 'text-accent' : 'text-secondary'} />
         {/if}
-        <span class="whitespace-nowrap flex-1 text-left" title={node.name}>{node.name}</span>
+        <span class="whitespace-nowrap text-left" title={node.name}>{node.name}</span>
       </button>
 
       <span class="text-xs text-tertiary flex-shrink-0 opacity-0 group-hover:opacity-100"
