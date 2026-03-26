@@ -462,23 +462,21 @@
     {@const elapsed = nowMs - scan.startedAt}
     <div class="mb-4 rounded-lg border border-default bg-secondary p-4 flex items-center gap-3">
       <Spinner size="sm" />
-      <div class="flex flex-col min-w-0">
+      <div class="flex flex-col min-w-0 overflow-hidden flex-1">
         <div class="flex items-center gap-2">
           <span class="text-sm font-medium text-primary">{folderName(scan.folderPath)}</span>
-          <span class="text-sm text-secondary">{scan.progressMessage}</span>
+          <span class="text-sm text-secondary tabular-nums">{scan.progressMessage}</span>
           {#if elapsed > 0}
-            <span class="text-xs text-tertiary">{formatElapsed(elapsed)}</span>
+            <span class="text-xs text-tertiary tabular-nums">{formatElapsed(elapsed)}</span>
           {/if}
         </div>
-        {#if scan.details.currentPath}
-          <span
-            class="text-xs text-tertiary overflow-hidden whitespace-nowrap text-ellipsis block"
-            style="direction: rtl;"
-            title={scan.details.currentPath}
-          >
-            {scan.details.currentPath}
-          </span>
-        {/if}
+        <span
+          class="text-xs text-tertiary overflow-hidden whitespace-nowrap text-ellipsis block"
+          style="direction: rtl;"
+          title={scan.details.currentPath ?? ''}
+        >
+          {scan.details.currentPath ?? '\u00a0'}
+        </span>
       </div>
     </div>
   {/each}
