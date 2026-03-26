@@ -184,6 +184,7 @@
 </script>
 
 <div class="flex flex-col h-full overflow-auto p-6">
+  <div class="w-full max-w-3xl mx-auto">
     <h1 class="text-2xl font-semibold text-primary mb-1">Settings</h1>
     <p class="text-sm text-tertiary mb-8">Configure Asseteer features</p>
 
@@ -414,8 +415,9 @@
       <div class="rounded-lg border border-default bg-secondary p-5">
         <div class="flex items-center justify-between text-sm">
           <span class="text-tertiary">Version</span>
-          <span class="text-secondary">0.1.0</span>
+          <span class="text-secondary">{__APP_VERSION__}</span>
         </div>
       </div>
     </section>
+  </div>
 </div>
