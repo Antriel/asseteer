@@ -86,6 +86,8 @@ export interface ProcessingErrorDetail {
   asset_id: number;
   filename: string;
   rel_path: string;
+  zip_file: string | null;
+  zip_entry: string | null;
   folder_path: string;
   error_message: string;
   occurred_at: number;

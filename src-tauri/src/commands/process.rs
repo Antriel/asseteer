@@ -197,8 +197,8 @@ pub async fn get_processing_errors(
     let errors = match &category {
         Some(cat) => {
             sqlx::query_as::<_, ProcessingErrorDetail>(
-                "SELECT e.id, e.asset_id, a.filename, a.rel_path, sf.path as folder_path,
-                        e.error_message, e.occurred_at, e.retry_count
+                "SELECT e.id, e.asset_id, a.filename, a.rel_path, a.zip_file, a.zip_entry,
+                        sf.path as folder_path, e.error_message, e.occurred_at, e.retry_count
                  FROM processing_errors e
                  JOIN assets a ON e.asset_id = a.id
                  JOIN source_folders sf ON a.folder_id = sf.id
@@ -211,8 +211,8 @@ pub async fn get_processing_errors(
         }
         None => {
             sqlx::query_as::<_, ProcessingErrorDetail>(
-                "SELECT e.id, e.asset_id, a.filename, a.rel_path, sf.path as folder_path,
-                        e.error_message, e.occurred_at, e.retry_count
+                "SELECT e.id, e.asset_id, a.filename, a.rel_path, a.zip_file, a.zip_entry,
+                        sf.path as folder_path, e.error_message, e.occurred_at, e.retry_count
                  FROM processing_errors e
                  JOIN assets a ON e.asset_id = a.id
                  JOIN source_folders sf ON a.folder_id = sf.id

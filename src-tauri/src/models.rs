@@ -126,6 +126,8 @@ pub struct ProcessingErrorDetail {
     pub asset_id: i64,
     pub filename: String,
     pub rel_path: String,
+    pub zip_file: Option<String>,
+    pub zip_entry: Option<String>,
     pub folder_path: String,
     pub error_message: String,
     pub occurred_at: i64,

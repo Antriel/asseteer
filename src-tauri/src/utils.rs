@@ -31,6 +31,22 @@ pub fn resolve_asset_fs_path(asset: &Asset) -> String {
     }
 }
 
+/// Format a human-readable display path for an asset, including zip hierarchy if applicable.
+/// For zip assets: folder_path/[rel_path/]zip_file/zip_entry
+/// For regular assets: folder_path/[rel_path/]filename
+pub fn format_asset_display_path(asset: &Asset) -> String {
+    let base = if asset.rel_path.is_empty() {
+        asset.folder_path.clone()
+    } else {
+        format!("{}/{}", asset.folder_path, asset.rel_path)
+    };
+    if let (Some(zip_file), Some(zip_entry)) = (&asset.zip_file, &asset.zip_entry) {
+        format!("{}/{}/{}", base, zip_file, zip_entry)
+    } else {
+        format!("{}/{}", base, asset.filename)
+    }
+}
+
 /// Resolve the absolute filesystem path to the ZIP archive containing this asset.
 /// Returns: folder_path/rel_path/zip_file (or folder_path/zip_file if rel_path is empty)
 pub fn resolve_zip_path(asset: &Asset) -> String {

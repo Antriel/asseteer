@@ -682,11 +682,7 @@ impl WorkQueue {
                     {
                         let mut current = state.current_file.write().await;
                         *current = batch_assets.first().map(|a| {
-                            if a.rel_path.is_empty() {
-                                format!("{}/{}", a.folder_path, a.filename)
-                            } else {
-                                format!("{}/{}/{}", a.folder_path, a.rel_path, a.filename)
-                            }
+                            crate::utils::format_asset_display_path(a)
                         });
                     }
 
@@ -769,11 +765,7 @@ impl WorkQueue {
 
                         {
                             let mut current = state.current_file.write().await;
-                            *current = Some(if asset.rel_path.is_empty() {
-                                format!("{}/{}", asset.folder_path, asset.filename)
-                            } else {
-                                format!("{}/{}/{}", asset.folder_path, asset.rel_path, asset.filename)
-                            });
+                            *current = Some(crate::utils::format_asset_display_path(&asset));
                         }
 
                         // Use pre-loaded bytes if available, otherwise load per-asset
