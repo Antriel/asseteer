@@ -28,6 +28,10 @@ pub enum ProcessingOutput {
         sample_rate: i32,
         channels: i32,
     },
+    ClapSuccess {
+        asset_id: i64,
+        embedding: Vec<u8>,
+    },
     Failure {
         asset_id: i64,
         category: ProcessingCategory,
@@ -236,6 +240,25 @@ fn write_item_sync(conn: &rusqlite::Connection, item: ProcessingOutput, now: i64
 
             if let Ok(mut stmt) = conn.prepare_cached(
                 "UPDATE processing_errors SET resolved_at = ?1 WHERE asset_id = ?2 AND resolved_at IS NULL",
+            ) {
+                let _ = stmt.execute(rusqlite::params![now, asset_id]);
+            }
+        }
+        ProcessingOutput::ClapSuccess { asset_id, embedding } => {
+            if let Ok(mut stmt) = conn.prepare_cached(
+                "INSERT INTO audio_embeddings (asset_id, embedding, created_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT (asset_id) DO UPDATE SET
+                     embedding = excluded.embedding,
+                     created_at = excluded.created_at",
+            ) {
+                let _ = stmt.execute(rusqlite::params![asset_id, embedding, now]);
+            }
+
+            if let Ok(mut stmt) = conn.prepare_cached(
+                "UPDATE processing_errors
+                 SET resolved_at = ?1
+                 WHERE asset_id = ?2 AND category = 'clap' AND resolved_at IS NULL",
             ) {
                 let _ = stmt.execute(rusqlite::params![now, asset_id]);
             }

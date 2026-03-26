@@ -594,7 +594,7 @@ impl WorkQueue {
 
     /// Spawn a worker task that processes assets from both channels.
     /// Workers check the ZIP channel first (priority) then fall back to non-ZIP.
-    async fn spawn_worker(&self, _worker_id: usize, db: SqlitePool, batch_writer: DbBatchWriter) -> tokio::task::JoinHandle<()> {
+    async fn spawn_worker(&self, _worker_id: usize, _db: SqlitePool, batch_writer: DbBatchWriter) -> tokio::task::JoinHandle<()> {
         let zip_rx = self.zip_rx.clone();
         let nonzip_rx = self.nonzip_rx.clone();
         let category_states = self.category_states.clone();
@@ -680,7 +680,7 @@ impl WorkQueue {
                     break;
                 };
 
-                // For CLAP, process as a batch (writes directly — SQLite serializes)
+                // For CLAP, process as a batch and route results through the shared batch writer
                 if category == ProcessingCategory::Clap {
                     {
                         let mut current = state.current_file.write().await;
@@ -689,25 +689,37 @@ impl WorkQueue {
                         });
                     }
 
-                    let results = process_clap_embedding_batch(&batch_assets, &db).await;
+                    let outputs = process_clap_embedding_batch(&batch_assets).await;
 
-                    for result in results {
-                        if result.success {
-                            state.completed_assets.fetch_add(1, Ordering::SeqCst);
-                        } else {
-                            state.failed_assets.fetch_add(1, Ordering::SeqCst);
-                            if let Some(error_msg) = &result.error {
-                                // CLAP errors written directly (SQLite serializes)
-                                let _ = sqlx::query(
-                                    "INSERT INTO processing_errors (asset_id, category, error_message, occurred_at, retry_count)
-                                     VALUES (?, ?, ?, ?, 0)",
-                                )
-                                .bind(result.asset_id)
-                                .bind(category.as_str())
-                                .bind(error_msg)
-                                .bind(unix_now())
-                                .execute(&db)
-                                .await;
+                    for output in outputs {
+                        match output {
+                            crate::task_system::db_writer::ProcessingOutput::ClapSuccess { .. } => {
+                                state.completed_assets.fetch_add(1, Ordering::SeqCst);
+                                batch_writer.send(output).await;
+                            }
+                            crate::task_system::db_writer::ProcessingOutput::Failure {
+                                asset_id,
+                                error,
+                                ..
+                            } => {
+                                state.failed_assets.fetch_add(1, Ordering::SeqCst);
+                                batch_writer
+                                    .send(crate::task_system::db_writer::ProcessingOutput::Failure {
+                                        asset_id,
+                                        category,
+                                        error,
+                                    })
+                                    .await;
+                            }
+                            _ => {
+                                state.failed_assets.fetch_add(1, Ordering::SeqCst);
+                                batch_writer
+                                    .send(crate::task_system::db_writer::ProcessingOutput::Failure {
+                                        asset_id: batch_assets.first().map(|a| a.id).unwrap_or(0),
+                                        category,
+                                        error: "Unexpected processing output for CLAP batch".to_string(),
+                                    })
+                                    .await;
                             }
                         }
                     }

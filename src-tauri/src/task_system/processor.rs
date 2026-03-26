@@ -2,11 +2,14 @@
 use crate::clap::{embedding_to_blob, ensure_server_running, get_clap_client};
 use crate::models::Asset;
 use crate::task_system::db_writer::ProcessingOutput;
-use crate::utils::{resolve_asset_fs_path, unix_now};
+use crate::utils::resolve_asset_fs_path;
 use crate::zip_cache;
 use image::{DynamicImage, GenericImageView};
-use sqlx::SqlitePool;
 use std::time::{Duration, Instant};
+#[cfg(test)]
+use sqlx::SqlitePool;
+#[cfg(test)]
+use crate::utils::unix_now;
 
 /// Timeout for processing a single asset (30 seconds)
 const PROCESSING_TIMEOUT: Duration = Duration::from_secs(30);
@@ -691,16 +694,17 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
     }
 }
 
-/// Process CLAP embeddings for a batch of audio assets
-pub async fn process_clap_embedding_batch(assets: &[Asset], db: &SqlitePool) -> Vec<ProcessingResult> {
+/// Process CLAP embeddings for a batch of audio assets.
+/// Returns batched DB write items for successful embeddings and failure items for errors.
+pub async fn process_clap_embedding_batch(assets: &[Asset]) -> Vec<ProcessingOutput> {
     // Ensure CLAP server is running (this is a no-op if already running)
     if let Err(e) = ensure_server_running().await {
         return assets
             .iter()
-            .map(|a| ProcessingResult {
+            .map(|a| ProcessingOutput::Failure {
                 asset_id: a.id,
-                success: false,
-                error: Some(format!("CLAP server unavailable: {}", e)),
+                category: crate::models::ProcessingCategory::Clap,
+                error: format!("CLAP server unavailable: {}", e),
             })
             .collect();
     }
@@ -733,14 +737,15 @@ pub async fn process_clap_embedding_batch(assets: &[Asset], db: &SqlitePool) -> 
     }
 
     // Initialize results
-    let mut results: Vec<Option<ProcessingResult>> = vec![None; assets.len()];
+    let mut results: Vec<Option<ProcessingOutput>> = Vec::with_capacity(assets.len());
+    results.resize_with(assets.len(), || None);
 
     // Fill in load errors
     for (idx, err) in load_errors {
-        results[idx] = Some(ProcessingResult {
+        results[idx] = Some(ProcessingOutput::Failure {
             asset_id: assets[idx].id,
-            success: false,
-            error: Some(err),
+            category: crate::models::ProcessingCategory::Clap,
+            error: err,
         });
     }
 
@@ -751,11 +756,11 @@ pub async fn process_clap_embedding_batch(assets: &[Asset], db: &SqlitePool) -> 
                 for (batch_idx, embed_result) in embeddings.into_iter().enumerate() {
                     let asset_idx = fs_indices[batch_idx];
                     results[asset_idx] = Some(match embed_result {
-                        Ok(embedding) => store_embedding(assets[asset_idx].id, &embedding, db).await,
-                        Err(e) => ProcessingResult {
+                        Ok(embedding) => store_embedding(assets[asset_idx].id, &embedding),
+                        Err(e) => ProcessingOutput::Failure {
                             asset_id: assets[asset_idx].id,
-                            success: false,
-                            error: Some(e),
+                            category: crate::models::ProcessingCategory::Clap,
+                            error: e,
                         },
                     });
                 }
@@ -763,10 +768,10 @@ pub async fn process_clap_embedding_batch(assets: &[Asset], db: &SqlitePool) -> 
             Err(e) => {
                 // Batch failed entirely - mark all as failed
                 for &idx in &fs_indices {
-                    results[idx] = Some(ProcessingResult {
+                    results[idx] = Some(ProcessingOutput::Failure {
                         asset_id: assets[idx].id,
-                        success: false,
-                        error: Some(format!("Batch request failed: {}", e)),
+                        category: crate::models::ProcessingCategory::Clap,
+                        error: format!("Batch request failed: {}", e),
                     });
                 }
             }
@@ -780,21 +785,21 @@ pub async fn process_clap_embedding_batch(assets: &[Asset], db: &SqlitePool) -> 
                 for (batch_idx, embed_result) in embeddings.into_iter().enumerate() {
                     let asset_idx = zip_indices[batch_idx];
                     results[asset_idx] = Some(match embed_result {
-                        Ok(embedding) => store_embedding(assets[asset_idx].id, &embedding, db).await,
-                        Err(e) => ProcessingResult {
+                        Ok(embedding) => store_embedding(assets[asset_idx].id, &embedding),
+                        Err(e) => ProcessingOutput::Failure {
                             asset_id: assets[asset_idx].id,
-                            success: false,
-                            error: Some(e),
+                            category: crate::models::ProcessingCategory::Clap,
+                            error: e,
                         },
                     });
                 }
             }
             Err(e) => {
                 for &idx in &zip_indices {
-                    results[idx] = Some(ProcessingResult {
+                    results[idx] = Some(ProcessingOutput::Failure {
                         asset_id: assets[idx].id,
-                        success: false,
-                        error: Some(format!("Batch upload failed: {}", e)),
+                        category: crate::models::ProcessingCategory::Clap,
+                        error: format!("Batch upload failed: {}", e),
                     });
                 }
             }
@@ -806,53 +811,20 @@ pub async fn process_clap_embedding_batch(assets: &[Asset], db: &SqlitePool) -> 
         .into_iter()
         .enumerate()
         .map(|(i, r)| {
-            r.unwrap_or(ProcessingResult {
+            r.unwrap_or(ProcessingOutput::Failure {
                 asset_id: assets[i].id,
-                success: false,
-                error: Some("No result produced".to_string()),
+                category: crate::models::ProcessingCategory::Clap,
+                error: "No result produced".to_string(),
             })
         })
         .collect()
 }
 
-/// Store an embedding in the database and resolve errors
-async fn store_embedding(asset_id: i64, embedding: &[f32], db: &SqlitePool) -> ProcessingResult {
-    let blob = embedding_to_blob(embedding);
-    let now = unix_now();
-
-    match sqlx::query(
-        "INSERT INTO audio_embeddings (asset_id, embedding, created_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT (asset_id) DO UPDATE SET
-             embedding = excluded.embedding,
-             created_at = excluded.created_at",
-    )
-    .bind(asset_id)
-    .bind(&blob)
-    .bind(now)
-    .execute(db)
-    .await
-    {
-        Ok(_) => {
-            let _ = sqlx::query(
-                "UPDATE processing_errors SET resolved_at = ? WHERE asset_id = ? AND category = 'clap' AND resolved_at IS NULL",
-            )
-            .bind(now)
-            .bind(asset_id)
-            .execute(db)
-            .await;
-
-            ProcessingResult {
-                asset_id,
-                success: true,
-                error: None,
-            }
-        }
-        Err(e) => ProcessingResult {
-            asset_id,
-            success: false,
-            error: Some(format!("Failed to save embedding: {}", e)),
-        },
+/// Build a batched write item for a successful CLAP embedding.
+fn store_embedding(asset_id: i64, embedding: &[f32]) -> ProcessingOutput {
+    ProcessingOutput::ClapSuccess {
+        asset_id,
+        embedding: embedding_to_blob(embedding),
     }
 }
 
