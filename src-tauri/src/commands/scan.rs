@@ -251,6 +251,11 @@ pub async fn add_folder(
     // Batched with progress events so the UI doesn't appear stuck.
     populate_fts_batched(&app, &pool, folder_id, max_id_before, Some(&normalized_path)).await?;
 
+    // Populate precomputed directory tree for instant folder browsing (non-fatal)
+    if let Err(e) = populate_directories(&pool, &state.db_path, folder_id).await {
+        eprintln!("[Scan] Failed to populate directories for folder {}: {}", folder_id, e);
+    }
+
     // WAL auto-checkpoint is disabled globally (via after_connect); run a
     // TRUNCATE checkpoint to flush WAL → .db and free disk space.
     // TRUNCATE waits for readers to finish (frontend reads are short), so
@@ -950,6 +955,293 @@ async fn populate_fts_batched(
     Ok(())
 }
 
+
+/// Populate the `directories` table for a folder by querying the assets table.
+/// Runs after asset insertion (scan or rescan). Replaces all directory rows for
+/// the folder — safe because the directory set is small (hundreds to low thousands).
+pub(crate) async fn populate_directories(
+    pool: &sqlx::SqlitePool,
+    db_path: &str,
+    folder_id: i64,
+) -> Result<(), String> {
+    // Collect directory data from assets using sqlx (async-friendly)
+    // 1. Filesystem directories: distinct rel_path values (non-zip assets)
+    let fs_rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT rel_path, COUNT(*) as cnt FROM assets
+         WHERE folder_id = ?1 AND zip_file IS NULL
+         GROUP BY rel_path",
+    )
+    .bind(folder_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("populate_directories: fs query failed: {}", e))?;
+
+    // 2. Zip archives: distinct (rel_path, zip_file) with asset counts
+    let zip_rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT rel_path, zip_file, COUNT(*) as cnt FROM assets
+         WHERE folder_id = ?1 AND zip_file IS NOT NULL
+         GROUP BY rel_path, zip_file",
+    )
+    .bind(folder_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("populate_directories: zip query failed: {}", e))?;
+
+    // 3. Zip-internal directories: distinct (rel_path, zip_file, zip_entry) for dir extraction
+    let zip_entry_rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT rel_path, zip_file, zip_entry FROM assets
+         WHERE folder_id = ?1 AND zip_file IS NOT NULL AND zip_entry IS NOT NULL",
+    )
+    .bind(folder_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("populate_directories: zip entry query failed: {}", e))?;
+
+    // Do the heavy lifting on a blocking thread with rusqlite for fast bulk insert
+    let db_path = db_path.to_string();
+    tokio::task::spawn_blocking(move || {
+        populate_directories_blocking(
+            &db_path,
+            folder_id,
+            &fs_rows,
+            &zip_rows,
+            &zip_entry_rows,
+        )
+    })
+    .await
+    .map_err(|e| format!("populate_directories: task panicked: {}", e))?
+}
+
+/// Key for looking up a directory node's inserted row ID
+#[derive(Hash, Eq, PartialEq, Clone)]
+enum DirKey {
+    /// Filesystem directory: (rel_path,)
+    Fs(String),
+    /// ZIP archive node: (rel_path, zip_file)
+    Zip(String, String),
+    /// Directory inside a ZIP: (rel_path, zip_file, zip_prefix)
+    ZipDir(String, String, String),
+}
+
+fn populate_directories_blocking(
+    db_path: &str,
+    folder_id: i64,
+    fs_rows: &[(String, i64)],
+    zip_rows: &[(String, String, i64)],
+    zip_entry_rows: &[(String, String, String)],
+) -> Result<(), String> {
+    use std::collections::HashMap;
+
+    let conn = rusqlite::Connection::open(db_path).map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=30000; PRAGMA wal_autocheckpoint=0;")
+        .map_err(|e| e.to_string())?;
+    conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+
+    // Clear existing directories for this folder
+    conn.execute("DELETE FROM directories WHERE folder_id = ?1", [folder_id])
+        .map_err(|e| e.to_string())?;
+
+    let mut id_map: HashMap<DirKey, i64> = HashMap::new();
+    // Track asset counts per directory: (dir_key -> count of direct assets)
+    let mut asset_counts: HashMap<DirKey, i64> = HashMap::new();
+    // Track child counts: (dir_key -> count of direct children)
+    let mut child_counts: HashMap<DirKey, i64> = HashMap::new();
+
+    // --- Build filesystem directory nodes ---
+    // From fs_rows, extract all directory segments and count assets
+    for (rel_path, count) in fs_rows {
+        if rel_path.is_empty() {
+            // Assets at folder root — no directory node needed (root is the source folder)
+            continue;
+        }
+        let key = DirKey::Fs(rel_path.clone());
+        *asset_counts.entry(key).or_insert(0) += count;
+
+        // Ensure all ancestor directories exist
+        let segments: Vec<&str> = rel_path.split('/').collect();
+        for depth in 0..segments.len() {
+            let ancestor_path = segments[..=depth].join("/");
+            let ancestor_key = DirKey::Fs(ancestor_path);
+            // Just ensure it exists in asset_counts (will get 0 if no direct assets)
+            asset_counts.entry(ancestor_key).or_insert(0);
+        }
+    }
+
+    // Also ensure filesystem directories exist for any rel_path that has zip files
+    for (rel_path, _, _) in zip_rows {
+        if !rel_path.is_empty() {
+            let segments: Vec<&str> = rel_path.split('/').collect();
+            for depth in 0..segments.len() {
+                let ancestor_path = segments[..=depth].join("/");
+                asset_counts.entry(DirKey::Fs(ancestor_path)).or_insert(0);
+            }
+        }
+    }
+
+    // --- Build zip archive nodes ---
+    for (rel_path, zip_file, count) in zip_rows {
+        let key = DirKey::Zip(rel_path.clone(), zip_file.clone());
+        *asset_counts.entry(key).or_insert(0) += count;
+    }
+
+    // --- Build zip-internal directory nodes ---
+    // Extract leaf directory from each zip_entry, then ensure all ancestor zip dirs exist
+    {
+        // Collect unique (rel_path, zip_file, leaf_dir) tuples
+        let mut zip_dirs: HashMap<(String, String), std::collections::HashSet<String>> = HashMap::new();
+        for (rel_path, zip_file, zip_entry) in zip_entry_rows {
+            if let Some(last_slash) = zip_entry.rfind('/') {
+                let leaf_dir = &zip_entry[..last_slash];
+                zip_dirs
+                    .entry((rel_path.clone(), zip_file.clone()))
+                    .or_default()
+                    .insert(leaf_dir.to_string());
+            }
+        }
+
+        for ((rel_path, zip_file), leaf_dirs) in &zip_dirs {
+            for leaf_dir in leaf_dirs {
+                // Create all ancestor zip-internal directories
+                let segments: Vec<&str> = leaf_dir.split('/').collect();
+                for depth in 0..segments.len() {
+                    let prefix = segments[..=depth].join("/") + "/";
+                    let key = DirKey::ZipDir(rel_path.clone(), zip_file.clone(), prefix);
+                    asset_counts.entry(key).or_insert(0);
+                }
+            }
+        }
+
+        // Count assets per zip-internal directory
+        for (rel_path, zip_file, zip_entry) in zip_entry_rows {
+            // The directory containing this entry
+            if let Some(last_slash) = zip_entry.rfind('/') {
+                let dir_prefix = zip_entry[..last_slash].to_string() + "/";
+                let key = DirKey::ZipDir(rel_path.clone(), zip_file.clone(), dir_prefix);
+                *asset_counts.entry(key).or_insert(0) += 1;
+            } else {
+                // File at zip root — count toward the zip archive node itself
+                // (already counted in zip_rows)
+            }
+        }
+    }
+
+    // --- Compute child counts ---
+    // A child of DirKey::Fs("a/b") is DirKey::Fs("a/b/x") where x has no more slashes
+    // A child of DirKey::Zip(rp, zf) is DirKey::ZipDir(rp, zf, "x/") where x has no slashes
+    // A child of DirKey::ZipDir(rp, zf, "a/b/") is DirKey::ZipDir(rp, zf, "a/b/x/")
+    // A child of DirKey::Fs("") (root) is DirKey::Fs("x") and DirKey::Zip("", zf)
+    let all_keys: Vec<DirKey> = asset_counts.keys().cloned().collect();
+    for key in &all_keys {
+        let parent_key = match key {
+            DirKey::Fs(rel_path) => {
+                if let Some(last_slash) = rel_path.rfind('/') {
+                    Some(DirKey::Fs(rel_path[..last_slash].to_string()))
+                } else {
+                    None // direct child of folder root — counted on source_folders
+                }
+            }
+            DirKey::Zip(rel_path, _zip_file) => {
+                if rel_path.is_empty() {
+                    None // zip at folder root
+                } else {
+                    Some(DirKey::Fs(rel_path.clone()))
+                }
+            }
+            DirKey::ZipDir(rel_path, zip_file, zip_prefix) => {
+                // Parent is the zip prefix with one fewer segment
+                let trimmed = zip_prefix.trim_end_matches('/');
+                if let Some(last_slash) = trimmed.rfind('/') {
+                    Some(DirKey::ZipDir(
+                        rel_path.clone(),
+                        zip_file.clone(),
+                        trimmed[..last_slash].to_string() + "/",
+                    ))
+                } else {
+                    // Direct child of zip root
+                    Some(DirKey::Zip(rel_path.clone(), zip_file.clone()))
+                }
+            }
+        };
+        if let Some(pk) = parent_key {
+            *child_counts.entry(pk).or_insert(0) += 1;
+        }
+    }
+
+    // --- Insert all nodes, parents first ---
+    // Sort by depth (number of path segments) to ensure parents are inserted first
+    let mut sorted_keys: Vec<DirKey> = asset_counts.keys().cloned().collect();
+    sorted_keys.sort_by_key(|k| match k {
+        DirKey::Fs(rp) => (0, rp.matches('/').count(), rp.clone()),
+        DirKey::Zip(rp, zf) => (1, rp.matches('/').count(), format!("{}\0{}", rp, zf)),
+        DirKey::ZipDir(rp, zf, zp) => (2, rp.matches('/').count() + zp.matches('/').count(), format!("{}\0{}\0{}", rp, zf, zp)),
+    });
+
+    let mut stmt = conn
+        .prepare(
+            "INSERT INTO directories (folder_id, parent_id, name, rel_path, zip_file, zip_prefix, asset_count, child_count, dir_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .map_err(|e| e.to_string())?;
+
+    for key in &sorted_keys {
+        let (parent_id, name, rel_path, zip_file, zip_prefix, dir_type) = match key {
+            DirKey::Fs(rp) => {
+                let name = rp.rsplit('/').next().unwrap_or(rp).to_string();
+                let parent_key = if let Some(last_slash) = rp.rfind('/') {
+                    Some(DirKey::Fs(rp[..last_slash].to_string()))
+                } else {
+                    None
+                };
+                let parent_id = parent_key.and_then(|pk| id_map.get(&pk).copied());
+                (parent_id, name, rp.clone(), None::<String>, None::<String>, "dir")
+            }
+            DirKey::Zip(rp, zf) => {
+                let parent_key = if rp.is_empty() {
+                    None
+                } else {
+                    Some(DirKey::Fs(rp.clone()))
+                };
+                let parent_id = parent_key.and_then(|pk| id_map.get(&pk).copied());
+                (parent_id, zf.clone(), rp.clone(), Some(zf.clone()), None::<String>, "zip")
+            }
+            DirKey::ZipDir(rp, zf, zp) => {
+                let trimmed = zp.trim_end_matches('/');
+                let name = trimmed.rsplit('/').next().unwrap_or(trimmed).to_string();
+                let parent_key = if let Some(last_slash) = trimmed.rfind('/') {
+                    DirKey::ZipDir(rp.clone(), zf.clone(), trimmed[..last_slash].to_string() + "/")
+                } else {
+                    DirKey::Zip(rp.clone(), zf.clone())
+                };
+                let parent_id = id_map.get(&parent_key).copied();
+                (parent_id, name, rp.clone(), Some(zf.clone()), Some(zp.clone()), "zipdir")
+            }
+        };
+
+        let ac = asset_counts.get(key).copied().unwrap_or(0);
+        let cc = child_counts.get(key).copied().unwrap_or(0);
+
+        stmt.execute(rusqlite::params![
+            folder_id,
+            parent_id,
+            name,
+            rel_path,
+            zip_file,
+            zip_prefix,
+            ac,
+            cc,
+            dir_type,
+        ])
+        .map_err(|e| e.to_string())?;
+
+        let row_id = conn.last_insert_rowid();
+        id_map.insert(key.clone(), row_id);
+    }
+
+    drop(stmt);
+    conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+
+    Ok(())
+}
 
 /// Load folder search excludes as a HashSet of (zip_file, excluded_path) pairs.
 /// Encode an exclude key as `"{zip_file_or_empty}\0{path}"` for O(1) borrowed lookup.

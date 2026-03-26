@@ -1,6 +1,6 @@
 use crate::commands::scan::{
-    discover_files_streaming, insert_asset_row, load_search_excludes, DiscoveredAsset,
-    ScanProgress, ScanProgressState,
+    discover_files_streaming, insert_asset_row, load_search_excludes, populate_directories,
+    DiscoveredAsset, ScanProgress, ScanProgressState,
 };
 use crate::AppState;
 use serde_json;
@@ -465,6 +465,11 @@ pub async fn apply_rescan(
     }
 
     tx.commit().await.map_err(|e| e.to_string())?;
+
+    // Rebuild precomputed directory tree (non-fatal — don't block rescan completion)
+    if let Err(e) = populate_directories(&state.pool, &state.db_path, folder_id).await {
+        eprintln!("[Rescan] Failed to populate directories for folder {}: {}", folder_id, e);
+    }
 
     // Encode warnings as JSON (NULL if empty)
     let warnings_json: Option<String> = if preview.warnings.is_empty() {

@@ -32,15 +32,15 @@ const count = await getAssetCount(db);
 | Function | Purpose |
 |----------|---------|
 | `getSourceFolderRoots(db)` | Root directory nodes from active source folders |
-| `getFolderChildren(db, folderId, parentRelPath)` | Child directories within a folder |
-| `getZipDirectoryChildren(db, folderId, relPath, zipFile, prefix)` | Directories inside a ZIP |
+| `getDirectoryChildren(db, directoryId, folderId)` | Child directories (uses precomputed `directories` table) |
 
 **Search config** (take `db` parameter):
 
 | Function | Purpose |
 |----------|---------|
 | `getSearchExcludes(db, folderId)` | Per-folder search exclusions |
-| `getDistinctRelPaths(db, folderId)` | All rel_paths for folder tree |
+| `getDistinctRelPaths(db, folderId)` | All rel_paths for folder tree (from directories table) |
+| `getZipDirTrees(db, folderId)` | ZIP directory trees for search config panel |
 
 **CLAP / semantic search** (use `invoke()`, no `db` parameter):
 

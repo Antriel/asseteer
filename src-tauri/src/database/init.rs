@@ -90,6 +90,19 @@ pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Create directories table for precomputed folder tree
+    sqlx::query(CREATE_DIRECTORIES_TABLE)
+        .execute(pool)
+        .await?;
+    for index_sql in CREATE_DIRECTORIES_INDEXES
+        .split(';')
+        .filter(|s| !s.trim().is_empty())
+    {
+        sqlx::query(index_sql.trim())
+            .execute(pool)
+            .await?;
+    }
+
     // Create audio embeddings table for CLAP semantic search
     sqlx::query(CREATE_AUDIO_EMBEDDINGS_TABLE)
         .execute(pool)

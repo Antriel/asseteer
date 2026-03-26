@@ -318,11 +318,71 @@ function addFolderFilterConditions(loc: FolderLocation, conditions: string[], pa
 export interface DirectoryNode {
   /** Unique key for this node in the tree */
   key: string;
+  /** Row ID in the directories table (for parent_id lookups) */
+  directoryId: number;
   name: string;
   childCount: number;
   assetCount: number;
   /** The FolderLocation this node represents (for filtering assets when selected) */
   location: FolderLocation;
+}
+
+/** Raw row from the directories table */
+interface DirectoryRow {
+  id: number;
+  name: string;
+  rel_path: string;
+  zip_file: string | null;
+  zip_prefix: string | null;
+  asset_count: number;
+  child_count: number;
+  dir_type: string;
+  folder_id: number;
+}
+
+/** Convert a directories table row to a DirectoryNode */
+function rowToNode(row: DirectoryRow): DirectoryNode {
+  const folderId = row.folder_id;
+  if (row.dir_type === 'zipdir') {
+    return {
+      key: `zip:${folderId}:${row.rel_path}:${row.zip_file}:${row.zip_prefix}`,
+      directoryId: row.id,
+      name: row.name,
+      childCount: row.child_count,
+      assetCount: row.asset_count,
+      location: {
+        type: 'zip',
+        folderId,
+        relPath: row.rel_path,
+        zipFile: row.zip_file!,
+        zipPrefix: row.zip_prefix!,
+      },
+    };
+  } else if (row.dir_type === 'zip') {
+    return {
+      key: `zip:${folderId}:${row.rel_path}:${row.zip_file}`,
+      directoryId: row.id,
+      name: row.name,
+      childCount: row.child_count,
+      assetCount: row.asset_count,
+      location: {
+        type: 'zip',
+        folderId,
+        relPath: row.rel_path,
+        zipFile: row.zip_file!,
+        zipPrefix: '',
+      },
+    };
+  } else {
+    return {
+      key: `folder:${folderId}:${row.rel_path}`,
+      directoryId: row.id,
+      name: row.name,
+      childCount: row.child_count,
+      assetCount: row.asset_count,
+      location: { type: 'folder', folderId, relPath: row.rel_path },
+    };
+  }
 }
 
 /**
@@ -332,236 +392,55 @@ export async function getSourceFolderRoots(db: Database): Promise<DirectoryNode[
   const folders = await db.select<SourceFolder[]>(
     `SELECT * FROM source_folders WHERE status = 'active' ORDER BY path COLLATE NOCASE`,
   );
+  // Get root-level child counts from the directories table
+  const rootCounts = await db.select<Array<{ folder_id: number; cnt: number }>>(
+    `SELECT folder_id, COUNT(*) as cnt FROM directories
+     WHERE parent_id IS NULL
+     GROUP BY folder_id`,
+  );
+  const countMap = new Map(rootCounts.map((r) => [r.folder_id, r.cnt]));
+
   return folders.map((f) => ({
     key: `folder:${f.id}`,
+    directoryId: 0, // root nodes don't have a directory row
     name: f.label || f.path.split(/[\\/]/).pop() || f.path,
-    childCount: 1, // assume expandable
+    childCount: countMap.get(f.id) ?? 0,
     assetCount: f.asset_count,
     location: { type: 'folder' as const, folderId: f.id, relPath: '' },
   }));
 }
 
 /**
- * Get child directory nodes within a source folder at a given rel_path prefix.
+ * Get child directory nodes using the precomputed directories table.
+ * For root-level children (directoryId === 0), queries by folder_id + parent_id IS NULL.
  */
-export async function getFolderChildren(
+export async function getDirectoryChildren(
   db: Database,
+  directoryId: number,
   folderId: number,
-  parentRelPath: string,
 ): Promise<DirectoryNode[]> {
-  // parentRelPath is '' for folder root, 'Packs' for a subfolder, etc.
-  // We need to find the immediate child directories.
-  const parentDepth = parentRelPath === '' ? 0 : parentRelPath.split('/').length;
-
-  // Get all distinct rel_paths under this prefix (for non-zip assets)
-  const relPathPattern = parentRelPath === '' ? '%' : parentRelPath + '/%';
-  const [dirRows, zipRows] = await Promise.all([
-    db.select<Array<{ rel_path: string; asset_count: number }>>(
-      `SELECT rel_path, COUNT(*) as asset_count FROM assets
-       WHERE folder_id = ? AND rel_path LIKE ? AND zip_file IS NULL
-       GROUP BY rel_path
-       ORDER BY rel_path COLLATE NOCASE`,
-      [folderId, relPathPattern],
-    ),
-    // Find ZIP files at this level
-    db.select<Array<{ rel_path: string; zip_file: string; asset_count: number }>>(
-      `SELECT rel_path, zip_file, COUNT(*) as asset_count FROM assets
-       WHERE folder_id = ? AND rel_path = ? AND zip_file IS NOT NULL
-       GROUP BY rel_path, zip_file
-       ORDER BY zip_file COLLATE NOCASE`,
-      [folderId, parentRelPath],
-    ),
-  ]);
-
-  // Build child directory nodes from rel_path segments
-  const childMap = new Map<string, { assetCount: number; subDirs: Set<string> }>();
-
-  for (const row of dirRows) {
-    // Skip exact match (assets directly in parentRelPath — not subdirectories)
-    if (row.rel_path === parentRelPath) continue;
-
-    const segments = row.rel_path.split('/');
-    if (segments.length <= parentDepth) continue;
-
-    const childName = segments[parentDepth];
-    const childRelPath = segments.slice(0, parentDepth + 1).join('/');
-
-    if (!childMap.has(childRelPath)) {
-      childMap.set(childRelPath, { assetCount: 0, subDirs: new Set() });
-    }
-    const entry = childMap.get(childRelPath)!;
-    entry.assetCount += row.asset_count;
-
-    // Track subdirectories for childCount
-    if (segments.length > parentDepth + 1) {
-      entry.subDirs.add(segments[parentDepth + 1]);
-    }
-  }
-
-  const nodes: DirectoryNode[] = [];
-
-  // Add filesystem directory children
-  for (const [relPath, data] of childMap) {
-    const name = relPath.split('/').pop()!;
-    nodes.push({
-      key: `folder:${folderId}:${relPath}`,
-      name,
-      childCount: data.subDirs.size,
-      assetCount: data.assetCount,
-      location: { type: 'folder', folderId, relPath },
-    });
-  }
-
-  // Add ZIP file nodes
-  for (const row of zipRows) {
-    nodes.push({
-      key: `zip:${folderId}:${row.rel_path}:${row.zip_file}`,
-      name: row.zip_file,
-      childCount: 1, // assume expandable
-      assetCount: row.asset_count,
-      location: {
-        type: 'zip',
-        folderId,
-        relPath: row.rel_path,
-        zipFile: row.zip_file,
-        zipPrefix: '',
-      },
-    });
-  }
-
-  // Also check for ZIPs in child directories (they need to appear as expandable)
-  // and count how many zips exist at each child rel_path level
-  const zipInChildRows = await db.select<Array<{ rel_path: string; zip_count: number }>>(
-    `SELECT rel_path, COUNT(DISTINCT zip_file) as zip_count FROM assets
-     WHERE folder_id = ? AND rel_path LIKE ? AND rel_path != ? AND zip_file IS NOT NULL
-     GROUP BY rel_path`,
-    [folderId, relPathPattern, parentRelPath],
-  );
-
-  // Update childCount for directories that contain ZIPs, or create new nodes
-  // for directories that only contain ZIPs (no loose assets)
-  const zipOnlyDirs = new Map<string, { zipCount: number; subDirs: Set<string> }>();
-
-  for (const row of zipInChildRows) {
-    const segments = row.rel_path.split('/');
-    if (segments.length <= parentDepth) continue;
-    const childRelPath = segments.slice(0, parentDepth + 1).join('/');
-    const node = nodes.find(
-      (n) => n.location.type === 'folder' && n.location.relPath === childRelPath,
+  let rows: DirectoryRow[];
+  if (directoryId === 0) {
+    // Root level: children with no parent
+    rows = await db.select<DirectoryRow[]>(
+      `SELECT id, name, rel_path, zip_file, zip_prefix, asset_count, child_count, dir_type, folder_id
+       FROM directories
+       WHERE folder_id = ? AND parent_id IS NULL
+       ORDER BY dir_type, name COLLATE NOCASE`,
+      [folderId],
     );
-    if (node) {
-      if (node.childCount === 0) {
-        node.childCount = 1; // has at least ZIP children
-      }
-    } else {
-      // Directory only contains ZIPs — track it for node creation
-      if (!zipOnlyDirs.has(childRelPath)) {
-        zipOnlyDirs.set(childRelPath, { zipCount: 0, subDirs: new Set() });
-      }
-      const entry = zipOnlyDirs.get(childRelPath)!;
-      entry.zipCount += row.zip_count;
-      if (segments.length > parentDepth + 1) {
-        entry.subDirs.add(segments[parentDepth + 1]);
-      }
-    }
+  } else {
+    rows = await db.select<DirectoryRow[]>(
+      `SELECT id, name, rel_path, zip_file, zip_prefix, asset_count, child_count, dir_type, folder_id
+       FROM directories
+       WHERE parent_id = ?
+       ORDER BY dir_type, name COLLATE NOCASE`,
+      [directoryId],
+    );
   }
-
-  // Create nodes for zip-only directories
-  for (const [relPath, data] of zipOnlyDirs) {
-    const name = relPath.split('/').pop()!;
-    nodes.push({
-      key: `folder:${folderId}:${relPath}`,
-      name,
-      childCount: data.zipCount + data.subDirs.size,
-      assetCount: 0,
-      location: { type: 'folder', folderId, relPath },
-    });
-  }
-
-  return nodes.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  return rows.map(rowToNode);
 }
 
-/**
- * Get child directories inside a ZIP file.
- */
-export async function getZipDirectoryChildren(
-  db: Database,
-  folderId: number,
-  relPath: string,
-  zipFile: string,
-  prefix: string,
-): Promise<DirectoryNode[]> {
-  // Get all zip_entry values under this prefix
-  const likePattern = prefix === '' ? '%' : prefix + '%';
-  const rows = await db.select<Array<{ zip_entry: string }>>(
-    `SELECT zip_entry FROM assets
-		WHERE folder_id = ? AND rel_path = ? AND zip_file = ? AND zip_entry IS NOT NULL AND zip_entry LIKE ?`,
-    [folderId, relPath, zipFile, likePattern],
-  );
-
-  // Build directory structure from zip_entry paths
-  const prefixDepth = prefix === '' ? 0 : prefix.split('/').filter(Boolean).length;
-  const childMap = new Map<
-    string,
-    { assetCount: number; subDirs: Set<string>; hasDirectFiles: boolean; isNestedZip: boolean }
-  >();
-
-  for (const row of rows) {
-    const entryPath = row.zip_entry;
-    const segments = entryPath.split('/').filter(Boolean);
-    if (segments.length <= prefixDepth) continue;
-
-    const childName = segments[prefixDepth];
-
-    if (segments.length === prefixDepth + 1) {
-      // Direct file at current level — only show nested ZIPs as nodes
-      if (childName.toLowerCase().endsWith('.zip')) {
-        if (!childMap.has(childName)) {
-          childMap.set(childName, {
-            assetCount: 0,
-            subDirs: new Set(),
-            hasDirectFiles: false,
-            isNestedZip: true,
-          });
-        }
-        childMap.get(childName)!.isNestedZip = true;
-        childMap.get(childName)!.assetCount++;
-      }
-      continue;
-    }
-
-    if (!childMap.has(childName)) {
-      childMap.set(childName, {
-        assetCount: 0,
-        subDirs: new Set(),
-        hasDirectFiles: false,
-        isNestedZip: false,
-      });
-    }
-    const entry = childMap.get(childName)!;
-    entry.assetCount++;
-
-    if (segments.length === prefixDepth + 2) {
-      entry.hasDirectFiles = true;
-    } else {
-      entry.subDirs.add(segments[prefixDepth + 1]);
-    }
-  }
-
-  return [...childMap.entries()]
-    .filter(([_, data]) => data.subDirs.size > 0 || data.hasDirectFiles || data.isNestedZip)
-    .map(([name, data]) => {
-      const nodePrefix = prefix + name + '/';
-      return {
-        key: `zip:${folderId}:${relPath}:${zipFile}:${nodePrefix}`,
-        name,
-        childCount: data.subDirs.size,
-        assetCount: data.assetCount,
-        location: { type: 'zip' as const, folderId, relPath, zipFile, zipPrefix: nodePrefix },
-      };
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
 
 // ============================================================================
 // Search excludes (per-folder/zip segment exclusion from search indexing)
@@ -582,16 +461,45 @@ export async function getSearchExcludes(db: Database, folderId: number): Promise
 
 /**
  * Get all distinct rel_path values for a source folder (filesystem directories).
- * Used to build the search config tree.
+ * Used to build the search config tree. Reads from precomputed directories table.
  */
 export async function getDistinctRelPaths(db: Database, folderId: number): Promise<string[]> {
   const rows = await db.select<Array<{ rel_path: string }>>(
-    `SELECT DISTINCT rel_path FROM assets
-     WHERE folder_id = ? AND rel_path != ''
+    `SELECT rel_path FROM directories
+     WHERE folder_id = ? AND dir_type = 'dir' AND rel_path != ''
      ORDER BY rel_path COLLATE NOCASE`,
     [folderId],
   );
   return rows.map((r) => r.rel_path);
+}
+
+/**
+ * Get ZIP directory tree data for the search config panel.
+ * Replaces the Rust `get_zip_dir_trees` command.
+ */
+export async function getZipDirTrees(
+  db: Database,
+  folderId: number,
+): Promise<Array<{ rel_path: string; zip_file: string; dirs: string[] }>> {
+  const rows = await db.select<Array<{ rel_path: string; zip_file: string; zip_prefix: string }>>(
+    `SELECT rel_path, zip_file, zip_prefix FROM directories
+     WHERE folder_id = ? AND dir_type = 'zipdir'
+     ORDER BY rel_path, zip_file, zip_prefix`,
+    [folderId],
+  );
+
+  // Group by (rel_path, zip_file) to match the old ZipDirGroup shape
+  const groups = new Map<string, { rel_path: string; zip_file: string; dirs: string[] }>();
+  for (const row of rows) {
+    const key = `${row.rel_path}\0${row.zip_file}`;
+    if (!groups.has(key)) {
+      groups.set(key, { rel_path: row.rel_path, zip_file: row.zip_file, dirs: [] });
+    }
+    // Strip trailing slash from zip_prefix to match old format
+    const dir = row.zip_prefix.endsWith('/') ? row.zip_prefix.slice(0, -1) : row.zip_prefix;
+    groups.get(key)!.dirs.push(dir);
+  }
+  return [...groups.values()];
 }
 
 

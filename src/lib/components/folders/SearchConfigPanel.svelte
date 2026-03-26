@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { getDatabase } from '$lib/database/connection';
-  import { getSearchExcludes, getDistinctRelPaths } from '$lib/database/queries';
+  import { getSearchExcludes, getDistinctRelPaths, getZipDirTrees } from '$lib/database/queries';
   import { showToast } from '$lib/state/ui.svelte';
   import type { SearchExclude } from '$lib/types';
   import Spinner from '$lib/components/shared/Spinner.svelte';
@@ -124,10 +124,7 @@
       const [currentExcludes, relPaths, zipDirGroups] = await Promise.all([
         getSearchExcludes(db, folderId),
         getDistinctRelPaths(db, folderId),
-        invoke<Array<{ rel_path: string; zip_file: string; dirs: string[] }>>(
-          'get_zip_dir_trees',
-          { folderId },
-        ),
+        getZipDirTrees(db, folderId),
       ]);
 
       // Build the excludes set

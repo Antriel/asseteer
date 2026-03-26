@@ -92,7 +92,7 @@
         onclick={(e) => {
           e.stopPropagation();
           if (hasChildren) {
-            exploreState.toggleExpanded(node.key, node.location);
+            exploreState.toggleExpanded(node.key, node.directoryId, node.location.folderId);
           }
         }}
         tabindex={hasChildren ? 0 : -1}

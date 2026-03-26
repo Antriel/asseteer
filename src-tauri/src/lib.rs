@@ -87,7 +87,6 @@ pub fn run() {
             commands::folders::remove_folder,
             commands::folders::rename_folder,
             commands::folders::update_search_excludes,
-            commands::folders::get_zip_dir_trees,
             commands::rescan::preview_rescan,
             commands::rescan::apply_rescan,
             commands::process::start_processing,

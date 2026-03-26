@@ -143,6 +143,28 @@ CREATE INDEX IF NOT EXISTS idx_processing_errors_category ON processing_errors(c
 CREATE INDEX IF NOT EXISTS idx_processing_errors_unresolved ON processing_errors(category, resolved_at) WHERE resolved_at IS NULL
 "#;
 
+/// Precomputed directory tree for instant folder browsing.
+/// Populated at scan/rescan time; replaces expensive aggregation queries.
+pub const CREATE_DIRECTORIES_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS directories (
+    id INTEGER PRIMARY KEY,
+    folder_id INTEGER NOT NULL REFERENCES source_folders(id) ON DELETE CASCADE,
+    parent_id INTEGER REFERENCES directories(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    rel_path TEXT NOT NULL DEFAULT '',
+    zip_file TEXT,
+    zip_prefix TEXT,
+    asset_count INTEGER NOT NULL DEFAULT 0,
+    child_count INTEGER NOT NULL DEFAULT 0,
+    dir_type TEXT NOT NULL DEFAULT 'dir'
+)
+"#;
+
+pub const CREATE_DIRECTORIES_INDEXES: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_directories_parent ON directories(parent_id);
+CREATE INDEX IF NOT EXISTS idx_directories_folder ON directories(folder_id)
+"#;
+
 /// CLAP audio embeddings for semantic search
 pub const CREATE_AUDIO_EMBEDDINGS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS audio_embeddings (
