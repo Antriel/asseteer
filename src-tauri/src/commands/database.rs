@@ -73,6 +73,14 @@ pub async fn get_db_info(state: State<'_, AppState>) -> Result<DbInfo, String> {
 pub async fn vacuum_database(state: State<'_, AppState>) -> Result<(), String> {
     let pool = &state.pool;
 
+    // Optimize FTS5 indexes first to purge tombstones before VACUUM rebuilds the file
+    let _ = sqlx::query("INSERT INTO assets_fts_sub(assets_fts_sub) VALUES('optimize')")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("INSERT INTO assets_fts_word(assets_fts_word) VALUES('optimize')")
+        .execute(pool)
+        .await;
+
     // Temporarily enable auto-checkpointing so VACUUM doesn't duplicate
     // the full DB size into the WAL file.
     sqlx::query("PRAGMA wal_autocheckpoint=1000")

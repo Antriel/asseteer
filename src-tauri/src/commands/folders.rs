@@ -90,11 +90,24 @@ pub async fn remove_folder(
         return Err(format!("Folder with id {} not found", folder_id));
     }
 
-    // Checkpoint WAL to flush deletion pages and reclaim WAL space.
+    // Optimize FTS5 indexes to purge tombstones from shadow tables.
+    // FTS5 DELETE only adds markers — actual segment data in _data/_idx
+    // tables persists until optimize merges and removes them.
+    emit_progress("compacting", deleted);
+
+    sqlx::query("INSERT INTO assets_fts_sub(assets_fts_sub) VALUES('optimize')")
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("FTS optimize failed: {}", e))?;
+    sqlx::query("INSERT INTO assets_fts_word(assets_fts_word) VALUES('optimize')")
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("FTS optimize failed: {}", e))?;
+
+    // Checkpoint WAL to flush deletion + FTS optimize pages and reclaim WAL space.
     // No VACUUM — it rewrites the entire DB into the WAL, which is slow
     // and leaves a massive WAL behind with auto-checkpoint disabled.
     // SQLite reuses free pages internally on future inserts.
-    emit_progress("compacting", deleted);
 
     if let Err(e) = database::checkpoint_truncate(&state.pool).await {
         eprintln!("[DB] WAL checkpoint after folder removal failed: {}", e);

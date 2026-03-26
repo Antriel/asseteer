@@ -171,7 +171,7 @@
   async function removeFolder(folder: SourceFolder) {
     const name = folder.label || folderName(folder.path);
     const confirmed = await showConfirm(
-      `Remove "${name}" and all ${folder.asset_count.toLocaleString()} assets? This cannot be undone.`,
+      `Remove "${name}" from the library? ${folder.asset_count.toLocaleString()} assets will be unindexed. Files on disk are not affected.`,
       'Remove Folder',
       'Remove',
     );
@@ -186,7 +186,7 @@
         const { phase, deleted, total } = event.payload;
         if (phase === 'deleting' && total > 0) {
           const pct = Math.round((deleted / total) * 100);
-          removeProgress = `Deleting assets... ${deleted.toLocaleString()}/${total.toLocaleString()} (${pct}%)`;
+          removeProgress = `Removing from library... ${deleted.toLocaleString()}/${total.toLocaleString()} (${pct}%)`;
         } else if (phase === 'compacting') {
           removeProgress = 'Finishing up...';
         }
