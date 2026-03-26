@@ -124,10 +124,13 @@
     const loc = assetsState.folderLocation;
     if (!loc) return '';
     if (loc.type === 'zip') {
-      const zipName = loc.zipFile;
-      if (!loc.zipPrefix) return zipName;
-      const prefixName = loc.zipPrefix.replace(/\/$/, '').split('/').pop();
-      return `${zipName} / ${prefixName}`;
+      const parts: string[] = [];
+      if (loc.relPath) parts.push(...loc.relPath.split('/').filter(Boolean));
+      parts.push(loc.zipFile);
+      if (loc.zipPrefix) {
+        parts.push(...loc.zipPrefix.replace(/\/$/, '').split('/').filter(Boolean));
+      }
+      return parts.join(' / ');
     }
     // Filesystem folder: show last segment of relPath, or the root name from the tree
     if (loc.relPath) {
