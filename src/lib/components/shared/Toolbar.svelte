@@ -252,6 +252,18 @@
 
 <div class="flex flex-col">
   <div class="flex items-center gap-4 px-4 py-3 bg-secondary border-b border-default">
+    <!-- Folder panel toggle -->
+    <button
+      class="flex items-center gap-1.5 px-2.5 py-2 text-sm font-medium rounded-md transition-colors {viewState.folderSidebarOpen
+        ? 'bg-accent-muted text-accent'
+        : 'text-secondary hover:text-primary hover:bg-tertiary'}"
+      onclick={() => viewState.toggleFolderSidebar()}
+      title={viewState.folderSidebarOpen ? 'Collapse folder panel' : 'Expand folder panel'}
+    >
+      <FolderIcon size="sm" />
+      <span>Folders</span>
+    </button>
+
     <!-- Search -->
     <div class="relative flex-1 max-w-[400px]">
       {#if clapState.isSearching}

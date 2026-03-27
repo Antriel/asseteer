@@ -1,39 +1,12 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { processingState, isAnyRunning } from '$lib/state/tasks.svelte';
   import { viewState } from '$lib/state/view.svelte';
-  import { exploreState } from '$lib/state/explore.svelte';
-  import { assetsState } from '$lib/state/assets.svelte';
 
   // Get pending count for badge
   const pendingTotal = $derived(processingState.pendingCount.total);
   const isProcessing = $derived(isAnyRunning(processingState));
   const collapsed = $derived(viewState.sidebarCollapsed);
-
-  onMount(() => {
-    if (exploreState.roots.length === 0) {
-      exploreState.loadRoots();
-    }
-  });
-
-  function selectFolder(
-    folderId: number,
-    folderKey: string,
-    location: import('$lib/types').FolderLocation,
-  ) {
-    const assetType = viewState.activeTab === 'images' ? 'image' : 'audio';
-    assetsState.setFolderFilter(location, assetType);
-    exploreState.selectedKey = folderKey;
-    exploreState.selectedLocation = location;
-    goto('/library');
-  }
-
-  function isFolderSelected(folderId: number): boolean {
-    const loc = assetsState.folderLocation;
-    return loc !== null && loc.folderId === folderId && loc.relPath === '';
-  }
 
   interface NavItem {
     href: string;
@@ -159,45 +132,6 @@
       </a>
     {/each}
   </nav>
-
-  <!-- Folder list section -->
-  {#if exploreState.roots.length > 0}
-    <div class="border-t border-default {collapsed ? 'px-2 py-2' : 'px-2 pt-2 pb-1'}">
-      {#if !collapsed}
-        <p class="px-2 pb-1 text-xs font-semibold text-tertiary uppercase tracking-wider">
-          Sources
-        </p>
-      {/if}
-      <div class="space-y-0.5">
-        {#each exploreState.roots as folder (folder.key)}
-          {@const active = isFolderSelected(folder.location.folderId)}
-          <button
-            onclick={() => selectFolder(folder.location.folderId, folder.key, folder.location)}
-            class="flex items-center w-full rounded-lg transition-default text-left
-                   {collapsed ? 'justify-center p-2' : 'gap-2.5 px-2 py-1.5'}
-                   {active
-              ? 'bg-accent-muted text-primary'
-              : 'text-secondary hover:bg-tertiary hover:text-primary'}"
-            title={collapsed ? folder.name : undefined}
-          >
-            <div class="w-4 h-4 flex items-center justify-center flex-shrink-0">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="1.5"
-                  d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-                />
-              </svg>
-            </div>
-            {#if !collapsed}
-              <span class="text-xs font-medium truncate">{folder.name}</span>
-            {/if}
-          </button>
-        {/each}
-      </div>
-    </div>
-  {/if}
 
   <!-- Bottom nav -->
   <div class="p-2 border-t border-default space-y-1">

@@ -14,7 +14,6 @@
   let { children } = $props();
 
   let isLibraryPage = $derived($page.url.pathname.startsWith('/library'));
-  let showFolderPanel = $derived(isLibraryPage && viewState.folderSidebarOpen);
 
   // Resize state
   let isResizing = $state(false);
@@ -63,21 +62,25 @@
     <!-- Sidebar -->
     <Sidebar />
 
-    <!-- Folder Panel (between sidebar and content, only on library page) -->
-    {#if showFolderPanel}
-      <div class="relative flex-shrink-0 flex h-full" style="width: {viewState.folderPanelWidth}px">
+    <!-- Folder Panel (always visible on library page, collapsed or expanded) -->
+    {#if isLibraryPage}
+      <div
+        class="relative flex-shrink-0 flex h-full transition-all duration-200"
+        style="width: {viewState.folderSidebarOpen ? viewState.folderPanelWidth : 48}px"
+      >
         <FolderSidebar />
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <!-- Resize handle -->
-        <div
-          class="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-accent/30 transition-colors {isResizing
-            ? 'bg-accent/40'
-            : ''}"
-          onmousedown={onResizeStart}
-          role="separator"
-          aria-orientation="vertical"
-          tabindex="-1"
-        ></div>
+        {#if viewState.folderSidebarOpen}
+          <!-- Resize handle (only when expanded) -->
+          <div
+            class="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-accent/30 transition-colors {isResizing
+              ? 'bg-accent/40'
+              : ''}"
+            onmousedown={onResizeStart}
+            role="separator"
+            aria-orientation="vertical"
+            tabindex="-1"
+          ></div>
+        {/if}
       </div>
     {/if}
 

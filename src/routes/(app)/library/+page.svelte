@@ -19,13 +19,13 @@
   import Spinner from '$lib/components/shared/Spinner.svelte';
   import { SearchIcon, InboxIcon } from '$lib/components/icons';
 
-  let assetCounts = $state({ images: 0, audio: 0 });
   let pendingClapCount = $state(0);
   let unlistenFns: UnlistenFn[] = [];
 
   async function refreshAssetCounts() {
     const db = await getDatabase();
-    assetCounts = await getAssetTypeCounts(db);
+    const counts = await getAssetTypeCounts(db);
+    viewState.setAssetCounts(counts);
   }
 
   async function refreshPendingClapCount() {
@@ -121,7 +121,7 @@
 
 <div class="flex flex-col h-full overflow-hidden">
   <!-- Tab Navigation (asset type + folder toggle) -->
-  <TabBar imageCount={assetCounts.images} audioCount={assetCounts.audio} />
+  <TabBar />
 
   <!-- Toolbar (search, filters, view controls) -->
   <Toolbar />
@@ -200,10 +200,10 @@
             <p class="text-sm text-secondary">
               This folder doesn't contain any {viewState.activeTab}
             </p>
-          {:else if isSemanticModeEnabled && pendingClapCount === assetCounts.audio}
+          {:else if isSemanticModeEnabled && pendingClapCount === viewState.assetCounts.audio}
             <p class="text-primary font-medium">No embeddings generated yet</p>
             <p class="text-sm text-secondary text-center">
-              None of your {assetCounts.audio.toLocaleString()} audio files have been processed for semantic
+              None of your {viewState.assetCounts.audio.toLocaleString()} audio files have been processed for semantic
               search. Head to the
               <a href="/processing" class="text-accent-muted hover:underline">Processing tab</a> to generate
               embeddings.
@@ -211,7 +211,7 @@
           {:else if isSemanticModeEnabled && pendingClapCount > 0}
             <p class="text-primary font-medium">No matching audio</p>
             <p class="text-sm text-secondary text-center">
-              {(assetCounts.audio - pendingClapCount).toLocaleString()} of {assetCounts.audio.toLocaleString()}
+              {(viewState.assetCounts.audio - pendingClapCount).toLocaleString()} of {viewState.assetCounts.audio.toLocaleString()}
               audio files have embeddings. Try adjusting your query, or process more in the
               <a href="/processing" class="text-accent-muted hover:underline">Processing tab</a>.
             </p>

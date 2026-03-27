@@ -4,6 +4,26 @@ type AssetViewMode = 'images' | 'audio';
 type LayoutMode = 'grid' | 'table';
 type ThumbnailSize = 'small' | 'medium' | 'large';
 
+const VIEW_STORAGE_KEY = 'asseteer-view';
+
+interface PersistedViewState {
+  sidebarCollapsed?: boolean;
+  folderSidebarOpen?: boolean;
+  assetCounts?: { images: number; audio: number };
+}
+
+function loadViewState(): PersistedViewState {
+  try {
+    const raw = localStorage.getItem(VIEW_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return {};
+}
+
+function saveViewState(data: PersistedViewState) {
+  localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify(data));
+}
+
 class ViewState {
   activeTab = $state<AssetViewMode>('audio');
   layoutMode = $state<LayoutMode>('grid');
@@ -12,19 +32,51 @@ class ViewState {
   sidebarCollapsed = $state(false);
   folderPanelWidth = $state(280);
 
+  // Cached asset counts (persisted to avoid 0-blink on load)
+  assetCounts = $state({ images: 0, audio: 0 });
+
+  constructor() {
+    const stored = loadViewState();
+    if (stored.sidebarCollapsed !== undefined) {
+      this.sidebarCollapsed = stored.sidebarCollapsed;
+    }
+    if (stored.folderSidebarOpen !== undefined) {
+      this.folderSidebarOpen = stored.folderSidebarOpen;
+    }
+    if (stored.assetCounts) {
+      this.assetCounts = stored.assetCounts;
+    }
+  }
+
   // Lightbox state
   lightboxAsset = $state<Asset | null>(null);
 
   toggleFolderSidebar() {
     this.folderSidebarOpen = !this.folderSidebarOpen;
+    this.#savePersistedState();
   }
 
   openFolderSidebar() {
     this.folderSidebarOpen = true;
+    this.#savePersistedState();
   }
 
   toggleSidebarCollapsed() {
     this.sidebarCollapsed = !this.sidebarCollapsed;
+    this.#savePersistedState();
+  }
+
+  setAssetCounts(counts: { images: number; audio: number }) {
+    this.assetCounts = counts;
+    this.#savePersistedState();
+  }
+
+  #savePersistedState() {
+    saveViewState({
+      sidebarCollapsed: this.sidebarCollapsed,
+      folderSidebarOpen: this.folderSidebarOpen,
+      assetCounts: this.assetCounts,
+    });
   }
 
   setActiveTab(tab: AssetViewMode) {
