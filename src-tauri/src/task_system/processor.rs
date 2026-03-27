@@ -9,6 +9,7 @@ use crate::zip_cache;
 use image::{DynamicImage, GenericImageView};
 #[cfg(test)]
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// Timeout for processing a single asset (30 seconds)
@@ -718,7 +719,12 @@ async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
 
 /// Process CLAP embeddings for a batch of audio assets.
 /// Returns batched DB write items for successful embeddings and failure items for errors.
-pub async fn process_clap_embedding_batch(assets: &[Asset]) -> Vec<ProcessingOutput> {
+/// If `preloaded_bytes` is provided (from bulk ZIP extraction), those bytes are used
+/// instead of loading each ZIP asset individually via zip_cache.
+pub async fn process_clap_embedding_batch(
+    assets: &[Asset],
+    preloaded_bytes: Option<HashMap<i64, Result<Vec<u8>, String>>>,
+) -> Vec<ProcessingOutput> {
     // Ensure CLAP server is running (this is a no-op if already running)
     if let Err(e) = ensure_server_running().await {
         return assets
@@ -740,9 +746,18 @@ pub async fn process_clap_embedding_batch(assets: &[Asset]) -> Vec<ProcessingOut
     let mut zip_items: Vec<(Vec<u8>, String)> = Vec::new();
     let mut load_errors: Vec<(usize, String)> = Vec::new();
 
+    let mut preloaded = preloaded_bytes;
+
     for (i, asset) in assets.iter().enumerate() {
         if asset.zip_entry.is_some() {
-            match zip_cache::load_asset_bytes_cached(asset) {
+            // Use preloaded bytes if available (bulk-extracted from regular ZIP),
+            // otherwise fall back to per-asset loading via zip_cache
+            let bytes_result = preloaded
+                .as_mut()
+                .and_then(|m| m.remove(&asset.id))
+                .unwrap_or_else(|| zip_cache::load_asset_bytes_cached(asset));
+
+            match bytes_result {
                 Ok(bytes) => {
                     zip_indices.push(i);
                     zip_items.push((bytes, asset.filename.clone()));

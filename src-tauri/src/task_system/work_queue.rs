@@ -18,7 +18,7 @@ use tokio::sync::{Notify, RwLock, Semaphore};
 use tokio::time::{interval, Duration};
 
 const BATCH_UPDATE_INTERVAL_SEC: u64 = 2;
-const CLAP_BATCH_SIZE: usize = 16;
+const CLAP_BATCH_SIZE: usize = 32;
 const NESTED_ZIP_BATCH_SIZE: usize = 8;
 const REGULAR_ZIP_BATCH_SIZE: usize = 16;
 
@@ -173,11 +173,11 @@ impl WorkQueue {
         states
             .entry(category)
             .or_insert_with(|| {
-                // CLAP uses 2 workers: while batch 1 is in GPU forward pass, batch 2
-                // preprocesses audio on CPU (server handles concurrency via thread pool)
+                // CLAP uses 3 workers: overlaps ZIP extraction / HTTP upload with
+                // GPU inference (server handles concurrency via thread pool)
                 // Image/Audio use many workers (CPU-bound work benefits from parallelism)
                 let max_concurrent = match category {
-                    ProcessingCategory::Clap => 2,
+                    ProcessingCategory::Clap => 3,
                     ProcessingCategory::Image | ProcessingCategory::Audio => 100, // effectively unlimited
                 };
                 CategoryState::new(max_concurrent)
@@ -202,13 +202,22 @@ impl WorkQueue {
     ) -> BatchPlan {
         match category {
             ProcessingCategory::Clap => {
+                // Group key for CLAP: nested ZIP key if nested, else the outer ZIP
+                // path for regular ZIP assets, else None for filesystem assets.
+                // This ensures assets from different ZIPs never mix in a batch.
+                fn clap_group_key(asset: &Asset) -> Option<String> {
+                    if let Some(key) = zip_cache::nested_zip_group_key(asset) {
+                        Some(key)
+                    } else if asset.zip_file.is_some() {
+                        Some(crate::utils::resolve_zip_path(asset))
+                    } else {
+                        None
+                    }
+                }
+
                 // Sort assets so same-key assets are consecutive
                 let mut sorted = assets;
-                sorted.sort_by(|a, b| {
-                    let ka = zip_cache::nested_zip_group_key(a);
-                    let kb = zip_cache::nested_zip_group_key(b);
-                    ka.cmp(&kb)
-                });
+                sorted.sort_by(|a, b| clap_group_key(a).cmp(&clap_group_key(b)));
 
                 // Build batches that respect key boundaries
                 let mut batches = Vec::new();
@@ -216,7 +225,7 @@ impl WorkQueue {
                 let mut current_key: Option<String> = None;
 
                 for asset in sorted {
-                    let key = zip_cache::nested_zip_group_key(&asset);
+                    let key = clap_group_key(&asset);
 
                     // Flush on key change or batch full
                     if !current_batch.is_empty()
@@ -736,7 +745,48 @@ impl WorkQueue {
                             .map(|a| crate::utils::format_asset_display_path(a));
                     }
 
-                    let outputs = process_clap_embedding_batch(&batch_assets).await;
+                    // Use pre-extracted bytes from dispatcher, or bulk-extract for
+                    // regular ZIP batches (avoids opening the archive per-asset)
+                    let preloaded: Option<HashMap<i64, Result<Vec<u8>, String>>> =
+                        if let Some(ref shared) = batch_preloaded {
+                            let mut batch_map = HashMap::with_capacity(batch_assets.len());
+                            for asset in &batch_assets {
+                                if let Some(result) = shared.get(&asset.id) {
+                                    batch_map.insert(
+                                        asset.id,
+                                        match result {
+                                            Ok(bytes) => Ok(bytes.clone()),
+                                            Err(e) => Err(e.clone()),
+                                        },
+                                    );
+                                }
+                            }
+                            Some(batch_map)
+                        } else if batch_assets.len() > 1
+                            && batch_assets[0].zip_file.is_some()
+                            && zip_cache::nested_zip_group_key(&batch_assets[0]).is_none()
+                        {
+                            // Bulk-extract all entries from the regular ZIP in one open
+                            let zip_path = crate::utils::resolve_zip_path(&batch_assets[0]);
+                            let entries: Vec<(i64, String)> = batch_assets
+                                .iter()
+                                .filter_map(|a| a.zip_entry.as_ref().map(|e| (a.id, e.clone())))
+                                .collect();
+                            match tokio::task::spawn_blocking(move || {
+                                let refs: Vec<(i64, &str)> =
+                                    entries.iter().map(|(id, e)| (*id, e.as_str())).collect();
+                                crate::utils::bulk_load_from_zip(&zip_path, &refs)
+                            })
+                            .await
+                            {
+                                Ok(map) => Some(map),
+                                Err(_) => None,
+                            }
+                        } else {
+                            None
+                        };
+
+                    let outputs = process_clap_embedding_batch(&batch_assets, preloaded).await;
 
                     for output in outputs {
                         match output {

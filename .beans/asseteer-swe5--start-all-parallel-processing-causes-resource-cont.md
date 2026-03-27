@@ -5,21 +5,29 @@ status: todo
 type: bug
 priority: normal
 created_at: 2026-03-26T14:50:28Z
-updated_at: 2026-03-26T15:00:18Z
+updated_at: 2026-03-26T16:04:44Z
 ---
 
-When using START ALL, processing categories run in parallel. Observed problem: CLAP started processing alongside audio, consumed a large amount of RAM, and appeared to starve audio processing — likely because the ZipCache was saturated by CLAP workloads. RAM usage grew well beyond ZipCache limits. Need to investigate: (1) whether running all categories in parallel is the right design, (2) why RAM isn't bounded by ZipCache limits during CLAP, and (3) whether CLAP and audio should share or compete for zip/cache resources.
+When using START ALL, processing categories run in parallel. All categories compete for the same resources: disk I/O (ZIP extraction), RAM (preloaded bytes, zip_cache), and CPU. CLAP additionally competes for GPU. Running them simultaneously causes unpredictable throughput drops and RAM spikes.
 
-## Notes from CLAP ZIP investigation (2026-03-26)
+## Current state (post asseteer-mmwn)
 
-Current CLAP instrumentation shows throughput is dominated by Rust-side regular-ZIP prep, not Python inference:
-- ~6-9s `prep_ms` per 16-file batch from a single outer ZIP
-- ~0.3-0.4s Python upload/inference time for the same batch
+CLAP bulk ZIP extraction (asseteer-mmwn) reduced per-batch prep from ~6-9s to <1s, which lessens but doesn't eliminate contention. The new bulk extraction path (`bulk_load_from_zip`) loads bytes outside zip_cache with no memory budget — 3 concurrent CLAP batches × 32 assets × ~1-5MB = ~100-500MB unbudgeted. The existing zip_cache memory budgeting only covers nested ZIPs.
 
-This suggests CLAP is currently competing for regular ZIP extraction work in a way that is both slow and potentially hostile to running alongside other categories.
+## Proposed fix: sequential category processing
 
-Planned follow-up in `asseteer-mmwn` is to adapt CLAP to the existing staged regular-ZIP dispatcher/shared-archive pattern already used for image/audio. That may help here in two ways:
-- less duplicate ZIP parsing/extraction work across categories
-- better-bounded buffering using the same pipeline/backpressure model
+Make categories run one at a time rather than in parallel. They all fight over the same resources (disk I/O, ZIP handles, RAM), and running sequentially gives each category full throughput without contention.
 
-It also means this bean should be revisited after `asseteer-mmwn`, because shared staged dispatch may expose whether contention is fundamentally scheduling-related or caused by separate category resource models.
+Implementation approach:
+- Add a global processing lock (e.g. `Mutex` or `AtomicBool` on `WorkQueue`) so only one category processes at a time
+- "START ALL" queues categories sequentially (e.g. Image → Audio → CLAP) rather than launching all at once
+- Frontend shows queued categories as "waiting" with their position
+- Each category gets full access to disk/RAM/CPU during its turn, then cleans up (evict_unpinned, etc.) before the next starts
+
+This is simpler and more predictable than trying to budget shared resources across concurrent categories.
+
+## Tasks
+- [ ] Add global processing lock so only one category runs at a time
+- [ ] Change START ALL to queue categories sequentially
+- [ ] Update frontend to show queued/waiting state for pending categories
+- [ ] Verify RAM stays bounded and throughput is stable per-category

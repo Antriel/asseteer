@@ -1,11 +1,11 @@
 ---
 # asseteer-t9m5
 title: Cancellation is too slow — queued workers don't stop
-status: todo
+status: completed
 type: bug
 priority: normal
 created_at: 2026-03-26T14:50:19Z
-updated_at: 2026-03-26T15:00:18Z
+updated_at: 2026-03-26T16:02:16Z
 ---
 
 When stopping processing (especially CLAP), cancellation takes way too long. Root cause appears to be: we fill all workers but run them at concurrency of 2. When cancel is requested, the already-queued workers that haven't started yet don't get cancelled — so if each worker processes a batch of 16 items and takes ~6 seconds, we wait for many workers to finish before the stop actually takes effect.
@@ -23,3 +23,8 @@ This matters for cancellation because workers can spend several seconds inside Z
 - already-buffered `preloaded_bytes` work
 
 The likely fix path for throughput and cancellation should be coordinated so we do not improve feed rate while keeping long stop latency.
+
+
+## Summary of Changes
+
+Resolved by `asseteer-mmwn`: CLAP batch prep dropped from ~6-9s to <1s via bulk ZIP extraction. With 3 concurrency, worst-case cancellation latency is ~3-4s (3 in-flight batches finishing). Stop signal is checked before each batch, generation counter skips stale work. Only remaining edge case is a hung Python HTTP request (120s timeout), which is acceptable.
