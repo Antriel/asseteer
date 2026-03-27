@@ -11,6 +11,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     strategy:
@@ -72,28 +75,23 @@ jobs:
         if: github.ref == 'refs/heads/main' && steps.tag-exists.outputs.exists == 'false'
         shell: bash
         run: |
+          DELIMITER=$(openssl rand -hex 8)
           LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -n "$LATEST_TAG" ]; then
-            {
-              echo "notes<<EOFNOTES"
-              echo "## What's Changed"
-              echo ""
-              git log --pretty=format:"- %s (%h)" ${LATEST_TAG}..HEAD
+          {
+            echo "notes<<${DELIMITER}"
+            echo "## What's Changed"
+            echo ""
+            if [ -n "$LATEST_TAG" ]; then
+              git log --pretty=tformat:"- %s (%h)" "${LATEST_TAG}..HEAD"
               echo ""
               echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LATEST_TAG}...${{ steps.package-version.outputs.version }}"
-              echo "EOFNOTES"
-            } >> $GITHUB_OUTPUT
-          else
-            {
-              echo "notes<<EOFNOTES"
-              echo "## What's Changed"
+            else
+              echo "Initial release"
               echo ""
-              echo "Initial release 🎉"
-              echo ""
-              git log --pretty=format:"- %s (%h)"
-              echo "EOFNOTES"
-            } >> $GITHUB_OUTPUT
-          fi
+              git log --pretty=tformat:"- %s (%h)"
+            fi
+            echo "${DELIMITER}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Sync Tauri version with package.json
         shell: bash
