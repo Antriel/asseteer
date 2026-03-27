@@ -1,11 +1,11 @@
 ---
 # asseteer-i459
 title: Database schema redesign for performance and filesize
-status: todo
+status: completed
 type: epic
 priority: normal
 created_at: 2026-03-17T08:43:21Z
-updated_at: 2026-03-17T08:56:01Z
+updated_at: 2026-03-27T08:03:28Z
 ---
 
 Comprehensive DB redesign to improve query performance and reduce filesize. Covers FTS tokenizer, thumbnail separation, path normalization, embedding search, and index optimization. Planned alongside source_folders (asseteer-wxak).
