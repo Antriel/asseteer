@@ -5,6 +5,7 @@
     getCategoryStatus,
     formatElapsed,
     isCategoryStarting,
+    isCategoryQueued,
   } from '$lib/state/tasks.svelte';
   import { settings } from '$lib/state/settings.svelte';
   import ProcessingDetails from './ProcessingDetails.svelte';
@@ -34,6 +35,7 @@
   let percentage = $derived(Math.floor(ratio * 100));
   let durationMs = $derived(processingState.categoryDurationMs.get(category));
   let isStarting = $derived(isCategoryStarting(processingState, category));
+  let isQueued = $derived(isCategoryQueued(processingState, category));
 
   // Category icon (matches ClapProcessingCard style)
   let categoryIcon = $derived(
@@ -51,11 +53,11 @@
   let isStopping = $derived(processingState.stoppingCategories.has(category));
 
   // Button visibility
-  let canStart = $derived(status === 'idle' && !disabled && !isStarting);
+  let canStart = $derived(status === 'idle' && !disabled && !isStarting && !isQueued);
   let canPause = $derived(status === 'running' && !isStopping && !isStarting);
   let canResume = $derived(status === 'paused' && !isStopping && !isStarting);
   let canStop = $derived(
-    (status === 'running' || status === 'paused') && !isStopping && !isStarting,
+    (status === 'running' || status === 'paused' || isQueued) && !isStopping && !isStarting,
   );
 
   // Event handlers
@@ -117,7 +119,13 @@
 
     <!-- Control buttons -->
     <div class="flex items-center gap-2">
-      {#if isStarting}
+      {#if isQueued}
+        <span
+          class="px-3 py-1.5 text-sm font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-100 dark:bg-indigo-900/30 rounded"
+        >
+          Queued
+        </span>
+      {:else if isStarting}
         <span
           class="px-3 py-1.5 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/30 rounded"
         >
@@ -168,7 +176,13 @@
   </div>
 
   <!-- Progress info -->
-  {#if status === 'idle' && pendingCount > 0 && !isStarting}
+  {#if isQueued && pendingCount > 0}
+    <!-- Queued state: waiting for another category to finish -->
+    <div class="flex items-center gap-2 text-sm">
+      <span class="text-secondary">Waiting to start:</span>
+      <span class="font-semibold text-primary">{pendingCount} assets</span>
+    </div>
+  {:else if status === 'idle' && pendingCount > 0 && !isStarting}
     <!-- Idle state: show pending count -->
     <div class="flex items-center gap-2 text-sm">
       <span class="text-secondary">Pending:</span>

@@ -1,6 +1,11 @@
 <script lang="ts">
   import { clapState } from '$lib/state/clap.svelte';
-  import { processingState, getCategoryStatus, isCategoryStarting } from '$lib/state/tasks.svelte';
+  import {
+    processingState,
+    getCategoryStatus,
+    isCategoryStarting,
+    isCategoryQueued,
+  } from '$lib/state/tasks.svelte';
   import { showToast } from '$lib/state/ui.svelte';
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
@@ -47,15 +52,16 @@
   // Stopping wind-down state
   let isStopping = $derived(processingState.stoppingCategories.has('clap'));
   let isStarting = $derived(isCategoryStarting(processingState, 'clap'));
+  let isQueued = $derived(isCategoryQueued(processingState, 'clap'));
 
   // Button visibility
   let canStart = $derived(
-    clapState.serverAvailable && status === 'idle' && pendingCount > 0 && !isStarting,
+    clapState.serverAvailable && status === 'idle' && pendingCount > 0 && !isStarting && !isQueued,
   );
   let canPause = $derived(status === 'running' && !isStopping && !isStarting);
   let canResume = $derived(status === 'paused' && !isStopping && !isStarting);
   let canStop = $derived(
-    (status === 'running' || status === 'paused') && !isStopping && !isStarting,
+    (status === 'running' || status === 'paused' || isQueued) && !isStopping && !isStarting,
   );
 
   async function handleStartServer() {
@@ -190,7 +196,12 @@
     <!-- Server is available - show processing controls -->
     <div class="flex items-center justify-between">
       <div class="text-sm">
-        {#if status === 'idle' && pendingCount > 0 && !isStarting}
+        {#if isQueued && pendingCount > 0}
+          <span class="text-indigo-600 dark:text-indigo-400 font-medium">
+            {pendingCount} audio files
+          </span>
+          <span class="text-secondary"> queued for embeddings</span>
+        {:else if status === 'idle' && pendingCount > 0 && !isStarting}
           <span class="text-orange-600 dark:text-orange-400 font-medium">
             {pendingCount} audio files
           </span>
@@ -202,7 +213,13 @@
 
       <!-- Control buttons -->
       <div class="flex items-center gap-2">
-        {#if isStarting}
+        {#if isQueued}
+          <span
+            class="px-3 py-1.5 text-sm font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-100 dark:bg-indigo-900/30 rounded"
+          >
+            Queued
+          </span>
+        {:else if isStarting}
           <span
             class="px-3 py-1.5 text-sm font-medium text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/30 rounded"
           >

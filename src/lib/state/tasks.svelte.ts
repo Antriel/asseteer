@@ -37,6 +37,9 @@ class ProcessingState {
   // Categories that have been asked to stop but are still winding down
   stoppingCategories = $state(new SvelteSet<ProcessingCategory>());
 
+  // Categories queued to run sequentially (Start All queues rather than running in parallel)
+  queuedCategories = $state(new SvelteSet<ProcessingCategory>());
+
   // Categories where stop was requested while still in starting state —
   // startProcessing() will stop them as soon as the backend confirms startup
   pendingStopCategories = $state(new SvelteSet<ProcessingCategory>());
@@ -128,7 +131,10 @@ class ProcessingState {
   }
 
   /**
-   * Start processing for a specific category
+   * Start processing for a specific category.
+   * Only one category can process at a time. If another category is already
+   * running, this one is queued and will start automatically when the active
+   * category finishes.
    */
   async startProcessing(category: ProcessingCategory) {
     // Check if category has pending items
@@ -137,6 +143,63 @@ class ProcessingState {
       return; // Gracefully skip instead of throwing error
     }
 
+    // If another category is already active, queue this one and wait
+    if (this.isAnyCategoryActive(category)) {
+      this.queuedCategories.add(category);
+      await this.waitForNoActiveCategory(category);
+
+      // After waiting, check if we were removed from the queue (e.g. by stopAll)
+      if (!this.queuedCategories.has(category)) {
+        return;
+      }
+      this.queuedCategories.delete(category);
+
+      // Refresh pending count — previous category may have processed overlapping assets
+      await this.refreshPendingCount();
+      if (this.getPendingCountForCategory(category) === 0) {
+        return;
+      }
+    }
+
+    await this.startProcessingNow(category);
+  }
+
+  /**
+   * Check if any category other than `exclude` is currently active
+   * (running, starting, or queued ahead).
+   */
+  private isAnyCategoryActive(exclude?: ProcessingCategory): boolean {
+    for (const cat of this.startingCategories) {
+      if (cat !== exclude) return true;
+    }
+    for (const [cat, progress] of this.categoryProgress.entries()) {
+      if (cat !== exclude && progress.isRunning) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Wait until no other category is active (running or starting).
+   */
+  private waitForNoActiveCategory(exclude: ProcessingCategory): Promise<void> {
+    return new Promise((resolve) => {
+      const check = () => {
+        // Also resolve if removed from queue (stop was called)
+        if (!this.queuedCategories.has(exclude) || !this.isAnyCategoryActive(exclude)) {
+          clearInterval(interval);
+          resolve();
+        }
+      };
+      const interval = setInterval(check, 500);
+      // Check immediately in case it's already clear
+      check();
+    });
+  }
+
+  /**
+   * Actually invoke the backend to start processing (no queueing logic).
+   */
+  private async startProcessingNow(category: ProcessingCategory) {
     // Clear last run result when starting new processing
     this.lastRunResult = null;
 
@@ -152,7 +215,7 @@ class ProcessingState {
     this.startingCategories.add(category);
     this.categoryProgress.set(category, {
       category,
-      total: pendingCount,
+      total: this.getPendingCountForCategory(category),
       completed: 0,
       failed: 0,
       is_paused: false,
@@ -198,23 +261,62 @@ class ProcessingState {
   }
 
   /**
-   * Start processing for all enabled categories
+   * Start processing for all enabled categories sequentially.
+   * Categories run one at a time to avoid resource contention (RAM, disk I/O, CPU/GPU).
+   * The first category starts immediately; the rest are queued and shown as "Queued".
    */
   async startAllEnabled() {
-    const promises = Array.from(this.enabledCategories)
-      .filter((category) => this.getPendingCountForCategory(category) > 0) // Only start categories with pending items
-      .map((category) =>
-        this.startProcessing(category).catch((error) => {
-          console.error(`Failed to start ${category}:`, error);
-          // Continue with other categories even if one fails
-        }),
-      );
+    const toProcess = Array.from(this.enabledCategories).filter(
+      (category) => this.getPendingCountForCategory(category) > 0,
+    );
 
-    if (promises.length === 0) {
+    if (toProcess.length === 0) {
       return;
     }
 
-    await Promise.all(promises);
+    // Mark all categories as queued upfront so the UI shows "Queued" immediately
+    for (const category of toProcess) {
+      this.queuedCategories.add(category);
+    }
+
+    for (const category of toProcess) {
+      // Check if removed from queue (e.g. by stopAll or individual stop)
+      if (!this.queuedCategories.has(category)) {
+        continue;
+      }
+      this.queuedCategories.delete(category);
+
+      // Refresh pending count — previous category may have processed overlapping assets
+      await this.refreshPendingCount();
+      if (this.getPendingCountForCategory(category) === 0) {
+        continue;
+      }
+
+      try {
+        await this.startProcessingNow(category);
+        await this.waitForCategoryDone(category);
+      } catch (error) {
+        console.error(`Failed to start ${category}:`, error);
+      }
+    }
+  }
+
+  /**
+   * Wait for a category to finish processing (complete or stop).
+   */
+  private waitForCategoryDone(category: ProcessingCategory): Promise<void> {
+    return new Promise((resolve) => {
+      const check = () => {
+        const p = this.categoryProgress.get(category);
+        const stillStarting = this.startingCategories.has(category);
+        if ((!p || !p.isRunning) && !stillStarting) {
+          clearInterval(interval);
+          resolve();
+        }
+      };
+      const interval = setInterval(check, 500);
+      check();
+    });
   }
 
   /**
@@ -247,6 +349,12 @@ class ProcessingState {
    * Stop processing for a specific category
    */
   async stop(category: ProcessingCategory, skipPendingRefresh = false) {
+    // If the category is queued (waiting in the sequential queue), just remove it
+    if (this.queuedCategories.has(category)) {
+      this.queuedCategories.delete(category);
+      return;
+    }
+
     // If the category is still starting (backend hasn't confirmed running yet),
     // queue the stop for when startup completes rather than calling the backend
     if (this.startingCategories.has(category)) {
@@ -300,9 +408,12 @@ class ProcessingState {
   }
 
   /**
-   * Stop all running categories
+   * Stop all running categories and clear the sequential queue
    */
   async stopAll() {
+    // Clear the sequential queue so no more categories start
+    this.queuedCategories.clear();
+
     const promises: Promise<void>[] = [];
 
     // Stop categories that are already running
@@ -489,6 +600,8 @@ export function getCategoryProgress(
  * Check if any category is running
  */
 export function isAnyRunning(state: ProcessingState): boolean {
+  if (state.queuedCategories.size > 0) return true;
+  if (state.startingCategories.size > 0) return true;
   for (const progress of state.categoryProgress.values()) {
     if (progress.isRunning) return true;
   }
@@ -574,6 +687,10 @@ export function getCategoryStatus(
 
 export function isCategoryStarting(state: ProcessingState, category: ProcessingCategory): boolean {
   return state.startingCategories.has(category);
+}
+
+export function isCategoryQueued(state: ProcessingState, category: ProcessingCategory): boolean {
+  return state.queuedCategories.has(category);
 }
 
 /**
