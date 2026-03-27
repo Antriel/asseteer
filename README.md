@@ -2,7 +2,7 @@
 
 A desktop app for searching and browsing large asset pack collections (images and audio) even directly from ZIPs (Humble Bundles anyone?).
 
-<img width="1076" height="798" alt="image" src="https://github.com/user-attachments/assets/bc4f95fe-502a-4d4a-8743-c854c771f21f" />
+<img width="1280" height="640" alt="image" src="https://github.com/user-attachments/assets/8aca3e41-26ff-43c5-be60-16be2d8e79bf" />
 
 ## What it does
 
