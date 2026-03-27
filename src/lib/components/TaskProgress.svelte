@@ -4,11 +4,9 @@
     getOverallProgress,
     isAnyRunning,
     isAnyPaused,
-    getCategoryProgress,
   } from '$lib/state/tasks.svelte';
   import type { ProcessingCategory } from '$lib/types';
   import ProcessingCategoryCard from './ProcessingCategoryCard.svelte';
-  import ClapProcessingCard from './ClapProcessingCard.svelte';
 
   // Note: Listeners are initialized in root layout, no need to initialize here
 
@@ -17,8 +15,8 @@
   let anyRunning = $derived(isAnyRunning(processingState));
   let anyPaused = $derived(isAnyPaused(processingState));
 
-  // Categories to display
-  const categories: ProcessingCategory[] = ['image', 'audio'];
+  // Categories to display (audio-related first, then image)
+  const categories: ProcessingCategory[] = ['audio', 'clap', 'image'];
 
   // Global control handlers
   async function handleStartAll() {
@@ -122,15 +120,8 @@
   <!-- Category cards (vertically stacked) -->
   <div class="flex flex-col gap-3">
     {#each categories as category}
-      {@const progress = getCategoryProgress(processingState, category)}
-      {@const pendingCount = processingState.getPendingCountForCategory(category)}
-      {@const disabled = pendingCount === 0 && !progress?.isRunning}
-
-      <ProcessingCategoryCard {category} {progress} {pendingCount} {disabled} />
+      <ProcessingCategoryCard {category} />
     {/each}
-
-    <!-- CLAP audio embeddings processing -->
-    <ClapProcessingCard />
   </div>
 
   <!-- Info messages -->

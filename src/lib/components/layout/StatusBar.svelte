@@ -18,7 +18,7 @@
   const overall = $derived(getOverallProgress(processingState));
   const pendingTotal = $derived(processingState.pendingCount.total);
 
-  const categories: ProcessingCategory[] = ['image', 'audio', 'clap'];
+  const categories: ProcessingCategory[] = ['audio', 'clap', 'image'];
 
   // Debounce thumbnail indicator to avoid rapid show/hide flickering.
   // Show immediately when active, but stay visible for at least 1s after going idle.

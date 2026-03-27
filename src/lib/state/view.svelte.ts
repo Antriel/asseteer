@@ -5,7 +5,7 @@ type LayoutMode = 'grid' | 'table';
 type ThumbnailSize = 'small' | 'medium' | 'large';
 
 class ViewState {
-  activeTab = $state<AssetViewMode>('images');
+  activeTab = $state<AssetViewMode>('audio');
   layoutMode = $state<LayoutMode>('grid');
   thumbnailSize = $state<ThumbnailSize>('medium');
   folderSidebarOpen = $state(false);
