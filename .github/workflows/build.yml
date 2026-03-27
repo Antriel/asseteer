@@ -1,0 +1,138 @@
+name: 'Build and Release'
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # ensure full history and tags for changelog
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install dependencies (Ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Get package version
+        id: package-version
+        shell: bash
+        run: echo "version=v$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Check if version tag exists
+        id: tag-exists
+        shell: bash
+        run: |
+          if git rev-parse "${{ steps.package-version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate release notes
+        id: release-notes
+        if: github.ref == 'refs/heads/main' && steps.tag-exists.outputs.exists == 'false'
+        shell: bash
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LATEST_TAG" ]; then
+            {
+              echo "notes<<EOFNOTES"
+              echo "## What's Changed"
+              echo ""
+              git log --pretty=format:"- %s (%h)" ${LATEST_TAG}..HEAD
+              echo ""
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LATEST_TAG}...${{ steps.package-version.outputs.version }}"
+              echo "EOFNOTES"
+            } >> $GITHUB_OUTPUT
+          else
+            {
+              echo "notes<<EOFNOTES"
+              echo "## What's Changed"
+              echo ""
+              echo "Initial release 🎉"
+              echo ""
+              git log --pretty=format:"- %s (%h)"
+              echo "EOFNOTES"
+            } >> $GITHUB_OUTPUT
+          fi
+
+      - name: Sync Tauri version with package.json
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          node -e "
+            const fs = require('fs');
+            const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+            config.version = process.argv[1];
+            fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(config, null, 2));
+          " "$VERSION"
+
+      - name: Build Tauri app (with release)
+        if: github.ref == 'refs/heads/main' && steps.tag-exists.outputs.exists == 'false'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ steps.package-version.outputs.version }}
+          releaseName: 'Asseteer ${{ steps.package-version.outputs.version }}'
+          releaseBody: ${{ steps.release-notes.outputs.notes }}
+          releaseDraft: false
+          prerelease: false
+
+      - name: Build Tauri app (no release)
+        if: github.ref != 'refs/heads/main' || steps.tag-exists.outputs.exists == 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload Tauri artifacts
+        if: github.ref != 'refs/heads/main' || steps.tag-exists.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-app-${{ matrix.platform }}
+          path: |
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.rpm
+            src-tauri/target/release/bundle/**/*.AppImage
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.app
+            src-tauri/target/release/bundle/**/*.dmg
