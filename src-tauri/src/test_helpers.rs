@@ -9,21 +9,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
-/// Create an in-memory SQLite database with the full schema.
-pub async fn create_test_db() -> SqlitePool {
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect("sqlite::memory:")
-        .await
-        .expect("Failed to create test database");
-
-    setup_database(&pool)
-        .await
-        .expect("Failed to setup test database schema");
-
-    pool
-}
-
 /// Create a file-backed SQLite database with WAL mode and the full schema.
 /// Multiple pools can connect to the same file for concurrent access tests.
 pub async fn create_test_db_file(path: &str) -> SqlitePool {

@@ -3,12 +3,8 @@ use crate::clap::{embedding_to_blob, ensure_server_running, get_clap_client};
 use crate::models::Asset;
 use crate::task_system::db_writer::ProcessingOutput;
 use crate::utils::resolve_asset_fs_path;
-#[cfg(test)]
-use crate::utils::unix_now;
 use crate::zip_cache;
 use image::{DynamicImage, GenericImageView};
-#[cfg(test)]
-use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -17,159 +13,6 @@ const PROCESSING_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Timeout for nested ZIP assets (processing only — gate/cache wait is excluded)
 const NESTED_ZIP_PROCESSING_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Result of processing an asset
-#[derive(Debug, Clone)]
-pub struct ProcessingResult {
-    pub asset_id: i64,
-    pub success: bool,
-    pub error: Option<String>,
-}
-
-/// Process a single asset (thumbnail + metadata combined).
-/// Used by unit tests; production path uses `process_asset_cpu` + `DbBatchWriter`.
-#[cfg(test)]
-pub async fn process_asset(
-    asset: &Asset,
-    db: &SqlitePool,
-    pre_generate_thumbnails: bool,
-) -> ProcessingResult {
-    match asset.asset_type.as_str() {
-        "image" => process_image(asset, db, pre_generate_thumbnails).await,
-        "audio" => process_audio(asset, db).await,
-        _ => ProcessingResult {
-            asset_id: asset.id,
-            success: false,
-            error: Some(format!("Unsupported asset type: {}", asset.asset_type)),
-        },
-    }
-}
-
-/// Process an image asset. Extracts dimensions; optionally generates thumbnail inline.
-#[cfg(test)]
-async fn process_image(
-    asset: &Asset,
-    db: &SqlitePool,
-    pre_generate_thumbnails: bool,
-) -> ProcessingResult {
-    let asset_id = asset.id;
-    let uses_nested_zip = zip_cache::is_nested_zip_asset(asset);
-
-    // Load bytes outside the processing timeout — gate/cache wait is not counted
-    let asset_clone = asset.clone();
-    let bytes =
-        match tokio::task::spawn_blocking(move || zip_cache::load_asset_bytes_cached(&asset_clone))
-            .await
-        {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(e)) => {
-                return ProcessingResult {
-                    asset_id,
-                    success: false,
-                    error: Some(e),
-                }
-            }
-            Err(e) => {
-                return ProcessingResult {
-                    asset_id,
-                    success: false,
-                    error: Some(format!("Task join error: {}", e)),
-                }
-            }
-        };
-
-    // Timeout covers only CPU-intensive processing (decode + optional thumbnail)
-    let timeout = if uses_nested_zip {
-        NESTED_ZIP_PROCESSING_TIMEOUT
-    } else {
-        PROCESSING_TIMEOUT
-    };
-    let result = tokio::time::timeout(
-        timeout,
-        tokio::task::spawn_blocking(move || {
-            let img = image::load_from_memory(&bytes)
-                .map_err(|e| format!("Failed to decode image: {}", e))?;
-
-            let (width, height) = img.dimensions();
-
-            // Optionally generate thumbnail inline (skip for small images — no benefit)
-            let thumbnail = if pre_generate_thumbnails && (width > 128 || height > 128) {
-                Some(generate_thumbnail(&img, 128)?)
-            } else {
-                None
-            };
-
-            Ok::<_, String>((width, height, thumbnail))
-        }),
-    )
-    .await;
-
-    match result {
-        Ok(Ok(Ok((width, height, thumbnail)))) => {
-            let now = unix_now();
-
-            // Insert dimensions and optional thumbnail. On conflict, update dimensions but
-            // preserve any existing thumbnail (lazy worker may have already generated one).
-            match sqlx::query(
-                "INSERT INTO image_metadata (asset_id, width, height, thumbnail_data, processed_at)
-                 VALUES (?, ?, ?, ?, ?)
-                 ON CONFLICT (asset_id) DO UPDATE SET
-                     width = excluded.width,
-                     height = excluded.height,
-                     processed_at = excluded.processed_at,
-                     thumbnail_data = CASE
-                         WHEN image_metadata.thumbnail_data IS NULL THEN excluded.thumbnail_data
-                         ELSE image_metadata.thumbnail_data
-                     END",
-            )
-            .bind(asset_id)
-            .bind(width as i32)
-            .bind(height as i32)
-            .bind(thumbnail.as_deref())
-            .bind(now)
-            .execute(db)
-            .await
-            {
-                Ok(_) => {
-                    // Mark any existing errors as resolved
-                    let _ = sqlx::query(
-                        "UPDATE processing_errors SET resolved_at = ? WHERE asset_id = ? AND resolved_at IS NULL"
-                    )
-                    .bind(now)
-                    .bind(asset_id)
-                    .execute(db)
-                    .await;
-
-                    ProcessingResult {
-                        asset_id,
-                        success: true,
-                        error: None,
-                    }
-                }
-                Err(e) => ProcessingResult {
-                    asset_id,
-                    success: false,
-                    error: Some(format!("Failed to save to database: {}", e)),
-                },
-            }
-        }
-        Ok(Ok(Err(e))) => ProcessingResult {
-            asset_id,
-            success: false,
-            error: Some(e),
-        },
-        Ok(Err(e)) => ProcessingResult {
-            asset_id,
-            success: false,
-            error: Some(format!("Task join error: {}", e)),
-        },
-        Err(_) => ProcessingResult {
-            asset_id,
-            success: false,
-            error: Some("Processing timed out".to_string()),
-        },
-    }
-}
 
 /// Process a single asset's CPU work without writing to the database.
 /// Returns a `ProcessingOutput` that should be sent to the `DbBatchWriter`.
@@ -564,159 +407,6 @@ pub async fn generate_thumbnail_for_asset(asset: &Asset) -> Result<(i32, i32, Ve
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
-/// Process an audio asset (metadata extraction)
-#[cfg(test)]
-async fn process_audio(asset: &Asset, db: &SqlitePool) -> ProcessingResult {
-    use symphonia::core::formats::FormatOptions;
-    use symphonia::core::io::MediaSourceStream;
-    use symphonia::core::meta::MetadataOptions;
-    use symphonia::core::probe::Hint;
-
-    let asset_id = asset.id;
-    let uses_nested_zip = zip_cache::is_nested_zip_asset(asset);
-
-    /// Warn threshold: log if audio asset load takes longer than this
-    const AUDIO_LOAD_WARN_MS: u128 = 10000;
-    /// Warn threshold: log if audio probe takes longer than this
-    const AUDIO_PROBE_WARN_MS: u128 = 5000;
-
-    // Load bytes outside the processing timeout — gate/cache wait is not counted
-    let asset_clone = asset.clone();
-    let bytes = match tokio::task::spawn_blocking(move || {
-        let load_started = Instant::now();
-        let bytes = zip_cache::load_asset_bytes_cached(&asset_clone)?;
-
-        let load_ms = load_started.elapsed().as_millis();
-        if load_ms > AUDIO_LOAD_WARN_MS {
-            eprintln!(
-                "[AudioProcess] WARN slow load asset_id={} file='{}' nested={} bytes_mb={:.2} load_ms={}",
-                asset_clone.id,
-                asset_clone.filename,
-                zip_cache::is_nested_zip_asset(&asset_clone),
-                bytes.len() as f64 / (1024.0 * 1024.0),
-                load_ms
-            );
-        }
-
-        Ok::<_, String>(bytes)
-    }).await {
-        Ok(Ok(bytes)) => bytes,
-        Ok(Err(e)) => return ProcessingResult { asset_id, success: false, error: Some(e) },
-        Err(e) => return ProcessingResult { asset_id, success: false, error: Some(format!("Task join error: {}", e)) },
-    };
-
-    // Timeout covers only CPU-intensive processing (audio probing)
-    let format_ext = asset.format.clone();
-    let blocking_task = tokio::task::spawn_blocking(move || {
-        let cursor = std::io::Cursor::new(bytes);
-        let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
-
-        let mut hint = Hint::new();
-        hint.with_extension(&format_ext);
-
-        let probe_started = Instant::now();
-
-        let probed = symphonia::default::get_probe()
-            .format(
-                &hint,
-                mss,
-                &FormatOptions::default(),
-                &MetadataOptions::default(),
-            )
-            .map_err(|e| format!("Failed to probe audio format: {}", e))?;
-
-        let probe_ms = probe_started.elapsed().as_millis();
-        if probe_ms > AUDIO_PROBE_WARN_MS {
-            eprintln!(
-                "[AudioProcess] WARN slow probe asset_id={} probe_ms={}",
-                asset_id, probe_ms
-            );
-        }
-
-        let format = probed.format;
-        let track = format
-            .default_track()
-            .ok_or_else(|| "No audio track found".to_string())?;
-
-        let codec_params = &track.codec_params;
-        let sample_rate = codec_params.sample_rate.unwrap_or(0) as i32;
-        let channels = codec_params.channels.map(|c| c.count() as i32).unwrap_or(0);
-
-        let duration_ms = if let Some(n_frames) = codec_params.n_frames {
-            if sample_rate > 0 {
-                (n_frames as f64 / sample_rate as f64 * 1000.0) as i64
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-
-        Ok::<_, String>((duration_ms, sample_rate, channels))
-    });
-
-    let timeout = if uses_nested_zip {
-        NESTED_ZIP_PROCESSING_TIMEOUT
-    } else {
-        PROCESSING_TIMEOUT
-    };
-    let result: Result<(i64, i32, i32), String> =
-        match tokio::time::timeout(timeout, blocking_task).await {
-            Ok(join_result) => match join_result {
-                Ok(inner) => inner,
-                Err(e) => Err(format!("Task join error: {}", e)),
-            },
-            Err(_) => Err(format!("Processing timed out after {}s", timeout.as_secs())),
-        };
-
-    match result {
-        Ok((duration_ms, sample_rate, channels)) => {
-            // Insert into audio_metadata table
-            let now = unix_now();
-
-            match sqlx::query(
-                "INSERT INTO audio_metadata (asset_id, duration_ms, sample_rate, channels, processed_at)
-                 VALUES (?, ?, ?, ?, ?)",
-            )
-            .bind(asset_id)
-            .bind(duration_ms)
-            .bind(sample_rate)
-            .bind(channels)
-            .bind(now)
-            .execute(db)
-            .await
-            {
-                Ok(_) => {
-                    // Mark any existing errors as resolved
-                    let _ = sqlx::query(
-                        "UPDATE processing_errors SET resolved_at = ? WHERE asset_id = ? AND resolved_at IS NULL"
-                    )
-                    .bind(now)
-                    .bind(asset_id)
-                    .execute(db)
-                    .await;
-
-                    ProcessingResult {
-                        asset_id,
-                        success: true,
-                        error: None,
-                    }
-                }
-                Err(e) => ProcessingResult {
-                    asset_id,
-                    success: false,
-                    error: Some(format!("Failed to save to database: {}", e)),
-                },
-            }
-        }
-        Err(e) => ProcessingResult {
-            asset_id,
-            success: false,
-            error: Some(e),
-        },
-    }
-}
-
 /// Process CLAP embeddings for a batch of audio assets.
 /// Returns batched DB write items for successful embeddings and failure items for errors.
 /// If `preloaded_bytes` is provided (from bulk ZIP extraction), those bytes are used
@@ -948,112 +638,80 @@ mod tests {
     fn make_test_asset_with_path(
         filename: &str,
         folder_path: &str,
-        folder_id: i64,
         asset_type: &str,
         format: &str,
     ) -> Asset {
-        let mut asset = make_asset(filename, folder_id, "", asset_type, format);
+        let mut asset = make_asset(filename, 1, "", asset_type, format);
         asset.folder_path = folder_path.to_string();
+        asset.id = 1;
         asset
     }
 
     // -----------------------------------------------------------------------
-    // process_asset – images
+    // process_asset_cpu – images
     // -----------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_process_image_extracts_dimensions() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
         let folder_path = dir.path().to_string_lossy().replace('\\', "/");
-        let folder_id = insert_source_folder(&db, &folder_path, "test").await;
         create_test_png(dir.path(), "test.png");
 
-        let mut asset =
-            make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
-        asset.id = insert_asset(&db, &asset).await;
+        let asset = make_test_asset_with_path("test.png", &folder_path, "image", "png");
+        let result = process_asset_cpu(&asset, false).await;
 
-        let result = process_asset(&asset, &db, false).await;
-        assert!(result.success, "Should succeed: {:?}", result.error);
-
-        let (width, height): (i32, i32) =
-            sqlx::query_as("SELECT width, height FROM image_metadata WHERE asset_id = ?")
-                .bind(asset.id)
-                .fetch_one(&db)
-                .await
-                .expect("Should have image_metadata row");
-
-        assert_eq!(width, 64);
-        assert_eq!(height, 48);
+        match result {
+            ProcessingOutput::ImageSuccess { width, height, thumbnail, .. } => {
+                assert_eq!(width, 64);
+                assert_eq!(height, 48);
+                assert!(thumbnail.is_none(), "Thumbnail should be None when not pre-generating");
+            }
+            ProcessingOutput::Failure { error, .. } => panic!("Should succeed: {}", error),
+            _ => panic!("Expected ImageSuccess"),
+        }
     }
 
     #[tokio::test]
-    async fn test_process_image_stores_null_thumbnail() {
+    async fn test_process_image_pre_generates_thumbnail_for_large_image() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
         let folder_path = dir.path().to_string_lossy().replace('\\', "/");
-        let folder_id = insert_source_folder(&db, &folder_path, "test").await;
-        create_test_png(dir.path(), "test.png");
+        // create_test_png makes a 64x48 image (both dims <= 128), so create a larger one
+        let img = image::RgbaImage::from_fn(256, 192, |x, y| {
+            image::Rgba([x as u8, y as u8, 128, 255])
+        });
+        img.save(dir.path().join("large.png")).unwrap();
 
-        let mut asset =
-            make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
-        asset.id = insert_asset(&db, &asset).await;
+        let asset = make_test_asset_with_path("large.png", &folder_path, "image", "png");
+        let result = process_asset_cpu(&asset, true).await;
 
-        process_asset(&asset, &db, false).await;
-
-        let (thumb,): (Option<Vec<u8>>,) =
-            sqlx::query_as("SELECT thumbnail_data FROM image_metadata WHERE asset_id = ?")
-                .bind(asset.id)
-                .fetch_one(&db)
-                .await
-                .unwrap();
-
-        assert!(
-            thumb.is_none(),
-            "Thumbnail should be NULL after processing (lazy loading)"
-        );
+        match result {
+            ProcessingOutput::ImageSuccess { width, height, thumbnail, .. } => {
+                assert_eq!(width, 256);
+                assert_eq!(height, 192);
+                let thumb = thumbnail.expect("Should pre-generate thumbnail for large image");
+                assert_eq!(&thumb[0..4], b"RIFF", "Thumbnail should be WebP");
+            }
+            ProcessingOutput::Failure { error, .. } => panic!("Should succeed: {}", error),
+            _ => panic!("Expected ImageSuccess"),
+        }
     }
 
     #[tokio::test]
-    async fn test_process_image_does_not_overwrite_existing_thumbnail() {
+    async fn test_process_image_skips_thumbnail_for_small_image() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
         let folder_path = dir.path().to_string_lossy().replace('\\', "/");
-        let folder_id = insert_source_folder(&db, &folder_path, "test").await;
-        create_test_png(dir.path(), "test.png");
+        create_test_png(dir.path(), "test.png"); // 64x48, both <= 128
 
-        let mut asset =
-            make_test_asset_with_path("test.png", &folder_path, folder_id, "image", "png");
-        asset.id = insert_asset(&db, &asset).await;
+        let asset = make_test_asset_with_path("test.png", &folder_path, "image", "png");
+        let result = process_asset_cpu(&asset, true).await;
 
-        // Pre-populate with a fake thumbnail
-        let fake_thumb = vec![1, 2, 3, 4];
-        sqlx::query(
-            "INSERT INTO image_metadata (asset_id, width, height, thumbnail_data, processed_at)
-             VALUES (?, 10, 10, ?, 0)",
-        )
-        .bind(asset.id)
-        .bind(&fake_thumb)
-        .execute(&db)
-        .await
-        .unwrap();
-
-        // Process again – ON CONFLICT should update dimensions but keep thumbnail
-        process_asset(&asset, &db, false).await;
-
-        let row: (i32, i32, Option<Vec<u8>>) = sqlx::query_as(
-            "SELECT width, height, thumbnail_data FROM image_metadata WHERE asset_id = ?",
-        )
-        .bind(asset.id)
-        .fetch_one(&db)
-        .await
-        .unwrap();
-
-        // Dimensions updated to real values
-        assert_eq!(row.0, 64);
-        assert_eq!(row.1, 48);
-        // process_image's ON CONFLICT doesn't touch thumbnail_data, so it stays
-        assert!(row.2.is_some(), "Existing thumbnail should be preserved");
+        match result {
+            ProcessingOutput::ImageSuccess { thumbnail, .. } => {
+                assert!(thumbnail.is_none(), "Should skip thumbnail for small image even with pre_generate=true");
+            }
+            ProcessingOutput::Failure { error, .. } => panic!("Should succeed: {}", error),
+            _ => panic!("Expected ImageSuccess"),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1109,72 +767,59 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // process_asset – audio
+    // process_asset_cpu – audio
     // -----------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_process_audio_extracts_metadata() {
         let dir = tempfile::tempdir().unwrap();
-        let db = create_test_db().await;
         let folder_path = dir.path().to_string_lossy().replace('\\', "/");
-        let folder_id = insert_source_folder(&db, &folder_path, "test").await;
         create_test_wav(dir.path(), "test.wav");
 
-        let mut asset =
-            make_test_asset_with_path("test.wav", &folder_path, folder_id, "audio", "wav");
-        asset.id = insert_asset(&db, &asset).await;
+        let asset = make_test_asset_with_path("test.wav", &folder_path, "audio", "wav");
+        let result = process_asset_cpu(&asset, false).await;
 
-        let result = process_asset(&asset, &db, false).await;
-        assert!(result.success, "Should succeed: {:?}", result.error);
-
-        let (duration_ms, sample_rate, channels): (i64, Option<i32>, Option<i32>) = sqlx::query_as(
-            "SELECT duration_ms, sample_rate, channels FROM audio_metadata WHERE asset_id = ?",
-        )
-        .bind(asset.id)
-        .fetch_one(&db)
-        .await
-        .expect("Should have audio_metadata row");
-
-        assert_eq!(sample_rate, Some(44100));
-        assert_eq!(channels, Some(1));
-        // 4410 samples @ 44100 Hz ≈ 100 ms
-        assert!(
-            duration_ms > 0,
-            "Duration should be positive, got {}",
-            duration_ms
-        );
+        match result {
+            ProcessingOutput::AudioSuccess { duration_ms, sample_rate, channels, .. } => {
+                assert_eq!(sample_rate, 44100);
+                assert_eq!(channels, 1);
+                // 4410 samples @ 44100 Hz ≈ 100 ms
+                assert!(duration_ms > 0, "Duration should be positive, got {}", duration_ms);
+            }
+            ProcessingOutput::Failure { error, .. } => panic!("Should succeed: {}", error),
+            _ => panic!("Expected AudioSuccess"),
+        }
     }
 
     // -----------------------------------------------------------------------
-    // process_asset – unsupported type
+    // process_asset_cpu – unsupported type
     // -----------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_process_unsupported_asset_type() {
-        let db = create_test_db().await;
-        let folder_id = insert_source_folder(&db, "/fake", "fake").await;
-        let mut asset = make_asset("test.mp4", folder_id, "", "video", "mp4");
-        asset.id = 999; // not in DB, but we won't reach the DB write
+        let asset = make_test_asset_with_path("test.mp4", "/fake", "video", "mp4");
+        let result = process_asset_cpu(&asset, false).await;
 
-        let result = process_asset(&asset, &db, false).await;
-        assert!(!result.success);
-        assert!(result.error.unwrap().contains("Unsupported"));
+        match result {
+            ProcessingOutput::Failure { error, .. } => {
+                assert!(error.contains("Unsupported"), "Error should mention unsupported type: {}", error);
+            }
+            _ => panic!("Expected Failure for unsupported type"),
+        }
     }
 
     // -----------------------------------------------------------------------
-    // process_asset – missing file
+    // process_asset_cpu – missing file
     // -----------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_process_image_missing_file_returns_error() {
-        let db = create_test_db().await;
-        let folder_id = insert_source_folder(&db, "/no/such", "missing").await;
-        let mut asset = make_asset("gone.png", folder_id, "path", "image", "png");
-        asset.folder_path = "/no/such".to_string();
-        asset.id = insert_asset(&db, &asset).await;
+        let asset = make_test_asset_with_path("gone.png", "/no/such", "image", "png");
+        let result = process_asset_cpu(&asset, false).await;
 
-        let result = process_asset(&asset, &db, false).await;
-        assert!(!result.success);
-        assert!(result.error.is_some());
+        match result {
+            ProcessingOutput::Failure { .. } => {}
+            _ => panic!("Expected Failure for missing file"),
+        }
     }
 }
