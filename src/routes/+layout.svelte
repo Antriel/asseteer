@@ -65,21 +65,19 @@
     <!-- Folder Panel (always visible on library page, collapsed or expanded) -->
     {#if isLibraryPage}
       <div
-        class="relative flex-shrink-0 flex h-full transition-all duration-200"
+        class="relative flex-shrink-0 flex h-full {isResizing ? '' : 'transition-all duration-200'}"
         style="width: {viewState.folderSidebarOpen ? viewState.folderPanelWidth : 48}px"
       >
         <FolderSidebar />
         {#if viewState.folderSidebarOpen}
           <!-- Resize handle (only when expanded) -->
-          <div
-            class="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-10 hover:bg-accent/30 transition-colors {isResizing
+          <button
+            class="absolute right-0 top-0 bottom-0 w-1 !cursor-col-resize z-10 hover:bg-accent/30 transition-colors border-none p-0 bg-transparent {isResizing
               ? 'bg-accent/40'
               : ''}"
             onmousedown={onResizeStart}
-            role="separator"
-            aria-orientation="vertical"
-            tabindex="-1"
-          ></div>
+            aria-label="Resize panel"
+          ></button>
         {/if}
       </div>
     {/if}
