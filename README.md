@@ -2,6 +2,8 @@
 
 A desktop app for searching and browsing large asset pack collections (images and audio) even directly from ZIPs (Humble Bundles anyone?).
 
+<img width="1076" height="798" alt="image" src="https://github.com/user-attachments/assets/bc4f95fe-502a-4d4a-8743-c854c771f21f" />
+
 ## What it does
 
 Asset packs often come as giant zip files with hundreds or thousands of files inside. Asseteer scans your folders (including nested zips), indexes everything into a local database, and lets you search and preview assets instantly.
