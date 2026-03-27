@@ -49,8 +49,8 @@ CREATE TABLE IF NOT EXISTS assets (
 "#;
 
 pub const CREATE_ASSETS_INDEXES: &str = r#"
-CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(asset_type);
-CREATE INDEX IF NOT EXISTS idx_assets_folder ON assets(folder_id);
+CREATE INDEX IF NOT EXISTS idx_assets_type_filename ON assets(asset_type, filename COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_assets_folder_type_filename ON assets(folder_id, asset_type, filename COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_assets_modified ON assets(modified_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_unique ON assets(folder_id, rel_path, COALESCE(zip_file, ''), COALESCE(zip_entry, filename));
 "#;

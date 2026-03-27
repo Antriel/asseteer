@@ -33,7 +33,7 @@ pub async fn setup_database(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Create main assets table
     sqlx::query(CREATE_ASSETS_TABLE).execute(pool).await?;
 
-    // Create indexes
+    // Create indexes (compound indexes for sorted browsing)
     for index_sql in CREATE_ASSETS_INDEXES
         .split(';')
         .filter(|s| !s.trim().is_empty())
