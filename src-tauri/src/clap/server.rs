@@ -120,12 +120,16 @@ pub async fn ensure_server_running() -> Result<(), String> {
 /// Detect GPU compute capability via nvidia-smi and return the appropriate
 /// PyTorch CUDA index URL. Returns None for CPU-only (no GPU or detection fails).
 fn detect_pytorch_index() -> Option<String> {
-    let output = Command::new("nvidia-smi")
-        .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
+    let mut cmd = Command::new("nvidia-smi");
+    cmd.args(["--query-gpu=compute_cap", "--format=csv,noheader"])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = cmd.output().ok()?;
 
     if !output.status.success() {
         println!("[CLAP] nvidia-smi failed, using CPU-only PyTorch");
@@ -152,11 +156,26 @@ fn detect_pytorch_index() -> Option<String> {
     Some(index.to_string())
 }
 
-/// Locate the clap-server directory relative to cwd.
+/// Locate the clap-server directory.
+///
+/// In production builds the clap-server files are bundled as Tauri resources
+/// and resolved via the app's resource directory. During development (where the
+/// resource dir doesn't contain clap-server) we fall back to the cwd-relative
+/// lookup so `cargo tauri dev` keeps working.
 fn find_clap_server_dir() -> Result<std::path::PathBuf, String> {
-    let cwd = std::env::current_dir().map_err(|e| format!("Failed to get current dir: {}", e))?;
+    // Try bundled resource path first (production builds)
+    if let Some(handle) = super::get_app_handle() {
+        use tauri::Manager;
+        if let Ok(resource_dir) = handle.path().resource_dir() {
+            let bundled = resource_dir.join("clap-server");
+            if bundled.join("clap_server.py").exists() {
+                return Ok(bundled);
+            }
+        }
+    }
 
-    // Try cwd first, then parent (Tauri runs from src-tauri/)
+    // Dev fallback: look relative to cwd (Tauri runs from src-tauri/)
+    let cwd = std::env::current_dir().map_err(|e| format!("Failed to get current dir: {}", e))?;
     if cwd.join("clap-server").exists() {
         Ok(cwd.join("clap-server"))
     } else if cwd
@@ -167,7 +186,8 @@ fn find_clap_server_dir() -> Result<std::path::PathBuf, String> {
         Ok(cwd.parent().unwrap().join("clap-server"))
     } else {
         Err(format!(
-            "Could not find clap-server directory (cwd: {:?})",
+            "Could not find clap-server directory. \
+             Resource dir did not contain clap-server, and cwd ({:?}) doesn't either.",
             cwd
         ))
     }
@@ -205,13 +225,18 @@ async fn start_server_process(
             }
             args.extend(["clap_server.py", "--port", &port_str]);
 
-            let child = Command::new(&uv_path)
-                .args(&args)
+            let mut cmd = Command::new(&uv_path);
+            cmd.args(&args)
                 .current_dir(clap_dir)
                 .env("UV_CACHE_DIR", uv::uv_cache_dir())
                 .stdout(stdout)
-                .stderr(stderr)
-                .spawn()
+                .stderr(stderr);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+            let child = cmd.spawn()
                 .map_err(|e| {
                     format!(
                         "Failed to start CLAP server via uv: {}. \
@@ -261,8 +286,8 @@ fn start_server_venv_fallback(
     println!("[CLAP] Using manual venv fallback: {:?}", python_path);
     let port_str = port.to_string();
 
-    Command::new(&python_path)
-        .args([
+    let mut cmd = Command::new(&python_path);
+    cmd.args([
             "-m",
             "uvicorn",
             "clap_server:app",
@@ -273,8 +298,13 @@ fn start_server_venv_fallback(
         ])
         .current_dir(clap_dir)
         .stdout(stdout)
-        .stderr(stderr)
-        .spawn()
+        .stderr(stderr);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd.spawn()
         .map_err(|e| {
             format!(
                 "Failed to start CLAP server: {} (python: {:?}). Log file: {:?}",
