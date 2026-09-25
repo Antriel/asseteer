@@ -7,6 +7,7 @@
   import { exploreState } from '$lib/state/explore.svelte';
   import { getDatabase } from '$lib/database/connection';
   import { getAssetTypeCounts, getPendingClapCount } from '$lib/database/queries';
+  import { parseSearchQuery, splitAlternatives } from '$lib/database/searchQuery';
   import type { CategoryProgress } from '$lib/types';
 
   import Toolbar from '$lib/components/shared/Toolbar.svelte';
@@ -116,7 +117,43 @@
   let hasMoreResults = $derived(
     isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults,
   );
+
+  // All words typed, none found together: offer the same words as alternatives
+  let orSuggestion = $derived(isSemanticModeEnabled ? null : assetsState.orSuggestion);
 </script>
+
+<!-- A query rendered the way the search field shows it: chips with "or" between -->
+{#snippet queryChips(text: string)}
+  {#each splitAlternatives(text) as alt, i (i)}
+    {#if i > 0}<span class="text-xs text-tertiary">or</span>{/if}
+    <span class="h-6 px-1.5 flex items-center text-xs font-medium rounded bg-tertiary text-primary"
+      >{alt.trim()}</span
+    >
+  {/each}
+{/snippet}
+
+{#snippet orSuggestionHint(suggestion: { text: string; count: number })}
+  {@const words = parseSearchQuery(assetsState.searchText)[0] ?? []}
+  <p class="text-primary font-medium">No {viewState.activeTab} match all {words.length} words</p>
+  <p class="text-sm text-secondary text-center">
+    Words separated by spaces must all match. Separate them with commas to find any of them:
+  </p>
+  <button
+    class="flex items-center gap-1.5 pl-2 pr-3 h-9 rounded-md border border-default bg-primary hover:border-accent transition-colors"
+    onclick={() =>
+      assetsState.searchAssets(
+        suggestion.text,
+        viewState.activeTab === 'images' ? 'image' : 'audio',
+      )}
+  >
+    <SearchIcon size="sm" class="text-secondary" />
+    {@render queryChips(suggestion.text)}
+    <span class="ml-2 text-sm text-accent whitespace-nowrap">
+      {suggestion.count.toLocaleString()}
+      {suggestion.count === 1 ? viewState.activeTab.replace(/s$/, '') : viewState.activeTab} →
+    </span>
+  </button>
+{/snippet}
 
 <div class="flex flex-col h-full overflow-hidden">
   <!-- Toolbar (asset type, search, filters, view controls) -->
@@ -155,12 +192,28 @@
               No {viewState.activeTab} found - try scanning for assets first
             {/if}
           </p>
+          {#if assetsState.totalMatchingCount > 0 && !isSemanticModeEnabled}
+            <dl
+              class="mt-2 grid grid-cols-[auto_auto] items-center gap-x-4 gap-y-2 text-xs text-secondary"
+            >
+              <dt class="justify-self-end">
+                <kbd class="px-1.5 py-0.5 rounded bg-tertiary text-primary font-sans">gun shot</kbd>
+              </dt>
+              <dd>all of the words</dd>
+              <dt class="justify-self-end flex items-center gap-1.5">
+                {@render queryChips('gun, laser')}
+              </dt>
+              <dd>any of them — separate with commas</dd>
+            </dl>
+          {/if}
         </div>
       {:else if activeAssets.length === 0}
         <!-- Empty state: Filter active but no results -->
         <div class="flex flex-col items-center justify-center h-full gap-4">
           <InboxIcon size="xl" class="text-tertiary" />
-          {#if assetsState.folderLocation && hasActiveSearch}
+          {#if orSuggestion}
+            {@render orSuggestionHint(orSuggestion)}
+          {:else if assetsState.folderLocation && hasActiveSearch}
             <p class="text-primary font-medium">No results found</p>
             <p class="text-sm text-secondary text-center">
               No {viewState.activeTab} matching your search in this folder

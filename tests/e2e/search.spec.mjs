@@ -26,9 +26,51 @@ test('images tab searches images', async ({ page, app }) => {
   await app.shot('search-images-tile');
 });
 
-// Known bug: raw input is parsed as FTS5 syntax, so `sci-fi` → "no such column: fi".
-// Remove `fixme` when asseteer-no3w lands.
-test.fixme('a hyphenated term does not break search (asseteer-no3w)', async ({ app }) => {
+test('a hyphenated term does not break search', async ({ app }) => {
+  // Used to be parsed as FTS5 syntax ("no such column: fi"). Matches the file and, by its
+  // Sci-Fi/ folder, laser_blast too.
   await app.search('sci-fi');
-  expect((await app.state()).assetCount).toBe(1);
+  expect((await app.state()).assetCount).toBe(2);
+});
+
+test('commas find any of the alternatives, shown as chips', async ({ page, app }) => {
+  await app.search('pistol, laser');
+  expect((await app.state()).assetCount).toBe(2);
+  await expect(page.getByText('reload_pistol.wav')).toBeVisible();
+  await expect(page.getByText('laser_blast.wav')).toBeVisible();
+  // "pistol" became a chip; the input edits only the alternative after the comma
+  await expect(page.getByRole('button', { name: 'Remove “pistol”' })).toBeVisible();
+  await expect(app.searchBox()).toHaveValue('laser');
+  await app.shot('search-or-chips');
+
+  // Clicking a chip edits it: it swaps places with the text in the input
+  await page.getByTitle('Edit “pistol”').click();
+  await expect(app.searchBox()).toHaveValue('pistol');
+  await expect(page.getByRole('button', { name: 'Remove “laser”' })).toBeVisible();
+  expect((await app.state()).assetCount).toBe(2);
+
+  // Backspace in the emptied input brings the last chip back for editing
+  await app.searchBox().fill('');
+  await app.searchBox().press('Backspace');
+  await expect(app.searchBox()).toHaveValue('laser');
+  await expect(page.getByRole('button', { name: /^Remove / })).toHaveCount(0);
+});
+
+test('a multi-word search with no results offers the words as alternatives', async ({
+  page,
+  app,
+}) => {
+  await app.search('gun explosion');
+  expect((await app.state()).assetCount).toBe(0);
+  const suggestion = page.getByRole('button', { name: /gun\s*or\s*explosion\s*4 audio/ });
+  await expect(suggestion).toBeVisible();
+  await app.shot('search-or-suggestion');
+
+  await suggestion.click();
+  await page.waitForFunction(() => {
+    const s = window.asseteerTest.state();
+    return s.searchText === 'gun, explosion' && !s.isLoading;
+  });
+  expect((await app.state()).assetCount).toBe(4);
+  await expect(app.searchBox()).toHaveValue('explosion');
 });

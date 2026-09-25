@@ -108,14 +108,18 @@ export function createApp({ page, onShot }) {
     },
 
     /** The library's search box — a real input, for real typing. */
-    searchBox: () => page.getByPlaceholder(/^Search /),
+    searchBox: () => page.getByRole('textbox', { name: 'Search' }),
 
     /**
-     * Type into the real search box and wait until the (debounced) search has run and
+     * Replace the query in the real search box and wait until the (debounced) search has run and
      * its results are in. `searchText` is only set when the debounce fires, so it is the
      * signal that the query actually started.
      */
     async search(text) {
+      // The input holds only the alternative being typed; earlier ones are chips. Clear
+      // them so `text` replaces the whole query.
+      const clear = page.getByTitle('Clear search');
+      if (await clear.isVisible()) await clear.click();
       await app.searchBox().fill(text);
       await page.waitForFunction(
         (t) => {

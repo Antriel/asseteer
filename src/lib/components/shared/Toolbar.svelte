@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { assetsState } from '$lib/state/assets.svelte';
   import type { SearchColumn } from '$lib/database/queries';
+  import { joinAlternatives, splitForEditing } from '$lib/database/searchQuery';
   import { viewState } from '$lib/state/view.svelte';
   import { exploreState } from '$lib/state/explore.svelte';
   import { clapState } from '$lib/state/clap.svelte';
@@ -21,6 +22,12 @@
   } from '$lib/components/icons';
 
   let searchInput = $state(assetsState.searchText);
+  let inputEl: HTMLInputElement | undefined = $state();
+  let termsEl: HTMLDivElement | undefined = $state();
+  let termsScrolled = $state(false);
+  // The text this toolbar last handed to assetsState; anything else there came from outside
+  // (e.g. the empty state's suggestion) and is mirrored into the field
+  let submittedText = assetsState.searchText;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Saved search text from before entering similarity mode, for restoring on cancel
@@ -33,8 +40,36 @@
   // Check if we're on the audio tab
   let isAudioTab = $derived(viewState.activeTab === 'audio');
 
+  function runTextSearch(
+    text: string,
+    assetType: 'image' | 'audio' = viewState.activeTab === 'images' ? 'image' : 'audio',
+  ) {
+    submittedText = text;
+    assetsState.searchAssets(text, assetType);
+  }
+
+  $effect(() => {
+    const text = assetsState.searchText;
+    untrack(() => {
+      if (text === submittedText) return;
+      submittedText = text;
+      if (!isSimilarityMode && !isSemanticModeEnabled) searchInput = text;
+    });
+  });
+
   function handleSearch(e: Event) {
-    const value = (e.target as HTMLInputElement).value;
+    const input = e.target as HTMLInputElement;
+    if (!chipMode) {
+      setSearchInput(input.value);
+      return;
+    }
+    // A comma typed or pasted commits everything before it as chips
+    const next = splitForEditing(joinAlternatives(editParts.committed, input.value));
+    if (input.value !== next.editing) input.value = next.editing;
+    setSearchInput(joinAlternatives(next.committed, next.editing));
+  }
+
+  function setSearchInput(value: string) {
     searchInput = value;
 
     // In similarity mode, typing filters the similarity results client-side
@@ -56,7 +91,7 @@
       if (isSemanticMode) {
         handleSemanticSearch(value);
       } else {
-        assetsState.searchAssets(value, viewState.activeTab === 'images' ? 'image' : 'audio');
+        runTextSearch(value);
       }
     }, debounceMs);
   }
@@ -65,7 +100,7 @@
     if (!query.trim()) {
       clapState.clearSearch();
       // Fall back to showing all audio
-      assetsState.searchAssets('', 'audio');
+      runTextSearch('', 'audio');
       return;
     }
 
@@ -81,7 +116,7 @@
       showToast(`Semantic search failed: ${error}`, 'error');
       // Fall back to FTS
       clapState.semanticSearchEnabled = false;
-      assetsState.searchAssets(query, 'audio');
+      runTextSearch(query, 'audio');
     }
   }
 
@@ -109,7 +144,7 @@
       }
     } else {
       // Switch back to FTS
-      assetsState.searchAssets(searchInput, 'audio');
+      runTextSearch(searchInput, 'audio');
     }
   }
 
@@ -141,6 +176,19 @@
 
   // Check if similarity search is active
   let isSimilarityMode = $derived(isAudioTab && clapState.similarToAssetId !== null);
+
+  // Text search shows finished alternatives (before the last comma) as chips; semantic and
+  // similarity filtering take the text as typed
+  let chipMode = $derived(!isSimilarityMode && !isSemanticModeEnabled);
+  let editParts = $derived(
+    chipMode ? splitForEditing(searchInput) : { committed: [] as string[], editing: searchInput },
+  );
+
+  // A new chip pushes the input right; keep the input in view
+  $effect(() => {
+    editParts.committed.length; // reactive dependency
+    untrack(() => termsEl?.scrollTo({ left: termsEl.scrollWidth }));
+  });
 
   // Re-run semantic/similarity search when the folder filter changes.
   // FTS is already handled by setFolderFilter → loadAssets().
@@ -181,7 +229,7 @@
     if (searchInput) {
       // User typed something new — keep it, run FTS search
       clapState.clearSimilaritySearch();
-      assetsState.searchAssets(searchInput, 'audio');
+      runTextSearch(searchInput, 'audio');
     } else if (saved) {
       // Input still empty — restore previous state
       clapState.clearSimilaritySearch();
@@ -190,13 +238,13 @@
         clapState.semanticSearchEnabled = true;
         handleSemanticSearch(saved.searchText);
       } else if (saved.searchText.trim()) {
-        assetsState.searchAssets(saved.searchText, 'audio');
+        runTextSearch(saved.searchText, 'audio');
       } else {
-        assetsState.searchAssets('', 'audio');
+        runTextSearch('', 'audio');
       }
     } else {
       clapState.clearSimilaritySearch();
-      assetsState.searchAssets('', 'audio');
+      runTextSearch('', 'audio');
     }
   }
 
@@ -227,22 +275,41 @@
       clapState.similarityFilterText = '';
     } else if (clapState.semanticSearchEnabled && isAudioTab) {
       clapState.clearSearch();
-      assetsState.searchAssets('', 'audio');
+      runTextSearch('', 'audio');
     } else {
-      assetsState.searchAssets('', viewState.activeTab === 'images' ? 'image' : 'audio');
+      runTextSearch('');
     }
   }
 
-  // Backspace in an empty field removes the nearest chip, like a tag input
+  // Backspace in an empty field takes the nearest chip: an alternative goes back to being
+  // edited (undoing its comma), a scope chip is removed — like a tag input
   function handleSearchKeyDown(e: KeyboardEvent) {
-    if (e.key !== 'Backspace' || searchInput) return;
-    if (assetsState.folderLocation) {
+    if (e.key !== 'Backspace' || (e.target as HTMLInputElement).value) return;
+    if (editParts.committed.length) {
+      e.preventDefault();
+      editAlternative(editParts.committed.length - 1);
+    } else if (assetsState.folderLocation) {
       e.preventDefault();
       clearFolderFilter();
     } else if (isSimilarityMode) {
       e.preventDefault();
       cancelSimilaritySearch();
     }
+  }
+
+  function removeAlternative(index: number) {
+    const committed = editParts.committed.filter((_, i) => i !== index);
+    setSearchInput(joinAlternatives(committed, editParts.editing));
+    inputEl?.focus();
+  }
+
+  // Order of alternatives doesn't matter, so editing one moves it to the end, into the input
+  function editAlternative(index: number) {
+    const { committed, editing } = editParts;
+    const rest = committed.filter((_, i) => i !== index);
+    if (editing.trim()) rest.push(editing.trim());
+    setSearchInput(joinAlternatives(rest, committed[index]));
+    inputEl?.focus();
   }
 
   function setSearchColumn(value: SearchColumn) {
@@ -252,14 +319,16 @@
     if (searchInput.trim() && !isSimilarityMode) {
       const isSemanticMode = isAudioTab && clapState.semanticSearchEnabled;
       if (!isSemanticMode) {
-        assetsState.searchAssets(searchInput, viewState.activeTab === 'images' ? 'image' : 'audio');
+        runTextSearch(searchInput);
       }
     }
   }
 
   // Placeholder text based on search mode
   let placeholderText = $derived(
-    isSimilarityMode
+    editParts.committed.length
+      ? 'or…'
+      : isSimilarityMode
       ? 'Filter results by filename...'
       : isSemanticModeEnabled
         ? 'Semantic search (e.g., "footsteps on wood")...'
@@ -338,14 +407,52 @@
         </span>
       {/if}
 
-      <input
-        type="text"
-        placeholder={placeholderText}
-        value={searchInput}
-        oninput={handleSearch}
-        onkeydown={handleSearchKeyDown}
-        class="flex-1 min-w-16 h-full bg-transparent text-primary placeholder:text-tertiary outline-none"
-      />
+      <!-- Alternatives + input: click a chip to edit it, × to drop it; the "or" between them
+           is the syntax lesson. Chips keep their size; the strip scrolls like a text field,
+           fading at the left edge when earlier chips are scrolled out. -->
+      <div
+        bind:this={termsEl}
+        onscroll={() => (termsScrolled = termsEl!.scrollLeft > 0)}
+        onwheel={(e) => {
+          if (!e.deltaX) termsEl!.scrollLeft += e.deltaY;
+        }}
+        class="flex-1 min-w-0 h-full flex items-center gap-1.5 overflow-x-auto [scrollbar-width:none] {termsScrolled
+          ? '[mask-image:linear-gradient(to_right,transparent,black_12px)]'
+          : ''}"
+      >
+        {#each editParts.committed as alt, i (i)}
+          <span
+            class="h-6 max-w-40 flex-shrink-0 overflow-hidden flex items-center pl-1.5 pr-0.5 text-xs font-medium rounded bg-tertiary text-primary"
+          >
+            <button
+              class="min-w-0 truncate cursor-text"
+              onclick={() => editAlternative(i)}
+              title="Edit “{alt}”">{alt}</button
+            >
+            <button
+              class="flex-shrink-0 p-0.5 rounded text-secondary hover:text-primary hover:bg-elevated transition-colors"
+              onclick={() => removeAlternative(i)}
+              aria-label="Remove “{alt}”"
+            >
+              <CloseIcon size="sm" class="w-3 h-3" />
+            </button>
+          </span>
+          {#if i < editParts.committed.length - 1 || editParts.editing}
+            <span class="flex-shrink-0 text-xs text-tertiary">or</span>
+          {/if}
+        {/each}
+
+        <input
+          bind:this={inputEl}
+          type="text"
+          aria-label="Search"
+          placeholder={placeholderText}
+          value={editParts.editing}
+          oninput={handleSearch}
+          onkeydown={handleSearchKeyDown}
+          class="flex-1 min-w-16 h-full bg-transparent text-primary placeholder:text-tertiary outline-none"
+        />
+      </div>
 
       {#if searchInput}
         <button

@@ -7,6 +7,8 @@ import {
   getAssetCountByType,
   type SearchColumn,
 } from '$lib/database/queries';
+import { suggestAlternatives } from '$lib/database/searchQuery';
+import { showToast } from '$lib/state/ui.svelte';
 import { clearThumbnailCache } from '$lib/state/thumbnails.svelte';
 import { listen } from '@tauri-apps/api/event';
 
@@ -35,6 +37,8 @@ class AssetsState {
   folderLocation = $state<FolderLocation | null>(null);
   // Search column targeting
   searchColumn = $state<SearchColumn>('anywhere');
+  // When a multi-word search finds nothing: the comma (any-of) form and how many it finds
+  orSuggestion = $state<{ text: string; count: number } | null>(null);
 
   // Search cancellation tracking
   private searchVersion = 0;
@@ -50,6 +54,7 @@ class AssetsState {
     // Show loading state but keep previous results visible
     this.isLoading = true;
     this.hasMoreResults = false;
+    this.orSuggestion = null;
 
     try {
       const db = await getDatabase();
@@ -106,6 +111,21 @@ class AssetsState {
         this.totalMatchingCount = result.length;
       }
 
+      // Nothing has all the words: offer the words as alternatives, if that finds anything
+      const suggestion = result.length === 0 ? suggestAlternatives(this.searchText) : null;
+      if (suggestion) {
+        const count = await countSearchResults(
+          db,
+          suggestion,
+          assetType,
+          durationFilter,
+          this.folderLocation,
+          this.searchColumn,
+        );
+        if (currentVersion !== this.searchVersion) return;
+        if (count > 0) this.orSuggestion = { text: suggestion, count };
+      }
+
       // Only keep up to MAX_DISPLAY_LIMIT
       clearThumbnailCache();
       this.assets = result.slice(0, MAX_DISPLAY_LIMIT);
@@ -121,6 +141,7 @@ class AssetsState {
       // Only log if this search is still current
       if (currentVersion === this.searchVersion) {
         console.error('Failed to load assets:', error);
+        showToast(`Search failed: ${error}`, 'error');
       }
     } finally {
       // Only clear loading if this search is still current

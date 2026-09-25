@@ -92,11 +92,11 @@ A red spec leaves evidence: `test-results/<spec>/test-failed-1.png` + `trace.zip
 `tests/harness/out/failure-<title>.png`, included in the contact sheet.
 
 **Every spec fails on any `console.error`, uncaught error or unhandled rejection.** This
-matters here specifically: a failing search query is only ever visible as a console error
+matters here specifically: a failing search query shows only a toast and a console error
 (the list just keeps its stale results). Muting means adding to `IGNORED_ERRORS` in
 `appApi.mjs` with a reason — fix the cause instead where possible.
 
-A known bug gets a `test.fixme` naming its bean (see `search.spec.mjs`), not a deleted test.
+A known bug gets a `test.fixme` naming its bean, not a deleted test.
 
 `window.asseteerTest` (`src/lib/harness/testHooks.ts`, dev builds only) is the arrangement
 surface: add/remove folders without the native picker, run processing, read state.

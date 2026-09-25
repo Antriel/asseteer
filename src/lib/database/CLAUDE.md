@@ -54,11 +54,17 @@ const count = await getAssetCount(db);
 
 ## FTS5 Full-Text Search
 
-Uses dual-table approach (handled internally by `buildFtsCondition()`):
+Search box text → SQL is `buildFtsFilter()` in `searchQuery.ts` (pure, tested against real
+FTS5 in `searchQuery.test.ts`). Syntax: **space = AND, comma = OR**, double quotes keep spaces
+and commas literal. Every term is quoted, so user text is never FTS5 syntax (`sci-fi` is safe).
+
+Dual-table approach, per term:
 - **Word table** (`assets_fts_word`): Prefix matching with `*` wildcard, works for any length
 - **Trigram table** (`assets_fts_sub`): Exact substring matching, requires 3+ chars
 
-Short queries (<3 chars) use word table only. Longer queries UNION both tables.
+Terms under 3 chars use the word table only; longer terms UNION both. Terms combine with
+INTERSECT, alternatives with UNION. With several alternatives `searchAssets` sorts rows
+matching more of them first, then by filename.
 
 Supports column targeting via `SearchColumn`: `'anywhere'`, `'filename'`, `'path'`.
 

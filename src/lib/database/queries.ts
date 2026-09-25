@@ -2,6 +2,7 @@ import type Database from '@tauri-apps/plugin-sql';
 import type { Asset, FolderLocation, SearchExclude, SourceFolder } from '$lib/types';
 import type { DurationFilter } from '$lib/state/assets.svelte';
 import { invoke } from '@tauri-apps/api/core';
+import { buildFtsFilter, type SearchColumn } from './searchQuery';
 
 /** Common SELECT columns for asset queries (joins source_folders for folder_path) */
 const ASSET_SELECT = `
@@ -22,55 +23,13 @@ const ASSET_JOINS = `
 	LEFT JOIN audio_metadata ON assets.id = audio_metadata.asset_id
 `;
 
-/** Search column targeting type */
-export type SearchColumn = 'anywhere' | 'filename' | 'path';
-
-/**
- * Build FTS condition for dual-table search.
- * Short patterns (< 3 chars) use word table only with wildcard.
- * Longer patterns use UNION of both tables.
- */
-function buildFtsCondition(
-  searchText: string,
-  searchColumn: SearchColumn,
-  conditions: string[],
-  params: unknown[],
-): void {
-  const trimmed = searchText.trim();
-  if (!trimmed) return;
-
-  // Column prefix for FTS5 column targeting
-  const colPrefix =
-    searchColumn === 'filename' ? 'filename:' : searchColumn === 'path' ? 'searchable_path:' : '';
-
-  if (trimmed.length < 3) {
-    // Short patterns: word table only with wildcard (trigram needs >= 3 chars)
-    const wordQuery = `${colPrefix}${trimmed}*`;
-    conditions.push(
-      'assets.id IN (SELECT rowid FROM assets_fts_word WHERE assets_fts_word MATCH ?)',
-    );
-    params.push(wordQuery);
-  } else {
-    // Longer patterns: UNION both tables
-    // Trigram: exact substring match (no wildcard needed)
-    // Word: prefix match with wildcard
-    const subQuery = `${colPrefix}${trimmed}`;
-    const wordQuery = `${colPrefix}${trimmed}*`;
-    conditions.push(
-      `assets.id IN (
-        SELECT rowid FROM assets_fts_sub WHERE assets_fts_sub MATCH ?
-        UNION
-        SELECT rowid FROM assets_fts_word WHERE assets_fts_word MATCH ?
-      )`,
-    );
-    params.push(subQuery, wordQuery);
-  }
-}
+export type { SearchColumn } from './searchQuery';
 
 /**
  * Build shared filter conditions for searchAssets and countSearchResults.
- * Returns conditions, params, and an audioJoin clause (needed by countSearchResults,
- * which doesn't include ASSET_JOINS automatically).
+ * Returns conditions, params, an audioJoin clause (needed by countSearchResults,
+ * which doesn't include ASSET_JOINS automatically), and with OR alternatives in the search
+ * a rank key (higher = matches more alternatives) for ORDER BY.
  */
 function buildFilterConditions(
   searchText?: string,
@@ -78,12 +37,19 @@ function buildFilterConditions(
   durationFilter?: DurationFilter,
   folderLocation?: FolderLocation | null,
   searchColumn: SearchColumn = 'anywhere',
-): { conditions: string[]; params: unknown[]; audioJoin: string } {
+): {
+  conditions: string[];
+  params: unknown[];
+  audioJoin: string;
+  rank: { sql: string; params: unknown[] } | null;
+} {
   const conditions: string[] = [];
   const params: unknown[] = [];
 
-  if (searchText?.trim()) {
-    buildFtsCondition(searchText, searchColumn, conditions, params);
+  const fts = searchText ? buildFtsFilter(searchText, searchColumn) : null;
+  if (fts) {
+    conditions.push(fts.where.sql);
+    params.push(...fts.where.params);
   }
 
   if (assetType) {
@@ -110,7 +76,7 @@ function buildFilterConditions(
     }
   }
 
-  return { conditions, params, audioJoin };
+  return { conditions, params, audioJoin, rank: fts?.rank ?? null };
 }
 
 /**
@@ -126,7 +92,7 @@ export async function searchAssets(
   folderLocation?: FolderLocation | null,
   searchColumn: SearchColumn = 'anywhere',
 ): Promise<Asset[]> {
-  const { conditions, params } = buildFilterConditions(
+  const { conditions, params, rank } = buildFilterConditions(
     searchText,
     assetType,
     durationFilter,
@@ -134,15 +100,17 @@ export async function searchAssets(
     searchColumn,
   );
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const rankOrder = rank ? `${rank.sql} DESC,` : '';
 
   const query = `
 		${ASSET_SELECT}
 		${ASSET_JOINS}
 		${whereClause}
-		ORDER BY assets.filename COLLATE NOCASE ASC
+		ORDER BY ${rankOrder} assets.filename COLLATE NOCASE ASC
 		LIMIT ? OFFSET ?
 	`;
 
+  if (rank) params.push(...rank.params);
   params.push(limit, offset);
   return db.select<Asset[]>(query, params);
 }

@@ -77,12 +77,21 @@ labels.
 **Search field = everything that decides what matches**: one bordered box
 (`focus-within:ring-accent/60`, purple in semantic mode) holding, in order: search
 icon/spinner · similarity chip (purple) · folder-scope chip (neutral, deepest segment,
-full location in the tooltip) · the bare input · clear × · Name/Path restriction toggles.
-Chips never shrink below their label (`flex-shrink-0 max-w-36`); Backspace in an empty input
-removes the nearest chip. The Name/Path toggles are *optional restrictions*
-(`aria-pressed`, mutually exclusive, click again to clear): neither pressed = both, which is
-the quiet default — never make the user turn a toggle *off* to narrow a search. The
-placeholder states the current scope ("Search audio…" / "Search audio names…").
+full location in the tooltip) · alternative chips + the bare input · clear × · Name/Path
+restriction toggles. Chips never shrink below their label (`flex-shrink-0 max-w-36`);
+Backspace in an empty input takes the nearest chip. The Name/Path toggles are *optional
+restrictions* (`aria-pressed`, mutually exclusive, click again to clear): neither pressed =
+both, which is the quiet default — never make the user turn a toggle *off* to narrow a
+search. The placeholder states the current scope ("Search audio…" / "Search audio names…").
+
+**Search syntax is taught, not documented**: space = all words, comma = any of them. Typing
+a comma commits the text before it as a neutral chip with a small `or` between chips (the
+input's placeholder becomes `or…`); click a chip to edit it, Backspace pulls the last one
+back. The alternatives + input sit in a strip that scrolls horizontally (chips keep their
+size) with a 12px fade on the left once scrolled. The idle empty state shows the two forms
+as a two-line legend; a several-word search with no results shows the comma form as a
+one-click suggestion with its count. Only text search gets chips — semantic and similarity
+filtering take the text as typed.
 
 **Segmented control** (search scope, end-of-track mode): a `radiogroup`, outer
 `p-0.5 bg-primary border border-default rounded-md`; segments `rounded`, active
