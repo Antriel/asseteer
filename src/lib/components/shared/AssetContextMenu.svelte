@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import type { Asset } from '$lib/types';
-  import { FolderIcon } from '$lib/components/icons';
+  import { FolderIcon, ClipboardIcon } from '$lib/components/icons';
+  import { copyAssetPath } from '$lib/actions/assetActions';
 
   interface Props {
     x: number;
@@ -58,6 +59,16 @@
         />
       </svg>
       Open in File Explorer
+    </button>
+    <button
+      class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
+      onclick={() => {
+        copyAssetPath(asset);
+        onclose();
+      }}
+    >
+      <ClipboardIcon size="sm" class="text-secondary" />
+      Copy Path
     </button>
   </div>
 </div>

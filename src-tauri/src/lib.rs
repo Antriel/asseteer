@@ -28,6 +28,8 @@ pub struct AppState {
     pub thumbnail_worker: ThumbnailWorkerHandle,
     /// Cached rescan previews, keyed by folder_id
     pub(crate) rescan_previews: Mutex<HashMap<i64, commands::rescan::CachedRescanPreview>>,
+    /// Files materialized for dragging out of the app — see `commands::external`
+    pub drag_cache_dir: std::path::PathBuf,
 }
 
 /// Expose the WebView2 CDP endpoint in debug builds so Playwright can attach with
@@ -154,6 +156,12 @@ pub fn run() {
             })
             .expect("Failed to initialize database");
 
+            let drag_cache_dir = app_dir.join("drag-cache");
+            {
+                let dir = drag_cache_dir.clone();
+                std::thread::spawn(move || commands::external::prune_drag_cache(&dir));
+            }
+
             // Initialize WorkQueue
             let work_queue = Arc::new(WorkQueue::new());
 
@@ -167,6 +175,7 @@ pub fn run() {
                 work_queue: work_queue.clone(),
                 thumbnail_worker,
                 rescan_previews: Mutex::new(HashMap::new()),
+                drag_cache_dir,
             });
 
             create_main_window(app)?;
@@ -178,6 +187,7 @@ pub fn run() {
             commands::assets::request_thumbnails,
             commands::assets::cancel_thumbnails,
             commands::assets::clear_thumbnail_queue,
+            commands::external::start_asset_drag,
             commands::scan::add_folder,
             commands::folders::list_folders,
             commands::folders::remove_folder,

@@ -4,7 +4,7 @@
   import { viewState } from '$lib/state/view.svelte';
   import ImageThumbnail from './ImageThumbnail.svelte';
   import AssetContextMenu from './shared/AssetContextMenu.svelte';
-  import { showInFolder, openDirectory } from '$lib/actions/assetActions';
+  import { showInFolder, openDirectory, dragOut } from '$lib/actions/assetActions';
 
   interface Props {
     assets: Asset[];
@@ -139,6 +139,7 @@
           class="relative bg-secondary border border-default rounded-lg overflow-hidden cursor-pointer hover:border-accent hover:shadow-md hover:-translate-y-0.5"
           onclick={() => handleImageClick(asset)}
           oncontextmenu={(e) => handleContextMenu(e, asset)}
+          {@attach dragOut(asset)}
         >
           <ImageThumbnail {asset} size={viewState.thumbnailSize} />
           {#if asset.format === 'gif'}

@@ -125,6 +125,7 @@ See `src/lib/database/CLAUDE.md` for query patterns.
 - **Tauri events**: Use `listen()` from `@tauri-apps/api/event` for backend→frontend communication. Store `UnlistenFn` and clean up on destroy.
 - **CLAP functions**: Semantic search uses `invoke()` commands, not direct SQL — see bottom of `queries.ts`
 - **Asset actions**: `showInFolder(asset, assetType)` and `openDirectory(asset)` live in `$lib/actions/assetActions.ts` — use these instead of duplicating the logic
+- **Drag-out / copy path**: `{@attach dragOut(asset)}` on a row or tile drags the real file out to other programs (`start_asset_drag` in `src-tauri/src/commands/external.rs` extracts ZIP entries and copies network files to `drag-cache/` only once a drag starts). `copyAssetPath(asset)` is in the shared context menu.
 - **Asset context menu**: `AssetContextMenu.svelte` (in `shared/`) renders the backdrop + menu panel. Pass `onShowInFolder`, `onOpenDirectory`, and optionally an `extraItems` snippet for additional menu items at the top (e.g., AudioList's "Find Similar Sounds")
 - **Formatting utilities**: Use `$lib/utils/format.ts` for `formatDuration(ms)`, `formatFileSize(bytes)`, `formatSimilarity(score)` — do not create local copies
 

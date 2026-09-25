@@ -19,7 +19,7 @@
   import { clapState } from '$lib/state/clap.svelte';
   import { showToast } from '$lib/state/ui.svelte';
   import { settings, type AudioEndMode } from '$lib/state/settings.svelte';
-  import { showInFolder, openDirectory } from '$lib/actions/assetActions';
+  import { showInFolder, openDirectory, dragOut } from '$lib/actions/assetActions';
   import { formatDurationCompact, formatFileSize, formatSimilarity } from '$lib/utils/format';
 
   // Extended asset type with optional similarity score
@@ -343,6 +343,7 @@
               : 'hover:bg-secondary'}"
             onclick={() => playAsset(asset)}
             oncontextmenu={(e) => handleContextMenu(e, asset)}
+            {@attach dragOut(asset)}
             tabindex="-1"
             title={getAssetDisplayPath(asset)}
           >

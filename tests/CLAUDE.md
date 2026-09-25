@@ -144,3 +144,8 @@ Logs of a quiet app and a harness-started vite: `tests/harness/out/app.log`, `vi
   `println!` panics on the broken pipe.
 - A freshly started vite may reset the first connections while optimizing deps; the webview
   then sits on a `chrome-error://` page. `attachToApp`/`gotoFrontend` retry through it.
+- `navigator.clipboard.readText()` opens an edge permission prompt that never resolves in
+  the harness and hangs the run. Assert on what the app *wrote* (wrap `writeText`) instead.
+- `window.__TAURI_INTERNALS__.invoke` is non-writable, so it can't be wrapped to spy on
+  commands. Observe the IPC instead: `page.on('requestfinished')` sees each command as a
+  request whose URL contains the command name, with its JSON args in `postData()`.

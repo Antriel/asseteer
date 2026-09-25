@@ -7,7 +7,7 @@
   import Badge from './shared/Badge.svelte';
   import AssetContextMenu from './shared/AssetContextMenu.svelte';
   import { viewState } from '$lib/state/view.svelte';
-  import { showInFolder, openDirectory } from '$lib/actions/assetActions';
+  import { showInFolder, openDirectory, dragOut } from '$lib/actions/assetActions';
 
   interface Props {
     assets: Asset[];
@@ -126,6 +126,7 @@
             class="grid grid-cols-[80px_1fr_100px_120px_100px] items-center px-4 border-b border-default hover:bg-secondary"
             style="height: {rowHeight}px;"
             oncontextmenu={(e) => handleContextMenu(e, asset)}
+            {@attach dragOut(asset)}
           >
             <button class="py-2 cursor-pointer" onclick={() => viewState.openLightbox(asset)}>
               <AssetThumbnail {asset} />

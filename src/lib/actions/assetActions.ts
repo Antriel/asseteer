@@ -1,6 +1,10 @@
 import type { Asset, FolderLocation } from '$lib/types';
+import { getAssetDisplayPath } from '$lib/types';
+import type { Attachment } from 'svelte/attachments';
 import { openPath } from '@tauri-apps/plugin-opener';
+import { invoke } from '@tauri-apps/api/core';
 import { sep } from '@tauri-apps/api/path';
+import { showToast } from '$lib/state/ui.svelte';
 import { viewState } from '$lib/state/view.svelte';
 import { assetsState } from '$lib/state/assets.svelte';
 import { exploreState } from '$lib/state/explore.svelte';
@@ -76,4 +80,120 @@ export async function openDirectory(asset: Asset) {
     };
     await openLocationInExplorer(asset.folder_path, location);
   }
+}
+
+/**
+ * Copy the asset's full path. A ZIP entry has no path of its own, so it gets its
+ * location inside the archive (e.g. `D:\Packs\Retro.zip\Sounds\coin.wav`).
+ */
+export async function copyAssetPath(asset: Asset) {
+  const path = getAssetDisplayPath(asset).replace(/[\\/]/g, sep());
+  try {
+    await navigator.clipboard.writeText(path);
+    showToast('Path copied', 'success');
+  } catch (error) {
+    showToast('Failed to copy path: ' + error, 'error');
+  }
+}
+
+/** How far the pointer must travel with the button held before it counts as a drag. */
+const DRAG_THRESHOLD_PX = 6;
+
+/**
+ * Drag the asset out of the app as a real file — into Audacity, a DAW, Explorer. The
+ * backend extracts ZIP entries (and copies network files) only once a drag starts.
+ *
+ * `{@attach dragOut(asset)}` on the row/tile. Plain clicks are untouched: nothing
+ * happens until the pointer moves past the threshold with the primary button held.
+ */
+export function dragOut(asset: Asset): Attachment<HTMLElement> {
+  return (node) => {
+    let startX = 0;
+    let startY = 0;
+
+    function onPointerMove(e: PointerEvent) {
+      if (!(e.buttons & 1)) return stopTracking();
+      if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD_PX) return;
+      stopTracking();
+      startAssetDrag(asset);
+    }
+
+    function stopTracking() {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', stopTracking);
+    }
+
+    function onPointerDown(e: PointerEvent) {
+      if (e.button !== 0 || e.pointerType !== 'mouse') return;
+      startX = e.clientX;
+      startY = e.clientY;
+      // On window: a quick flick can leave a 32px row before the first move event
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', stopTracking);
+    }
+
+    // Thumbnails are <img>, which the webview would start its own (useless) drag for
+    function onDragStart(e: DragEvent) {
+      e.preventDefault();
+    }
+
+    node.addEventListener('pointerdown', onPointerDown);
+    node.addEventListener('dragstart', onDragStart);
+    return () => {
+      stopTracking();
+      node.removeEventListener('pointerdown', onPointerDown);
+      node.removeEventListener('dragstart', onDragStart);
+    };
+  };
+}
+
+async function startAssetDrag(asset: Asset) {
+  try {
+    await invoke<'dropped' | 'cancelled' | 'released'>('start_asset_drag', {
+      assetId: asset.id,
+      image: renderDragImage(asset),
+    });
+  } catch (error) {
+    showToast('Drag failed: ' + error, 'error');
+  }
+}
+
+/** A small label under the cursor while dragging: the file's name, as a PNG data URL. */
+function renderDragImage(asset: Asset): string | null {
+  const dpr = window.devicePixelRatio || 1;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  const font = `500 ${13 * dpr}px ui-sans-serif, system-ui, sans-serif`;
+  const glyph = asset.asset_type === 'audio' ? '♪' : '▣';
+  const text = asset.filename.length > 48 ? asset.filename.slice(0, 47) + '…' : asset.filename;
+  ctx.font = font;
+  const padX = 10 * dpr;
+  const gap = 6 * dpr;
+  const glyphW = ctx.measureText(glyph).width;
+  canvas.width = Math.ceil(padX * 2 + glyphW + gap + ctx.measureText(text).width);
+  canvas.height = Math.ceil(28 * dpr);
+
+  // Colors from the current theme. Never pure black: Windows keys it out as transparent.
+  const styles = getComputedStyle(document.documentElement);
+  const color = (name: string, fallback: string) =>
+    styles.getPropertyValue(name).trim() || fallback;
+
+  ctx.fillStyle = color('--color-bg-elevated', '#ffffff');
+  ctx.strokeStyle = color('--color-border-default', '#d4d4d8');
+  ctx.lineWidth = dpr;
+  ctx.beginPath();
+  ctx.roundRect(dpr / 2, dpr / 2, canvas.width - dpr, canvas.height - dpr, 6 * dpr);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.font = font;
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color('--color-accent', '#3b82f6');
+  ctx.fillText(glyph, padX, canvas.height / 2);
+  ctx.fillStyle = color('--color-text-primary', '#18181b');
+  ctx.fillText(text, padX + glyphW + gap, canvas.height / 2);
+
+  return canvas.toDataURL('image/png');
 }
