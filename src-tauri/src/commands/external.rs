@@ -325,6 +325,15 @@ pub async fn start_asset_drag(
             let _ = tx.send(Ok("released"));
             return;
         }
+        // On Linux the crate drags from the GTK window rather than a raw window handle.
+        #[cfg(target_os = "linux")]
+        let window = match window.gtk_window() {
+            Ok(w) => w,
+            Err(e) => {
+                let _ = tx.send(Err(format!("Drag failed: {}", e)));
+                return;
+            }
+        };
         let (result_tx, result_rx) = std::sync::mpsc::channel();
         // The crate unwraps some shell calls; keep an unexpected failure from killing the app.
         let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
