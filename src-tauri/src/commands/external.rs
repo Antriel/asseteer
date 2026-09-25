@@ -138,23 +138,8 @@ fn primary_button_held() -> bool {
     true
 }
 
-/// Start a native OS drag of assets' files out of the window, in the given order.
-///
-/// Called by the frontend once the pointer has moved past a threshold with the button
-/// held. Resolves when the drag ends, with `"dropped"`, `"cancelled"`, or `"released"`
-/// (the button came up while the files were being prepared, so no drag was started).
-/// `image` is an optional `data:image/png;base64,...` drag preview.
-#[tauri::command]
-pub async fn start_asset_drag(
-    app: tauri::AppHandle,
-    window: tauri::Window,
-    state: State<'_, AppState>,
-    asset_ids: Vec<i64>,
-    image: Option<String>,
-) -> Result<&'static str, String> {
-    if asset_ids.is_empty() {
-        return Err("Nothing to drag".into());
-    }
+/// Local files for `asset_ids`, in that order — see `ensure_local_file`.
+async fn local_files(state: &AppState, asset_ids: &[i64]) -> Result<Vec<PathBuf>, String> {
     // Chunked: a Shift+click range can exceed SQLite's bound-parameter limit
     let mut assets = Vec::with_capacity(asset_ids.len());
     for chunk in asset_ids.chunks(500) {
@@ -176,20 +161,135 @@ pub async fn start_asset_drag(
                 .map_err(|e| format!("Failed to load assets: {}", e))?,
         );
     }
-    // Drop order follows the list order the frontend sent, not the DB's
+    // Keep the list order the frontend sent, not the DB's
     let order: std::collections::HashMap<i64, usize> =
         asset_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
     assets.sort_by_key(|a| order.get(&a.id).copied());
 
     let cache_dir = state.drag_cache_dir.clone();
-    let paths = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         assets
             .iter()
             .map(|asset| ensure_local_file(asset, &cache_dir))
             .collect::<Result<Vec<_>, _>>()
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?
+}
+
+/// Put assets' files on the OS clipboard (Ctrl+C), so Ctrl+V in Explorer or a DAW
+/// pastes real files. Same materialization as a drag. Returns how many were copied.
+#[tauri::command]
+pub async fn copy_assets_to_clipboard(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    asset_ids: Vec<i64>,
+) -> Result<usize, String> {
+    if asset_ids.is_empty() {
+        return Ok(0);
+    }
+    let paths = local_files(&state, &asset_ids).await?;
+    let count = paths.len();
+    set_clipboard_files(&window, paths)?;
+    Ok(count)
+}
+
+/// Clipboard as Explorer's Ctrl+C leaves it: `CF_HDROP` plus a "Preferred DropEffect" of
+/// copy, so pasting copies rather than moves our cached files.
+#[cfg(windows)]
+fn set_clipboard_files(window: &tauri::Window, paths: Vec<PathBuf>) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    };
+    use windows_sys::Win32::Foundation::GlobalFree;
+    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows_sys::Win32::System::Ole::{CF_HDROP, DROPEFFECT_COPY};
+    use windows_sys::Win32::UI::Shell::DROPFILES;
+
+    /// A movable global block filled with `bytes`, owned by the clipboard once set.
+    unsafe fn global_block(bytes: &[u8]) -> Result<*mut core::ffi::c_void, String> {
+        let block = GlobalAlloc(GMEM_MOVEABLE, bytes.len());
+        if block.is_null() {
+            return Err("Out of memory for clipboard".into());
+        }
+        let ptr = GlobalLock(block) as *mut u8;
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+        GlobalUnlock(block);
+        Ok(block)
+    }
+
+    // DROPFILES header, then each path as UTF-16 + NUL, then a final NUL
+    let header = std::mem::size_of::<DROPFILES>();
+    let mut hdrop = vec![0u8; header];
+    hdrop[0..4].copy_from_slice(&(header as u32).to_le_bytes()); // pFiles
+    let f_wide = std::mem::offset_of!(DROPFILES, fWide);
+    hdrop[f_wide..f_wide + 4].copy_from_slice(&1i32.to_le_bytes());
+    for path in &paths {
+        // Source paths are stored with `/`; not every paste target accepts that
+        let path = std::ffi::OsString::from(path.to_string_lossy().replace('/', "\\"));
+        for unit in path.encode_wide().chain(std::iter::once(0)) {
+            hdrop.extend_from_slice(&unit.to_le_bytes());
+        }
+    }
+    hdrop.extend_from_slice(&0u16.to_le_bytes());
+
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as _;
+    unsafe {
+        // Another app may be holding the clipboard for a moment
+        let mut opened = false;
+        for _ in 0..10 {
+            if OpenClipboard(hwnd) != 0 {
+                opened = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if !opened {
+            return Err("The clipboard is busy".into());
+        }
+        EmptyClipboard();
+        let result = (|| {
+            let files = global_block(&hdrop)?;
+            if SetClipboardData(CF_HDROP as u32, files).is_null() {
+                GlobalFree(files);
+                return Err("Failed to set clipboard files".to_string());
+            }
+            let name: Vec<u16> = "Preferred DropEffect\0".encode_utf16().collect();
+            let effect = global_block(&DROPEFFECT_COPY.to_le_bytes())?;
+            if SetClipboardData(RegisterClipboardFormatW(name.as_ptr()), effect).is_null() {
+                GlobalFree(effect);
+            }
+            Ok(())
+        })();
+        CloseClipboard();
+        result
+    }
+}
+
+#[cfg(not(windows))]
+fn set_clipboard_files(_window: &tauri::Window, _paths: Vec<PathBuf>) -> Result<(), String> {
+    Err("Copying files is only supported on Windows".into())
+}
+
+/// Start a native OS drag of assets' files out of the window, in the given order.
+///
+/// Called by the frontend once the pointer has moved past a threshold with the button
+/// held. Resolves when the drag ends, with `"dropped"`, `"cancelled"`, or `"released"`
+/// (the button came up while the files were being prepared, so no drag was started).
+/// `image` is an optional `data:image/png;base64,...` drag preview.
+#[tauri::command]
+pub async fn start_asset_drag(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    asset_ids: Vec<i64>,
+    image: Option<String>,
+) -> Result<&'static str, String> {
+    if asset_ids.is_empty() {
+        return Err("Nothing to drag".into());
+    }
+    let paths = local_files(&state, &asset_ids).await?;
 
     let image = match image.as_deref().and_then(|s| s.strip_prefix("data:image/png;base64,")) {
         Some(data) => {

@@ -54,6 +54,11 @@ export class ListSelection {
     if (this.anchor !== null && !present.has(this.anchor)) this.anchor = null;
   }
 
+  /** The selected items, in list order. */
+  items<T extends { id: number }>(items: T[]): T[] {
+    return this.ids.size === 0 ? [] : items.filter((i) => this.ids.has(i.id));
+  }
+
   /** What an action (drag, Copy Path) on `item` applies to — see `actionTargets`. */
   targets<T extends { id: number }>(items: T[], item: T): T[] {
     return actionTargets(items, this.ids, item);

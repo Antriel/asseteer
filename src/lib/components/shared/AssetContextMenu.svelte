@@ -1,14 +1,14 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import type { Asset } from '$lib/types';
-  import { FolderIcon, ClipboardIcon } from '$lib/components/icons';
-  import { copyAssetPaths } from '$lib/actions/assetActions';
+  import { FolderIcon, ClipboardIcon, LinkIcon } from '$lib/components/icons';
+  import { copyAssetFiles, copyAssetPaths } from '$lib/actions/assetActions';
 
   interface Props {
     x: number;
     y: number;
     asset: Asset;
-    /** What Copy Path applies to: the selection when `asset` is part of one. Default `[asset]`. */
+    /** What Copy / Copy Path apply to: the selection when `asset` is part of one. Default `[asset]`. */
     targets?: Asset[];
     onclose: () => void;
     onShowInFolder: (asset: Asset) => void;
@@ -66,11 +66,22 @@
     <button
       class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
       onclick={() => {
-        copyAssetPaths(targets ?? [asset]);
+        copyAssetFiles(targets ?? [asset]);
         onclose();
       }}
     >
       <ClipboardIcon size="sm" class="text-secondary" />
+      {targets && targets.length > 1 ? `Copy ${targets.length} Files` : 'Copy'}
+      <kbd class="ml-auto pl-4 font-sans text-xs text-tertiary">Ctrl+C</kbd>
+    </button>
+    <button
+      class="w-full px-3 py-2 text-sm text-left text-primary hover:bg-tertiary flex items-center gap-2 transition-colors"
+      onclick={() => {
+        copyAssetPaths(targets ?? [asset]);
+        onclose();
+      }}
+    >
+      <LinkIcon size="sm" class="text-secondary" />
       {targets && targets.length > 1 ? `Copy ${targets.length} Paths` : 'Copy Path'}
     </button>
   </div>

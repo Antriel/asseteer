@@ -96,6 +96,35 @@ export async function copyAssetPaths(assets: Asset[]) {
   }
 }
 
+/**
+ * Put the assets' files on the OS clipboard (Ctrl+C) so Ctrl+V in Explorer or a DAW
+ * pastes them. ZIP entries are extracted first, as for a drag.
+ */
+export async function copyAssetFiles(assets: Asset[]) {
+  if (assets.length === 0) return;
+  try {
+    const count = await invoke<number>('copy_assets_to_clipboard', {
+      assetIds: assets.map((a) => a.id),
+    });
+    showToast(count === 1 ? 'File copied' : `${count} files copied`, 'success');
+  } catch (error) {
+    showToast('Failed to copy: ' + error, 'error');
+  }
+}
+
+/**
+ * Ctrl+C on a list: copy the selected files. Skips when focus is in a text field or the
+ * page has a text selection, so ordinary text copying keeps working.
+ */
+export function isCopyFilesShortcut(e: KeyboardEvent): boolean {
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'c') {
+    return false;
+  }
+  const target = e.target as HTMLElement | null;
+  if (target?.closest('input, textarea, [contenteditable="true"]')) return false;
+  return !window.getSelection()?.toString();
+}
+
 /** How far the pointer must travel with the button held before it counts as a drag. */
 const DRAG_THRESHOLD_PX = 6;
 

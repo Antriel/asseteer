@@ -18,7 +18,7 @@
 | `folders.rs` | `list/remove/rename_folder`, `update_search_excludes` — folder CRUD |
 | `assets.rs` | `get_asset_bytes` (binary IPC), `request/cancel_thumbnails` |
 | `search.rs` | CLAP semantic search, server management, cache control |
-| `external.rs` | `start_asset_drag` — native drag-out; extracts ZIP entries / copies network files to `drag-cache/` on demand |
+| `external.rs` | `start_asset_drag` — native drag-out, `copy_assets_to_clipboard` — files as `CF_HDROP`; extracts ZIP entries / copies network files to `drag-cache/` on demand |
 
 ## Asset Processing Pipeline
 

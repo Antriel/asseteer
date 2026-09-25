@@ -188,6 +188,7 @@ pub fn run() {
             commands::assets::cancel_thumbnails,
             commands::assets::clear_thumbnail_queue,
             commands::external::start_asset_drag,
+            commands::external::copy_assets_to_clipboard,
             commands::scan::add_folder,
             commands::folders::list_folders,
             commands::folders::remove_folder,

@@ -7,7 +7,13 @@
   import Badge from './shared/Badge.svelte';
   import AssetContextMenu from './shared/AssetContextMenu.svelte';
   import { viewState } from '$lib/state/view.svelte';
-  import { showInFolder, openDirectory, dragOut } from '$lib/actions/assetActions';
+  import {
+    showInFolder,
+    openDirectory,
+    dragOut,
+    copyAssetFiles,
+    isCopyFilesShortcut,
+  } from '$lib/actions/assetActions';
   import { ListSelection } from '$lib/state/listSelection.svelte';
 
   interface Props {
@@ -58,6 +64,14 @@
       if (selection.size > 0) selection.retain(list.map((a) => a.id));
     });
   });
+
+  // No focusable container here, so Ctrl+C is caught on the window
+  function handleWindowKeyDown(e: KeyboardEvent) {
+    if (selection.size > 0 && isCopyFilesShortcut(e)) {
+      e.preventDefault();
+      copyAssetFiles(selection.items(assets));
+    }
+  }
 
   /** Returns true when the click was a selection gesture (and must not open anything). */
   function handleSelectClick(e: MouseEvent, asset: Asset): boolean {
@@ -112,6 +126,8 @@
     };
   });
 </script>
+
+<svelte:window onkeydown={handleWindowKeyDown} />
 
 {#if contextMenu}
   <AssetContextMenu

@@ -20,7 +20,13 @@
   import { clapState } from '$lib/state/clap.svelte';
   import { showToast } from '$lib/state/ui.svelte';
   import { settings, type AudioEndMode } from '$lib/state/settings.svelte';
-  import { showInFolder, openDirectory, dragOut } from '$lib/actions/assetActions';
+  import {
+    showInFolder,
+    openDirectory,
+    dragOut,
+    copyAssetFiles,
+    isCopyFilesShortcut,
+  } from '$lib/actions/assetActions';
   import { ListSelection } from '$lib/state/listSelection.svelte';
   import { formatDurationCompact, formatFileSize, formatSimilarity } from '$lib/utils/format';
 
@@ -194,6 +200,13 @@
       } else if (currentIndex < assets.length - 1) {
         navigateToIndex(currentIndex + 1, select);
       }
+      return;
+    }
+
+    // Ctrl+C - copy the selected files, for pasting into Explorer or a DAW
+    if (isCopyFilesShortcut(e)) {
+      e.preventDefault();
+      copyAssetFiles(selection.items(assets));
       return;
     }
 

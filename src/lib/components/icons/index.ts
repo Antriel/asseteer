@@ -18,3 +18,4 @@ export { default as SkipNextIcon } from './SkipNextIcon.svelte';
 export { default as PlayOnceIcon } from './PlayOnceIcon.svelte';
 export { default as ImageIcon } from './ImageIcon.svelte';
 export { default as ClipboardIcon } from './ClipboardIcon.svelte';
+export { default as LinkIcon } from './LinkIcon.svelte';
