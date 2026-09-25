@@ -1351,6 +1351,10 @@ impl WorkQueue {
 
     /// Block until a category finishes or `timeout` elapses. Returns `true` on
     /// completion, `false` on timeout (possible deadlock).
+    ///
+    /// Waits for `is_running` to clear, not just the counters: workers bump
+    /// `completed` before sending to the batch writer, and the completion
+    /// monitor only clears `is_running` after flushing it.
     pub async fn wait_for_category_completion(
         &self,
         category: ProcessingCategory,
@@ -1360,7 +1364,7 @@ impl WorkQueue {
         loop {
             let progress = self.get_progress(Some(category)).await;
             if let Some(p) = progress.first() {
-                if p.total > 0 && p.completed + p.failed >= p.total {
+                if p.total > 0 && p.completed + p.failed >= p.total && !p.is_running {
                     return true;
                 }
             }

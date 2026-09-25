@@ -33,7 +33,9 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // Also the harness output: it holds the running app's WebView2 profile, whose
+      // locked temp files make the watcher throw EBUSY and take vite down.
+      ignored: ["**/src-tauri/**", "**/tests/harness/out/**", "**/tests/fixtures/library/**"],
     },
   },
 }));
