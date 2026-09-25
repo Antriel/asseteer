@@ -10,9 +10,27 @@ Desktop asset management app: **Tauri 2 (Rust)** + **SvelteKit 2 (Svelte 5)** + 
 npm run check:svelte    # Frontend TS errors
 npm run check:vite      # CSS/bundling issues
 npm run check:cargo     # Backend Rust errors
+npm run test:unit       # Vitest, pure modules (src/**/*.test.ts)
+npm run test:cargo      # Rust tests
 ```
 
-**Do not run other commands.** Ask the user to test the application.
+### Then actually verify it
+
+The checks are types; they say nothing about whether the change works. **A change is not
+done until you have shown it working.**
+
+```bash
+npm run test:e2e        # Playwright drives the REAL app (isolated data) over CDP
+npm run harness         # app up with the fixture library, for an interactive session
+```
+
+For a change no spec covers — especially any UI change — write a scratch script against
+`withAsseteer` from `tests/harness/drive.mjs`, run it, and **look at the screenshots** (Read
+the PNGs, starting with `tests/harness/out/contact.png`). Check both themes for visual work.
+`tests/CLAUDE.md` has the loop, the `app` helper surface, and what the harness cannot reach.
+
+**Still ask the user for**: `npm run tauri dev` / `npm run build` (interactive/long-running),
+anything involving OS drag-and-drop, native dialogs, actual audio output, and CLAP.
 
 ## Architecture Overview
 

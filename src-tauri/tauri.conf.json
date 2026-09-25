@@ -12,9 +12,12 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Asseteer",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "create": false,
+        "visible": false
       }
     ],
     "security": {
@@ -25,11 +28,7 @@
       }
     }
   },
-  "plugins": {
-    "sql": {
-      "preload": ["sqlite:asseteer.db"]
-    }
-  },
+  "plugins": {},
   "bundle": {
     "active": true,
     "targets": "all",

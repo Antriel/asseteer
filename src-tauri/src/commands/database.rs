@@ -16,6 +16,15 @@ pub struct DbInfo {
     pub total_folders: i64,
 }
 
+/// Absolute path of the library database. The frontend opens its read connection
+/// from this, so both sides always agree on the file — including under `--data-dir`,
+/// and on Linux, where the SQL plugin's default (app config dir) differs from the
+/// backend's (app data dir).
+#[tauri::command]
+pub fn get_db_path(state: State<'_, AppState>) -> String {
+    state.db_path.clone()
+}
+
 #[tauri::command]
 pub async fn get_db_info(state: State<'_, AppState>) -> Result<DbInfo, String> {
     let db_path = &state.db_path;

@@ -13,7 +13,12 @@
     "check:svelte": "svelte-check --tsconfig ./tsconfig.json --output machine",
     "check:cargo": "cd src-tauri && cargo check",
     "format": "prettier --write 'src/**/*.{ts,svelte,js,json}'",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "test:cargo": "cd src-tauri && cargo test",
+    "harness": "node tests/harness/harness.mjs",
+    "harness:stop": "node tests/harness/stop.mjs"
   },
   "license": "MIT",
   "dependencies": {
@@ -26,15 +31,19 @@
     "tailwindcss": "^4.1.16"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@sveltejs/adapter-static": "^3.0.10",
     "@sveltejs/kit": "^2.48.4",
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
     "@tauri-apps/cli": "^2.9.2",
+    "playwright": "^1.63.0",
     "prettier": "^3.8.1",
     "prettier-plugin-svelte": "^3.5.1",
+    "sharp": "^0.35.4",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^5.9.3",
-    "vite": "^7.1.12"
+    "vite": "^7.1.12",
+    "vitest": "^5.0.1"
   }
 }

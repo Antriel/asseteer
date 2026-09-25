@@ -40,6 +40,11 @@
 
   // Initialize processing listeners globally (once)
   onMount(() => {
+    // Harness arrangement surface (tests/CLAUDE.md); tree-shaken out of release builds.
+    if (import.meta.env.DEV) {
+      void import('$lib/harness/testHooks').then((m) => m.installTestHooks());
+    }
+
     processingState.initializeListeners();
     processingState.refreshPendingCount();
     clapState.initialize();

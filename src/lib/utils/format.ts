@@ -5,9 +5,10 @@ export function formatDuration(ms: number): string {
   const totalSeconds = ms / 1000;
   const minutes = Math.floor(totalSeconds / 60);
   if (totalSeconds < 10) {
-    const secs = totalSeconds % 60;
-    const wholeSecs = Math.floor(secs);
-    const millis = Math.floor((secs - wholeSecs) * 1000);
+    // Integer ms math: (4.3 - 4) * 1000 is 299.99… in floating point.
+    const wholeMs = Math.floor(ms);
+    const wholeSecs = Math.floor(wholeMs / 1000) % 60;
+    const millis = wholeMs % 1000;
     return `${minutes}:${wholeSecs.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
   }
   const remainingSeconds = Math.floor(totalSeconds % 60);
