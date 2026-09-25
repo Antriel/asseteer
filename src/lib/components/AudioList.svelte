@@ -1,17 +1,26 @@
 <script lang="ts">
   import type { Asset } from '$lib/types';
-  import { getAssetDisplayPath, getAssetDirectoryPath } from '$lib/types';
+  import { getAssetDisplayPath, getAssetRelativeDirectory } from '$lib/types';
   import AudioPlayer from './AudioPlayer.svelte';
   import VirtualList from './shared/VirtualList.svelte';
   import AssetContextMenu from './shared/AssetContextMenu.svelte';
-  import { AudioIcon, FolderIcon, SearchIcon, ExternalLinkIcon, SimilarIcon } from './icons';
-  import Badge from './shared/Badge.svelte';
+  import {
+    FolderIcon,
+    ExternalLinkIcon,
+    SimilarIcon,
+    PlayIcon,
+    PauseIcon,
+    PlayOnceIcon,
+    SkipNextIcon,
+    RepeatIcon,
+  } from './icons';
   import { viewState } from '$lib/state/view.svelte';
   import { assetsState } from '$lib/state/assets.svelte';
   import { clapState } from '$lib/state/clap.svelte';
   import { showToast } from '$lib/state/ui.svelte';
+  import { settings, type AudioEndMode } from '$lib/state/settings.svelte';
   import { showInFolder, openDirectory } from '$lib/actions/assetActions';
-  import { formatDuration, formatFileSize, formatSimilarity } from '$lib/utils/format';
+  import { formatDurationCompact, formatFileSize, formatSimilarity } from '$lib/utils/format';
 
   // Extended asset type with optional similarity score
   type AudioAsset = Asset & { similarity?: number };
@@ -32,15 +41,28 @@
   let shouldContinuePlaying = $state(false);
   let containerRef = $state<HTMLDivElement | null>(null);
 
-  // Item height: button with h-20 (80px) + gap-2 (8px) = 88px per item
-  const itemHeight = 88;
+  // Mirrored from the player so the selected row can show the playhead
+  let playProgress = $state(0);
+  let isPlaying = $state(false);
 
-  function formatLocation(asset: Asset): string {
-    return getAssetDisplayPath(asset);
+  // One line per sound: h-8, divider included
+  const itemHeight = 32;
+
+  const endModes: { mode: AudioEndMode; label: string; icon: typeof PlayOnceIcon }[] = [
+    { mode: 'stop', label: 'Stop at end', icon: PlayOnceIcon },
+    { mode: 'next', label: 'Play next', icon: SkipNextIcon },
+    { mode: 'repeat', label: 'Repeat', icon: RepeatIcon },
+  ];
+
+  // UI only for now (asseteer-8v28): the end-of-track behaviour and the seek to
+  // ~5 s before the end are not wired to the player yet.
+  function testLoop() {
+    settings.setAudioEndMode('repeat');
   }
 
-  function formatDirectoryPath(asset: Asset): string {
-    return getAssetDirectoryPath(asset);
+  function formatChannels(channels: number | null): string {
+    if (!channels) return '';
+    return channels === 1 ? 'Mono' : channels === 2 ? 'Stereo' : `${channels} ch`;
   }
 
   function playAsset(asset: Asset) {
@@ -170,62 +192,22 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 <div
-  class="flex flex-col gap-4 p-4 h-full overflow-hidden outline-none"
+  class="flex flex-col h-full overflow-hidden outline-none"
   bind:this={containerRef}
   tabindex="0"
   role="application"
   aria-label="Audio list player"
   onkeydown={handleKeyDown}
 >
-  <!-- Single player at the top -->
-  {#if selectedAsset}
-    <div class="p-4 bg-primary border border-default rounded-lg shadow-lg flex-shrink-0">
-      <div class="flex items-center gap-4 mb-3">
-        <div class="w-12 h-12 flex items-center justify-center bg-accent rounded-lg flex-shrink-0">
-          <AudioIcon size="lg" class="text-white" />
-        </div>
-        <div class="flex-1 min-w-0">
-          <p class="font-semibold text-primary whitespace-nowrap overflow-hidden text-ellipsis">
-            {selectedAsset.filename}
-          </p>
-          <div class="flex gap-4 mt-1 text-xs text-secondary">
-            <span
-              >{selectedAsset.duration_ms ? formatDuration(selectedAsset.duration_ms) : '—'}</span
-            >
-            {#if selectedAsset.sample_rate}
-              <span>{selectedAsset.sample_rate / 1000} kHz</span>
-            {/if}
-            {#if selectedAsset.channels}
-              <span>{selectedAsset.channels === 1 ? 'Mono' : 'Stereo'}</span>
-            {/if}
-            <span>{selectedAsset.format.toUpperCase()}</span>
-          </div>
-        </div>
-        <button
-          class="w-8 h-8 flex items-center justify-center text-secondary hover:text-purple-500 border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
-          onclick={() => findSimilar(selectedAsset!)}
-          title="Find similar sounds"
-        >
-          <SimilarIcon size="sm" />
-        </button>
-        <button
-          class="w-8 h-8 flex items-center justify-center text-secondary hover:text-accent border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
-          onclick={() =>
-            showInFolder(selectedAsset!, viewState.activeTab === 'images' ? 'image' : 'audio')}
-          title="Show in folder"
-        >
-          <FolderIcon size="sm" />
-        </button>
-        <button
-          class="w-8 h-8 flex items-center justify-center text-secondary hover:text-primary border-none bg-transparent rounded cursor-pointer transition-colors flex-shrink-0"
-          onclick={() => openDirectory(selectedAsset!)}
-          title="Open in file explorer"
-        >
-          <ExternalLinkIcon size="sm" />
-        </button>
-      </div>
+  <!-- Transport strip: docked, same height whether or not something is selected -->
+  <div
+    class="@container h-[68px] px-4 flex flex-col justify-center bg-secondary border-b border-default flex-shrink-0"
+  >
+    {#if selectedAsset}
       <AudioPlayer
         bind:this={audioPlayerRef}
+        bind:progress={playProgress}
+        bind:playing={isPlaying}
         asset={selectedAsset}
         isActive={true}
         autoPlay={shouldAutoPlay}
@@ -243,85 +225,192 @@
           // Note: onPause is called before onEnded, so we need to restore it
           shouldContinuePlaying = true;
         }}
-      />
-    </div>
-  {:else}
-    <div
-      class="p-6 bg-secondary border border-default rounded-lg text-center text-secondary flex-shrink-0"
-    >
-      Select an audio file to play
-    </div>
-  {/if}
-
-  <!-- List of audio assets with virtual scrolling -->
-  <div class="flex-1 overflow-hidden">
-    <VirtualList bind:this={virtualListRef} items={assets} {itemHeight} bufferItems={5}>
-      {#snippet children({ visibleItems, startIndex })}
-        <div class="flex flex-col gap-2">
-          {#each visibleItems as asset, idx (asset.id)}
-            <button
-              class="flex items-center gap-4 p-4 bg-secondary border border-default rounded-lg transition-all hover:border-accent cursor-pointer text-left h-20 focus:outline-none"
-              class:!bg-accent-light={selectedAsset?.id === asset.id}
-              class:!border-accent={selectedAsset?.id === asset.id}
-              onclick={() => playAsset(asset)}
-              oncontextmenu={(e) => handleContextMenu(e, asset)}
-              tabindex="-1"
-              title={formatLocation(asset)}
+      >
+        {#snippet info()}
+          <div class="flex items-center gap-3 min-w-0 h-5">
+            <p
+              class="font-medium text-primary truncate"
+              title={getAssetDisplayPath(selectedAsset!)}
             >
-              <!-- Audio icon -->
-              <div
-                class="w-12 h-12 flex items-center justify-center rounded-lg flex-shrink-0"
-                class:bg-accent={selectedAsset?.id === asset.id}
-                class:bg-primary={selectedAsset?.id !== asset.id}
+              {selectedAsset!.filename}
+            </p>
+            <p class="hidden @3xl:block text-xs text-tertiary whitespace-nowrap flex-shrink-0">
+              {[
+                selectedAsset!.sample_rate ? `${selectedAsset!.sample_rate / 1000} kHz` : '',
+                formatChannels(selectedAsset!.channels),
+                selectedAsset!.format.toUpperCase(),
+                formatFileSize(selectedAsset!.file_size),
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </p>
+            <div class="flex items-center gap-0.5 ml-auto flex-shrink-0">
+              <button
+                class="w-6 h-6 flex items-center justify-center text-tertiary hover:text-purple-500 hover:bg-tertiary rounded transition-colors"
+                onclick={() => findSimilar(selectedAsset! as AudioAsset)}
+                title="Find similar sounds"
               >
-                <AudioIcon
-                  size="lg"
-                  class={selectedAsset?.id === asset.id ? 'text-white' : 'text-secondary'}
-                />
-              </div>
+                <SimilarIcon size="sm" />
+              </button>
+              <button
+                class="w-6 h-6 flex items-center justify-center text-tertiary hover:text-primary hover:bg-tertiary rounded transition-colors"
+                onclick={() => showInFolder(selectedAsset!, 'audio')}
+                title="Show in folder"
+              >
+                <FolderIcon size="sm" />
+              </button>
+              <button
+                class="w-6 h-6 flex items-center justify-center text-tertiary hover:text-primary hover:bg-tertiary rounded transition-colors"
+                onclick={() => openDirectory(selectedAsset!)}
+                title="Open in file explorer"
+              >
+                <ExternalLinkIcon size="sm" />
+              </button>
+            </div>
+          </div>
+        {/snippet}
 
-              <!-- Audio metadata -->
-              <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2 min-w-0">
-                  <p
-                    class="font-semibold text-primary whitespace-nowrap overflow-hidden text-ellipsis flex-shrink-0"
-                  >
-                    {asset.filename}
-                  </p>
-                  <span
-                    class="text-xs text-secondary whitespace-nowrap overflow-hidden text-ellipsis flex-1 min-w-0"
-                    style="direction: rtl;"
-                  >
-                    {formatDirectoryPath(asset)}
-                  </span>
-                  {#if asset.zip_entry}
-                    <Badge variant="info">ZIP</Badge>
-                  {/if}
-                </div>
-                <div class="flex gap-4 mt-1 text-xs text-secondary">
-                  <span>{asset.duration_ms ? formatDuration(asset.duration_ms) : '—'}</span>
-                  {#if asset.sample_rate}
-                    <span>{asset.sample_rate / 1000} kHz</span>
-                  {/if}
-                  {#if asset.channels}
-                    <span>{asset.channels === 1 ? 'Mono' : 'Stereo'}</span>
-                  {/if}
-                  <span>{asset.format.toUpperCase()}</span>
-                  <span>{formatFileSize(asset.file_size)}</span>
-                </div>
-              </div>
-
-              <!-- Similarity score (semantic search) -->
-              {#if showSimilarity && asset.similarity !== undefined}
-                <div
-                  class="flex-shrink-0 px-2 py-1 bg-purple-100 dark:bg-purple-900/30 rounded text-xs font-medium text-purple-700 dark:text-purple-300"
+        {#snippet controls()}
+          <div class="flex items-center gap-2 flex-shrink-0 pl-3 @xl:pl-4 border-l border-default">
+            <div
+              class="flex items-center p-0.5 bg-primary border border-default rounded-md"
+              role="radiogroup"
+              aria-label="At end of track"
+            >
+              {#each endModes as { mode, label, icon: Icon } (mode)}
+                {@const active = settings.audioEndMode === mode}
+                <button
+                  class="w-7 h-6 flex items-center justify-center rounded transition-colors {active
+                    ? 'bg-accent-light text-accent'
+                    : 'text-tertiary hover:text-primary'}"
+                  role="radio"
+                  aria-checked={active}
+                  aria-label={label}
+                  title="At end of track: {label}"
+                  onclick={() => settings.setAudioEndMode(mode)}
                 >
-                  {formatSimilarity(asset.similarity)}
-                </div>
-              {/if}
+                  <Icon size="sm" />
+                </button>
+              {/each}
+            </div>
+            <button
+              class="hidden @xl:block h-7 px-2 text-xs font-medium text-secondary hover:text-primary hover:bg-tertiary border border-default rounded-md transition-colors whitespace-nowrap"
+              onclick={testLoop}
+              title="Repeat, starting 5 s before the end — hear the loop point"
+            >
+              Test loop
             </button>
-          {/each}
+          </div>
+        {/snippet}
+      </AudioPlayer>
+    {:else}
+      <div class="flex items-center gap-4 text-sm text-tertiary">
+        <div
+          class="w-9 h-9 flex items-center justify-center rounded-full border border-default flex-shrink-0"
+        >
+          <PlayIcon size="sm" class="translate-x-px" />
         </div>
+        <p>
+          Pick a sound to play
+          <span class="ml-3 text-xs hidden @2xl:inline">
+            <kbd class="px-1 rounded border border-default font-sans">↑</kbd>
+            <kbd class="px-1 rounded border border-default font-sans">↓</kbd> browse
+            <span class="mx-1.5">·</span>
+            <kbd class="px-1 rounded border border-default font-sans">Space</kbd> play / pause
+            <span class="mx-1.5">·</span>
+            <kbd class="px-1 rounded border border-default font-sans">←</kbd>
+            <kbd class="px-1 rounded border border-default font-sans">→</kbd> seek
+          </span>
+        </p>
+      </div>
+    {/if}
+  </div>
+
+  <!-- One line per sound, virtualised -->
+  <div class="flex-1 overflow-hidden @container">
+    <VirtualList bind:this={virtualListRef} items={assets} {itemHeight} bufferItems={10}>
+      {#snippet children({ visibleItems })}
+        {#each visibleItems as asset (asset.id)}
+          {@const selected = selectedAsset?.id === asset.id}
+          <button
+            class="group relative w-full h-8 flex items-center gap-3 pl-3 pr-4 text-left text-sm border-b border-subtle focus:outline-none {selected
+              ? 'bg-accent-light'
+              : 'hover:bg-secondary'}"
+            onclick={() => playAsset(asset)}
+            oncontextmenu={(e) => handleContextMenu(e, asset)}
+            tabindex="-1"
+            title={getAssetDisplayPath(asset)}
+          >
+            {#if selected}
+              <!-- Playhead wash: how far into the sound you are, where your eyes already are -->
+              <span
+                class="absolute inset-y-0 left-0 bg-accent opacity-10 pointer-events-none"
+                style="width: {playProgress * 100}%"
+              ></span>
+              <span class="absolute inset-y-0 left-0 w-0.5 bg-accent"></span>
+            {/if}
+
+            <span
+              class="relative w-4 flex items-center justify-center flex-shrink-0 {selected
+                ? 'text-accent'
+                : 'text-tertiary opacity-0 group-hover:opacity-100'}"
+            >
+              {#if selected && isPlaying}
+                <PauseIcon class="w-3 h-3" />
+              {:else}
+                <PlayIcon class="w-3 h-3" />
+              {/if}
+            </span>
+
+            <span
+              class="relative truncate flex-shrink min-w-0 max-w-[60%] text-primary"
+              class:font-medium={selected}
+            >
+              {asset.filename}
+            </span>
+            <span
+              class="relative flex-1 min-w-0 truncate text-xs text-tertiary [direction:rtl] text-left"
+            >
+              <bdi>{getAssetRelativeDirectory(asset)}</bdi>
+            </span>
+
+            {#if asset.zip_entry}
+              <span
+                class="relative flex-shrink-0 px-1 text-[10px] font-semibold tracking-wide text-tertiary border border-default rounded"
+                >ZIP</span
+              >
+            {/if}
+            {#if showSimilarity && asset.similarity !== undefined}
+              <span
+                class="relative flex-shrink-0 w-10 text-right text-xs font-medium tabular-nums text-purple-600 dark:text-purple-400"
+              >
+                {formatSimilarity(asset.similarity)}
+              </span>
+            {/if}
+
+            <span
+              class="relative w-16 flex-shrink-0 text-right text-xs tabular-nums text-secondary"
+            >
+              {asset.duration_ms ? formatDurationCompact(asset.duration_ms) : '—'}
+            </span>
+            <span
+              class="relative w-16 flex-shrink-0 text-right text-xs tabular-nums text-tertiary hidden @3xl:block"
+            >
+              {asset.sample_rate ? `${asset.sample_rate / 1000} kHz` : ''}
+            </span>
+            <span class="relative w-12 flex-shrink-0 text-xs text-tertiary hidden @3xl:block">
+              {formatChannels(asset.channels)}
+            </span>
+            <span class="relative w-9 flex-shrink-0 text-xs text-tertiary uppercase">
+              {asset.format}
+            </span>
+            <span
+              class="relative w-16 flex-shrink-0 text-right text-xs tabular-nums text-tertiary hidden @xl:block"
+            >
+              {formatFileSize(asset.file_size)}
+            </span>
+          </button>
+        {/each}
       {/snippet}
     </VirtualList>
   </div>

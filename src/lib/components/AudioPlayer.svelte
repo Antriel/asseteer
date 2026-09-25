@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { untrack, type Snippet } from 'svelte';
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { loadAssetBlobUrl } from '$lib/utils/assetBlob';
   import { type Asset, getAssetFilePath } from '$lib/types';
@@ -14,6 +14,13 @@
     onPlay?: () => void;
     onPause?: () => void;
     onEnded?: () => void;
+    /** Playback position 0–1, for callers that mirror the playhead elsewhere. */
+    progress?: number;
+    playing?: boolean;
+    /** First line of the strip, above the scrubber (name, metadata, actions). */
+    info?: Snippet;
+    /** Right-hand controls, before the volume slider. */
+    controls?: Snippet;
   }
 
   let {
@@ -24,6 +31,10 @@
     onPlay,
     onPause,
     onEnded,
+    progress = $bindable(0),
+    playing = $bindable(false),
+    info,
+    controls,
   }: Props = $props();
 
   // Exported function to seek by percentage delta (e.g., 0.1 for +10%, -0.1 for -10%)
@@ -73,6 +84,8 @@
   let showLoading = $state(false);
   let loadingTimer: ReturnType<typeof setTimeout> | null = null;
   let shouldAutoPlay = $state(false);
+  // Bumped per load; a zip blob that resolves after a newer asset was picked is dropped
+  let loadToken = 0;
 
   // Load audio when asset changes - track only asset properties
   $effect(() => {
@@ -108,10 +121,15 @@
       }, 100);
 
       // Load the new asset
+      const token = ++loadToken;
       (async () => {
         try {
           if (zipEntry) {
             const newBlobUrl = await loadAssetBlobUrl(assetId, `audio/${assetFormat}`);
+            if (token !== loadToken) {
+              URL.revokeObjectURL(newBlobUrl);
+              return;
+            }
 
             untrack(() => {
               blobUrl = newBlobUrl;
@@ -134,6 +152,7 @@
             });
           }
         } catch (error) {
+          if (token !== loadToken) return;
           console.error('Failed to load audio:', error);
           untrack(() => {
             audioSrc = '';
@@ -215,13 +234,43 @@
     onEnded?.();
   }
 
-  function seek(e: MouseEvent) {
-    if (!audioElement) return;
+  let scrubbing = $state(false);
+
+  function seekToPointer(e: PointerEvent) {
+    if (!audioElement || !duration) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const percentage = x / rect.width;
-    audioElement.currentTime = percentage * duration;
+    const fraction = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    audioElement.currentTime = fraction * duration;
+    currentTime = audioElement.currentTime;
   }
+
+  function handleScrubStart(e: PointerEvent) {
+    if (e.button !== 0) return;
+    scrubbing = true;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    seekToPointer(e);
+  }
+
+  function handleScrubMove(e: PointerEvent) {
+    if (scrubbing) seekToPointer(e);
+  }
+
+  function handleScrubEnd() {
+    scrubbing = false;
+  }
+
+  // Keep the paused playhead in sync after seeks (the RAF loop only runs while playing)
+  function handleTimeUpdate() {
+    if (audioElement && !isPlaying) currentTime = audioElement.currentTime;
+  }
+
+  $effect(() => {
+    progress = duration ? Math.min(1, currentTime / duration) : 0;
+  });
+
+  $effect(() => {
+    playing = isPlaying;
+  });
 
   // Pause if another player becomes active
   $effect(() => {
@@ -270,77 +319,99 @@
   }
 </script>
 
-<div class="flex items-center gap-3">
-  {#if showLoading}
-    <div class="h-8 flex items-center text-sm text-secondary">Loading audio...</div>
-  {:else if !loading && !audioSrc}
-    <div class="h-8 flex items-center text-sm text-red-500">Failed to load audio</div>
-  {:else if audioSrc}
-    <audio
-      bind:this={audioElement}
-      src={audioSrc}
-      onloadedmetadata={handleLoadedMetadata}
-      oncanplay={handleCanPlay}
-      onended={handleEnded}
-    ></audio>
+{#if audioSrc}
+  <audio
+    bind:this={audioElement}
+    src={audioSrc}
+    onloadedmetadata={handleLoadedMetadata}
+    oncanplay={handleCanPlay}
+    ontimeupdate={handleTimeUpdate}
+    onended={handleEnded}
+  ></audio>
+{/if}
 
-    <!-- Play/Pause button -->
-    <button
-      class="w-8 h-8 flex items-center justify-center bg-accent text-white border-none rounded-full cursor-pointer hover:opacity-90 transition-opacity flex-shrink-0"
-      onclick={togglePlay}
-    >
-      {#if isPlaying}
-        <PauseIcon size="sm" circled />
+<div class="flex items-center gap-3 @xl:gap-4 min-w-0">
+  <button
+    class="w-9 h-9 flex items-center justify-center bg-accent text-white rounded-full flex-shrink-0 transition-colors hover:bg-[var(--color-accent-hover)] disabled:opacity-40 disabled:cursor-default"
+    onclick={togglePlay}
+    disabled={!audioSrc}
+    title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+    aria-label={isPlaying ? 'Pause' : 'Play'}
+  >
+    {#if isPlaying}
+      <PauseIcon size="sm" />
+    {:else}
+      <PlayIcon size="sm" class="translate-x-px" />
+    {/if}
+  </button>
+
+  <div class="flex-1 min-w-0 flex flex-col gap-1">
+    {@render info?.()}
+
+    <div class="flex items-center gap-2.5 h-4 text-[11px] tabular-nums text-tertiary">
+      {#if showLoading}
+        <span>Loading audio…</span>
+      {:else if !loading && !audioSrc}
+        <span class="text-error">Failed to load audio</span>
       {:else}
-        <PlayIcon size="sm" circled />
-      {/if}
-    </button>
-
-    <!-- Progress bar -->
-    <div
-      class="flex-1 cursor-pointer"
-      role="slider"
-      tabindex="0"
-      aria-valuemin={0}
-      aria-valuemax={Math.round(duration)}
-      aria-valuenow={Math.round(currentTime)}
-      aria-label="Seek audio"
-      onclick={seek}
-      onkeydown={(e) => {
-        if (!audioElement) return;
-        if (e.key === 'ArrowRight') {
-          e.preventDefault();
-          audioElement.currentTime = Math.min(duration, currentTime + duration * 0.05);
-        } else if (e.key === 'ArrowLeft') {
-          e.preventDefault();
-          audioElement.currentTime = Math.max(0, currentTime - duration * 0.05);
-        }
-      }}
-    >
-      <div class="h-1 bg-default rounded-sm overflow-hidden">
+        <span class="w-14 flex-shrink-0" class:text-secondary={currentTime > 0}>
+          {formatDuration(currentTime * 1000)}
+        </span>
         <div
-          class="h-full bg-accent transition-[width] duration-40"
-          style="width: {duration ? (currentTime / duration) * 100 : 0}%"
-        ></div>
-      </div>
-      <div class="flex justify-between mt-1 text-[0.625rem] text-secondary">
-        <span>{formatDuration(currentTime * 1000)}</span>
-        <span>{formatDuration(duration * 1000)}</span>
-      </div>
+          class="group relative flex-1 h-4 flex items-center cursor-pointer touch-none"
+          role="slider"
+          tabindex="0"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(duration)}
+          aria-valuenow={Math.round(currentTime)}
+          aria-label="Seek audio"
+          onpointerdown={handleScrubStart}
+          onpointermove={handleScrubMove}
+          onpointerup={handleScrubEnd}
+          onpointercancel={handleScrubEnd}
+          onkeydown={(e) => {
+            if (!audioElement) return;
+            if (e.key === 'ArrowRight') {
+              e.preventDefault();
+              audioElement.currentTime = Math.min(duration, currentTime + duration * 0.05);
+            } else if (e.key === 'ArrowLeft') {
+              e.preventDefault();
+              audioElement.currentTime = Math.max(0, currentTime - duration * 0.05);
+            }
+          }}
+        >
+          <div
+            class="w-full bg-track rounded-full overflow-hidden transition-[height] duration-100 {scrubbing
+              ? 'h-1.5'
+              : 'h-1 group-hover:h-1.5'}"
+          >
+            <div class="h-full bg-accent" style="width: {progress * 100}%"></div>
+          </div>
+          <div
+            class="absolute top-1/2 w-3 h-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent shadow-sm transition-opacity duration-100 {scrubbing
+              ? 'opacity-100'
+              : 'opacity-0 group-hover:opacity-100'}"
+            style="left: {progress * 100}%"
+          ></div>
+        </div>
+        <span class="w-14 flex-shrink-0 text-right">{formatDuration(duration * 1000)}</span>
+      {/if}
     </div>
+  </div>
 
-    <!-- Volume control -->
-    <div class="flex items-center gap-2 flex-shrink-0">
-      <VolumeIcon size="sm" class="text-secondary" />
-      <input
-        type="range"
-        min="0"
-        max="1"
-        step="0.1"
-        bind:value={volume}
-        oninput={() => audioElement && (audioElement.volume = volume)}
-        class="w-[60px]"
-      />
-    </div>
-  {/if}
+  {@render controls?.()}
+
+  <div class="hidden @2xl:flex items-center gap-1.5 flex-shrink-0" title="Volume">
+    <VolumeIcon size="sm" class="text-tertiary" />
+    <input
+      type="range"
+      min="0"
+      max="1"
+      step="0.05"
+      bind:value={volume}
+      oninput={() => audioElement && (audioElement.volume = volume)}
+      class="w-16 h-1 cursor-pointer accent-[var(--color-accent)]"
+      aria-label="Volume"
+    />
+  </div>
 </div>

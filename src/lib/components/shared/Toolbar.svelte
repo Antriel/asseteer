@@ -222,14 +222,14 @@
     isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults,
   );
 
-  const searchColumnOptions: { value: SearchColumn; label: string }[] = [
-    { value: 'anywhere', label: 'Anywhere' },
-    { value: 'filename', label: 'Filename' },
-    { value: 'path', label: 'Path' },
+  const searchColumnOptions: { value: SearchColumn; label: string; title: string }[] = [
+    { value: 'anywhere', label: 'Anywhere', title: 'Match filename or folder path' },
+    { value: 'filename', label: 'Name', title: 'Match the filename only' },
+    { value: 'path', label: 'Path', title: 'Match the folder path only' },
   ];
 
-  function handleSearchColumnChange(e: Event) {
-    const value = (e.target as HTMLSelectElement).value as SearchColumn;
+  function setSearchColumn(value: SearchColumn) {
+    if (assetsState.searchColumn === value) return;
     assetsState.searchColumn = value;
     // Re-run search if there's active text
     if (searchInput.trim() && !isSimilarityMode) {
@@ -250,22 +250,25 @@
   );
 </script>
 
-<div class="flex flex-col">
-  <div class="flex items-center gap-4 px-4 py-3 bg-secondary border-b border-default">
+<div class="@container flex flex-col">
+  <div
+    class="flex flex-wrap items-center gap-x-3 @3xl:gap-x-4 gap-y-2 px-4 py-3 bg-secondary border-b border-default"
+  >
     <!-- Folder panel toggle -->
     <button
-      class="flex items-center gap-1.5 px-2.5 py-2 text-sm font-medium rounded-md transition-colors {viewState.folderSidebarOpen
+      class="h-9 flex-shrink-0 flex items-center gap-1.5 px-2.5 text-sm font-medium rounded-md transition-colors {viewState.folderSidebarOpen
         ? 'bg-accent-muted text-accent'
         : 'text-secondary hover:text-primary hover:bg-tertiary'}"
       onclick={() => viewState.toggleFolderSidebar()}
       title={viewState.folderSidebarOpen ? 'Collapse folder panel' : 'Expand folder panel'}
     >
       <FolderIcon size="sm" />
-      <span>Folders</span>
+      <span class="hidden @3xl:inline">Folders</span>
     </button>
 
     <!-- Search -->
-    <div class="relative flex-1 max-w-[400px]">
+    <!-- Never squeezed below a usable width: the toolbar wraps to a second row instead -->
+    <div class="relative flex-1 min-w-48 max-w-[400px]">
       {#if clapState.isSearching}
         <div class="absolute left-2 top-1/2 -translate-y-1/2">
           <Spinner size="sm" />
@@ -281,7 +284,7 @@
         placeholder={placeholderText}
         value={searchInput}
         oninput={handleSearch}
-        class="w-full py-2 px-2 pl-8 {searchInput
+        class="w-full h-9 px-2 pl-8 {searchInput
           ? 'pr-8'
           : 'pr-2'} border border-default rounded-md bg-primary text-primary placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
         class:!border-purple-500={isSemanticModeEnabled && !isSimilarityMode}
@@ -310,15 +313,26 @@
 
     <!-- Search column targeting -->
     {#if !isSimilarityMode && !isSemanticModeEnabled}
-      <select
-        value={assetsState.searchColumn}
-        onchange={handleSearchColumnChange}
-        class="py-2 px-2 text-sm border border-default rounded-md bg-primary text-primary focus:outline-none focus:ring-2 focus:ring-accent"
+      <div
+        class="h-9 flex-shrink-0 flex items-center p-0.5 bg-primary border border-default rounded-md"
+        role="radiogroup"
+        aria-label="Search in"
       >
-        {#each searchColumnOptions as opt}
-          <option value={opt.value}>{opt.label}</option>
+        {#each searchColumnOptions as opt (opt.value)}
+          {@const active = assetsState.searchColumn === opt.value}
+          <button
+            class="h-full px-2.5 text-xs font-medium rounded transition-colors {active
+              ? 'bg-accent-light text-accent'
+              : 'text-tertiary hover:text-primary'}"
+            role="radio"
+            aria-checked={active}
+            title={opt.title}
+            onclick={() => setSearchColumn(opt.value)}
+          >
+            {opt.label}
+          </button>
         {/each}
-      </select>
+      </div>
     {/if}
 
     <!-- Audio-specific filters (semantic search + duration filter) -->
@@ -326,7 +340,7 @@
       <button
         onclick={toggleSemanticSearch}
         disabled={isSimilarityMode}
-        class="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md transition-colors"
+        class="h-9 flex-shrink-0 flex items-center gap-2 px-2.5 @3xl:px-3 text-sm font-medium rounded-md transition-colors"
         class:bg-purple-500={isSemanticModeEnabled && !isSimilarityMode}
         class:text-white={isSemanticModeEnabled && !isSimilarityMode}
         class:bg-secondary={!isSemanticModeEnabled || isSimilarityMode}
@@ -346,7 +360,7 @@
       >
         <!-- Brain/AI icon for semantic search -->
         <BrainIcon size="sm" />
-        <span>Semantic</span>
+        <span class="hidden @3xl:inline">Semantic</span>
         {#if clapNotConfigured}
           <GearIcon size="sm" class="w-3 h-3 opacity-70" />
         {/if}
@@ -360,7 +374,7 @@
     <ViewModeToggle />
 
     <!-- Stats -->
-    <div class="ml-auto flex items-center gap-2">
+    <div class="ml-auto hidden @2xl:flex items-center gap-2 flex-shrink-0 whitespace-nowrap">
       {#if activeResultCount > 0}
         <span
           class="text-sm"

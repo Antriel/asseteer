@@ -179,7 +179,7 @@
   <!-- Toggle Button -->
   <button
     onclick={() => (isOpen = !isOpen)}
-    class="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md transition-colors"
+    class="h-9 flex-shrink-0 flex items-center gap-2 px-2.5 @3xl:px-3 text-sm font-medium rounded-md transition-colors"
     class:bg-blue-500={isFilterActive}
     class:text-white={isFilterActive}
     class:bg-secondary={!isFilterActive}
@@ -197,7 +197,10 @@
         d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
       />
     </svg>
-    <span class="max-w-[120px] truncate">{filterSummary()}</span>
+    <!-- Label collapses to the icon when the toolbar is narrow; an active range always shows -->
+    <span class="max-w-[120px] truncate {isFilterActive ? '' : 'hidden @3xl:inline'}"
+      >{filterSummary()}</span
+    >
     {#if isFilterActive}
       <span
         role="button"

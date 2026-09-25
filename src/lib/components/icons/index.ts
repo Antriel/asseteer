@@ -13,3 +13,6 @@ export { default as BrainIcon } from './BrainIcon.svelte';
 export { default as VolumeIcon } from './VolumeIcon.svelte';
 export { default as GearIcon } from './GearIcon.svelte';
 export { default as InboxIcon } from './InboxIcon.svelte';
+export { default as RepeatIcon } from './RepeatIcon.svelte';
+export { default as SkipNextIcon } from './SkipNextIcon.svelte';
+export { default as PlayOnceIcon } from './PlayOnceIcon.svelte';

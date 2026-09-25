@@ -15,6 +15,12 @@ const config = {
     adapter: adapter({
       fallback: "index.html",
     }),
+    typescript: {
+      // The harness's WebView profile lands under tests/ and holds Edge's own scripts.
+      config: (tsconfig) => {
+        tsconfig.exclude.push("../tests/harness/out/**");
+      },
+    },
   },
 };
 

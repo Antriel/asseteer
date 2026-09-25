@@ -12,6 +12,8 @@
   --color-text-tertiary: #6e7681;
   --color-border-default: #2f363d;
   --color-border-light: #3d444d;
+  --color-border-subtle: rgba(240, 246, 252, 0.06);
+  --color-track: #30363d;
   --color-accent: #58a6ff;
   --color-accent-hover: #79b8ff;
   --color-accent-light: rgba(88, 166, 255, 0.15);
@@ -32,6 +34,8 @@
     --color-text-tertiary: #8b949e;
     --color-border-default: #d0d7de;
     --color-border-light: #eaeef2;
+    --color-border-subtle: rgba(31, 35, 40, 0.06);
+    --color-track: #d0d7de;
     --color-accent: #0969da;
     --color-accent-hover: #0550ae;
     --color-accent-light: rgba(9, 105, 218, 0.1);
@@ -86,6 +90,15 @@ body {
 
 .border-light {
   border-color: var(--color-border-light);
+}
+
+.border-subtle {
+  border-color: var(--color-border-subtle);
+}
+
+/* Unfilled part of scrubbers and meters */
+.bg-track {
+  background-color: var(--color-track);
 }
 
 .text-accent {
@@ -148,11 +161,6 @@ body {
 /* Hover lift effect */
 .hover-lift:hover {
   transform: translateY(-1px);
-}
-
-/* Sidebar gradient */
-.sidebar-gradient {
-  background: linear-gradient(180deg, var(--color-bg-secondary) 0%, var(--color-bg-primary) 100%);
 }
 
 /* Utility classes for repeated patterns (3+ uses) */

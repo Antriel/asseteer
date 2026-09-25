@@ -130,3 +130,21 @@ export function getAssetDirectoryPath(asset: Asset): string {
   }
   return asset.rel_path ? `${asset.folder_path}/${asset.rel_path}` : asset.folder_path;
 }
+
+/**
+ * Directory of the asset relative to its source folder, prefixed with the source folder's
+ * name (e.g. "library/Explosions", "library/Retro.zip/Sounds"). What a list row shows —
+ * the absolute prefix is the same for every row of a source and only pushes the useful
+ * part out of view.
+ */
+export function getAssetRelativeDirectory(asset: Asset): string {
+  const root = asset.folder_path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
+  const parts = [root];
+  if (asset.rel_path) parts.push(asset.rel_path);
+  if (asset.zip_entry && asset.zip_file) {
+    parts.push(asset.zip_file);
+    const internalDir = asset.zip_entry.split('/').slice(0, -1).join('/');
+    if (internalDir) parts.push(internalDir);
+  }
+  return parts.filter(Boolean).join('/');
+}

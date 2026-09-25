@@ -16,6 +16,21 @@ export function formatDuration(ms: number): string {
 }
 
 /**
+ * Format milliseconds for scanning a list of sounds: seconds with a unit under a minute
+ * ("0.35 s", "3.00 s", "12.5 s"), m:ss from a minute up ("1:05").
+ */
+export function formatDurationCompact(ms: number): string {
+  // Round first, then pick the bracket, so 9.996 s reads "10.0 s", not "10.00 s"
+  const hundredths = Math.round(ms / 10);
+  if (hundredths < 1000) return `${(hundredths / 100).toFixed(2)} s`;
+  const tenths = Math.round(ms / 100);
+  if (tenths < 600) return `${(tenths / 10).toFixed(1)} s`;
+  const totalSeconds = Math.round(ms / 1000);
+  const seconds = totalSeconds % 60;
+  return `${Math.floor(totalSeconds / 60)}:${seconds.toString().padStart(2, '0')}`;
+}
+
+/**
  * Format bytes as a human-readable file size string
  */
 export function formatFileSize(bytes: number): string {

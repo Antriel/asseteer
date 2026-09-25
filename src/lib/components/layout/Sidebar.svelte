@@ -28,7 +28,7 @@
 </script>
 
 <aside
-  class="h-full flex flex-col sidebar-gradient border-r border-default transition-all duration-200 {collapsed
+  class="h-full flex flex-col bg-secondary border-r border-default transition-all duration-200 {collapsed
     ? 'w-14'
     : 'w-56'}"
 >
