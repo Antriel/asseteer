@@ -47,7 +47,11 @@ mod tests {
 
     #[test]
     fn test_best_similarity_takes_the_closest_alternative() {
-        let queries = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0], vec![0.0, 0.0, 1.0]];
+        let queries = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
         let (index, sim) = best_similarity(&queries, &[0.1, 0.8, 0.6]);
         assert_eq!(index, 1);
         assert!((sim - 0.8).abs() < 1e-6);

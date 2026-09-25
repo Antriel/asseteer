@@ -600,17 +600,21 @@ pub(crate) fn compute_rel_path(root: &Path, file_path: &Path) -> String {
     s.trim_end_matches('/').to_string()
 }
 
-/// Compute the searchable path for FTS indexing.
-///
-/// Takes `rel_path`, optional `zip_entry`, and a config slice of
-/// `(subfolder_prefix, skip_depth)` pairs sorted by prefix length descending.
-/// Finds the longest matching prefix, strips that prefix plus `skip_depth`
-/// additional segments from the rel_path, appends the directory portion of
-/// zip_entry (if present), and replaces path separators with spaces.
-/// Compute the searchable path for FTS indexing.
+/// A zip archive's name as a search segment: `Retro Pack.zip` → `Retro Pack`.
+fn zip_segment(name: &str) -> &str {
+    match name.len().checked_sub(4) {
+        Some(i) if name.is_char_boundary(i) && name[i..].eq_ignore_ascii_case(".zip") => &name[..i],
+        _ => name,
+    }
+}
+
+/// Compute the searchable path for FTS indexing: the `rel_path` segments, the
+/// outer zip's name, then the directory portion of `zip_entry` (which names any
+/// nested zips), joined with spaces. Zip names are indexed without `.zip`.
 ///
 /// `excludes` is a set of (zip_file, cumulative_path) pairs. Segments whose
-/// cumulative path appears in the set are omitted from the result.
+/// cumulative path appears in the set are omitted from the result. The outer
+/// zip is a filesystem entity, so its key is `(None, "{rel_path}/{zip_file}")`.
 pub(crate) fn compute_searchable_path(
     rel_path: &str,
     zip_file: Option<&str>,
@@ -635,6 +639,17 @@ pub(crate) fn compute_searchable_path(
         }
     }
 
+    // The outer zip's own name, continuing the filesystem path
+    if let Some(zip) = zip_file {
+        if probe.len() > 1 {
+            probe.push('/');
+        }
+        probe.push_str(zip);
+        if !excludes.contains(probe.as_str()) {
+            result.push(zip_segment(zip));
+        }
+    }
+
     // ZIP-internal directory segments (directory portion of zip_entry, before last '/')
     if let Some(entry) = zip_entry {
         if let Some(last_slash) = entry.rfind('/') {
@@ -650,7 +665,7 @@ pub(crate) fn compute_searchable_path(
                 }
                 probe.push_str(segment);
                 if !excludes.contains(probe.as_str()) {
-                    result.push(segment);
+                    result.push(zip_segment(segment));
                 }
             }
         }
@@ -1448,5 +1463,79 @@ fn detect_asset_type_from_ext(ext: &str) -> Option<AssetType> {
         Some(AssetType::Audio)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn excludes(keys: &[(Option<&str>, &str)]) -> HashSet<String> {
+        keys.iter()
+            .map(|(zf, path)| encode_exclude_key(*zf, path))
+            .collect()
+    }
+
+    #[test]
+    fn searchable_path_filesystem_asset() {
+        let none = HashSet::new();
+        assert_eq!(
+            compute_searchable_path("Sfx/Hits", None, None, &none),
+            "Sfx Hits"
+        );
+        assert_eq!(compute_searchable_path("", None, None, &none), "");
+    }
+
+    #[test]
+    fn searchable_path_includes_outer_zip_name() {
+        let none = HashSet::new();
+        assert_eq!(
+            compute_searchable_path(
+                "Packs",
+                Some("Retro Pack.zip"),
+                Some("retro_coin.wav"),
+                &none
+            ),
+            "Packs Retro Pack"
+        );
+        // Zip at the folder root, entry in a zip-internal directory
+        assert_eq!(
+            compute_searchable_path("", Some("Retro.ZIP"), Some("Sfx/coin.wav"), &none),
+            "Retro Sfx"
+        );
+        // Nested zips are named in zip_entry and indexed the same way
+        assert_eq!(
+            compute_searchable_path(
+                "Packs",
+                Some("Retro Pack.zip"),
+                Some("Extras/bonus.zip/retro_powerup.wav"),
+                &none
+            ),
+            "Packs Retro Pack Extras bonus"
+        );
+    }
+
+    #[test]
+    fn searchable_path_honours_excludes_for_zips() {
+        let ex = excludes(&[
+            (None, "Packs/Retro Pack.zip"),
+            (Some("Retro Pack.zip"), "Extras"),
+        ]);
+        assert_eq!(
+            compute_searchable_path(
+                "Packs",
+                Some("Retro Pack.zip"),
+                Some("Extras/bonus.zip/retro_powerup.wav"),
+                &ex
+            ),
+            "Packs bonus"
+        );
+        // Excluding a filesystem dir leaves the zip below it indexed
+        let ex = excludes(&[(None, "Packs")]);
+        assert_eq!(
+            compute_searchable_path("Packs", Some("Retro Pack.zip"), Some("a.wav"), &ex),
+            "Retro Pack"
+        );
     }
 }

@@ -7,6 +7,7 @@
   import FolderSidebar from '$lib/components/FolderSidebar.svelte';
   import ToastContainer from '$lib/components/shared/ToastContainer.svelte';
   import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+  import DbMigrationDialog from '$lib/components/shared/DbMigrationDialog.svelte';
   import { processingState } from '$lib/state/tasks.svelte';
   import { clapState } from '$lib/state/clap.svelte';
   import { viewState } from '$lib/state/view.svelte';
@@ -101,6 +102,9 @@
 
   <!-- Global confirm dialog -->
   <ConfirmDialog />
+
+  <!-- Blocks the app while a startup data migration runs -->
+  <DbMigrationDialog />
 </div>
 
 {#if isResizing}

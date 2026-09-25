@@ -173,33 +173,52 @@ pub async fn update_search_excludes(
 
     tx.commit().await.map_err(|e| e.to_string())?;
 
-    // Re-index: load the new excludes, fetch all assets, recompute searchable_path
-    let search_excludes = load_search_excludes(&state.pool, folder_id).await?;
+    reindex_searchable_paths(&state.pool, folder_id, false, |_| {}).await
+}
 
-    let assets: Vec<(i64, String, Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT id, rel_path, zip_file, zip_entry FROM assets WHERE folder_id = ?1")
-            .bind(folder_id)
-            .fetch_all(&state.pool)
-            .await
-            .map_err(|e| e.to_string())?;
+/// Recompute `searchable_path` for a folder's assets (only its zip assets when
+/// `zip_only`); the `assets_au` trigger refreshes both FTS tables. Commits in chunks
+/// so other writers aren't locked out, reporting each chunk's size to `on_progress`.
+pub(crate) async fn reindex_searchable_paths(
+    pool: &sqlx::SqlitePool,
+    folder_id: i64,
+    zip_only: bool,
+    mut on_progress: impl FnMut(u64) + Send,
+) -> Result<(), String> {
+    let search_excludes = load_search_excludes(pool, folder_id).await?;
 
-    // Update in batches within a transaction
-    let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
-    for (id, rel_path, zip_file, zip_entry) in &assets {
-        let sp = compute_searchable_path(
-            rel_path,
-            zip_file.as_deref(),
-            zip_entry.as_deref(),
-            &search_excludes,
-        );
-        sqlx::query("UPDATE assets SET searchable_path = ?1 WHERE id = ?2")
+    let sql = if zip_only {
+        "SELECT id, rel_path, zip_file, zip_entry FROM assets WHERE folder_id = ?1 AND zip_file IS NOT NULL"
+    } else {
+        "SELECT id, rel_path, zip_file, zip_entry FROM assets WHERE folder_id = ?1"
+    };
+    let assets: Vec<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(sql)
+        .bind(folder_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for chunk in assets.chunks(5000) {
+        let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+        for (id, rel_path, zip_file, zip_entry) in chunk {
+            let sp = compute_searchable_path(
+                rel_path,
+                zip_file.as_deref(),
+                zip_entry.as_deref(),
+                &search_excludes,
+            );
+            sqlx::query(
+                "UPDATE assets SET searchable_path = ?1 WHERE id = ?2 AND searchable_path != ?1",
+            )
             .bind(&sp)
             .bind(id)
             .execute(&mut *tx)
             .await
             .map_err(|e| e.to_string())?;
+        }
+        tx.commit().await.map_err(|e| e.to_string())?;
+        on_progress(chunk.len() as u64);
     }
-    tx.commit().await.map_err(|e| e.to_string())?;
 
     Ok(())
 }

@@ -155,6 +155,8 @@ pub fn run() {
                 initialize_db(db_path.to_str().unwrap()).await
             })
             .expect("Failed to initialize database");
+            let migrate = tauri::async_runtime::block_on(database::migrate::pending(&pool))
+                .expect("Failed to check the database version");
 
             let drag_cache_dir = app_dir.join("drag-cache");
             {
@@ -177,6 +179,12 @@ pub fn run() {
                 rescan_previews: Mutex::new(HashMap::new()),
                 drag_cache_dir,
             });
+
+            // Slow on a big library, so after the window is up; the frontend blocks
+            // on it with a progress dialog
+            if migrate {
+                database::migrate::start(pool.clone());
+            }
 
             create_main_window(app)?;
 
@@ -219,6 +227,7 @@ pub fn run() {
             // Database management commands
             commands::database::get_db_info,
             commands::database::get_db_path,
+            commands::database::get_db_migration,
             commands::database::vacuum_database,
         ])
         .build(tauri::generate_context!())

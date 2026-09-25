@@ -18,6 +18,24 @@ test('finds audio inside a nested zip', async ({ page, app }) => {
   await expect(page.getByText('retro_powerup.wav')).toBeVisible();
 });
 
+test('path scope matches the zip an asset lives in', async ({ page, app }) => {
+  const pathScope = page.getByRole('button', { name: 'Path', exact: true });
+  await pathScope.click();
+  try {
+    // Packs/Retro Pack.zip/Sounds/retro_{coin,jump}.wav and .../Extras/bonus.zip/retro_powerup.wav
+    await app.search('retro');
+    expect((await app.state()).assetCount).toBe(3);
+    await expect(page.getByText('retro_powerup.wav')).toBeVisible();
+    // Nested zip, and the name is indexed without `.zip`
+    await app.search('bonus');
+    expect((await app.state()).assetCount).toBe(1);
+    await app.search('zip');
+    expect((await app.state()).assetCount).toBe(0);
+  } finally {
+    await pathScope.click(); // back to Anywhere; the scope outlives the test
+  }
+});
+
 test('images tab searches images', async ({ page, app }) => {
   await page.getByRole('radio', { name: 'Images' }).click();
   await app.search('tile');

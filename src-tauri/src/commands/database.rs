@@ -25,6 +25,12 @@ pub fn get_db_path(state: State<'_, AppState>) -> String {
     state.db_path.clone()
 }
 
+/// Progress of the startup data migration, `None` when there is none to wait for.
+#[tauri::command]
+pub fn get_db_migration() -> Option<database::migrate::MigrationProgress> {
+    database::migrate::progress()
+}
+
 #[tauri::command]
 pub async fn get_db_info(state: State<'_, AppState>) -> Result<DbInfo, String> {
     let db_path = &state.db_path;

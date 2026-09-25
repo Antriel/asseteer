@@ -33,7 +33,11 @@ pub fn ensure_local_file(asset: &Asset, cache_dir: &Path) -> Result<PathBuf, Str
 
     // Keyed by id + source mtime so a rescan that changed the file doesn't serve stale bytes;
     // the original filename is kept so the receiving program names the track sensibly.
-    let dir = cache_dir.join(format!("{}_{}", asset.id, asset.fs_modified_at.unwrap_or(0)));
+    let dir = cache_dir.join(format!(
+        "{}_{}",
+        asset.id,
+        asset.fs_modified_at.unwrap_or(0)
+    ));
     let target = dir.join(&asset.filename);
     if target.is_file() {
         touch(&target);
@@ -124,11 +128,17 @@ fn is_network_path(_path: &Path) -> bool {
 /// sense while it is: Windows' drag loop treats "button up" as an immediate drop.
 #[cfg(windows)]
 fn primary_button_held() -> bool {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
     unsafe {
         // GetAsyncKeyState reads physical buttons; left-handed setups swap them.
-        let key = if GetSystemMetrics(SM_SWAPBUTTON) != 0 { VK_RBUTTON } else { VK_LBUTTON };
+        let key = if GetSystemMetrics(SM_SWAPBUTTON) != 0 {
+            VK_RBUTTON
+        } else {
+            VK_LBUTTON
+        };
         (GetAsyncKeyState(key as i32) as u16 & 0x8000) != 0
     }
 }
@@ -162,8 +172,11 @@ async fn local_files(state: &AppState, asset_ids: &[i64]) -> Result<Vec<PathBuf>
         );
     }
     // Keep the list order the frontend sent, not the DB's
-    let order: std::collections::HashMap<i64, usize> =
-        asset_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let order: std::collections::HashMap<i64, usize> = asset_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (*id, i))
+        .collect();
     assets.sort_by_key(|a| order.get(&a.id).copied());
 
     let cache_dir = state.drag_cache_dir.clone();
@@ -199,11 +212,13 @@ pub async fn copy_assets_to_clipboard(
 #[cfg(windows)]
 fn set_clipboard_files(window: &tauri::Window, paths: Vec<PathBuf>) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::GlobalFree;
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
     };
-    use windows_sys::Win32::Foundation::GlobalFree;
-    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows_sys::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+    };
     use windows_sys::Win32::System::Ole::{CF_HDROP, DROPEFFECT_COPY};
     use windows_sys::Win32::UI::Shell::DROPFILES;
 
@@ -291,7 +306,10 @@ pub async fn start_asset_drag(
     }
     let paths = local_files(&state, &asset_ids).await?;
 
-    let image = match image.as_deref().and_then(|s| s.strip_prefix("data:image/png;base64,")) {
+    let image = match image
+        .as_deref()
+        .and_then(|s| s.strip_prefix("data:image/png;base64,"))
+    {
         Some(data) => {
             use base64::Engine;
             base64::engine::general_purpose::STANDARD
@@ -368,7 +386,11 @@ mod tests {
         let path = ensure_local_file(&asset_at(src.path(), "kick.wav"), cache.path()).unwrap();
 
         assert!(path.starts_with(src.path()));
-        assert_eq!(std::fs::read_dir(cache.path()).unwrap().count(), 0, "nothing written");
+        assert_eq!(
+            std::fs::read_dir(cache.path()).unwrap().count(),
+            0,
+            "nothing written"
+        );
     }
 
     #[test]

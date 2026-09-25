@@ -21,7 +21,7 @@
     name: string;
     /** Cumulative path up to and including this segment */
     path: string;
-    /** null for filesystem dirs, zip filename for zip-internal dirs */
+    /** null for filesystem dirs and zip archives, zip filename for zip-internal dirs */
     zipFile: string | null;
     /** Child nodes */
     children: TreeNode[];
@@ -106,7 +106,7 @@
     // Create the zip archive node
     const zipNode: TreeNode = {
       name: zipFile,
-      path: zipFile,
+      path: relPath ? relPath + '/' + zipFile : zipFile,
       zipFile: null, // the archive itself is a filesystem entity
       children: zipChildren,
       expanded: false,
@@ -170,13 +170,11 @@
   }
 
   function isExcluded(node: TreeNode): boolean {
-    if (node.isZipArchive) return false; // zip archives themselves aren't excludable
     const key = excludeKey(node.zipFile, node.path);
     return excludedSet.has(key);
   }
 
   function toggleExclude(node: TreeNode) {
-    if (node.isZipArchive) return;
     const key = excludeKey(node.zipFile, node.path);
     const newSet = new Set(excludedSet);
     if (newSet.has(key)) {
@@ -237,34 +235,30 @@
         <span class="w-5 flex-shrink-0"></span>
       {/if}
 
-      <!-- Checkbox (not for ZIP archive nodes) -->
-      {#if !node.isZipArchive}
-        <button
-          onclick={() => toggleExclude(node)}
-          class="w-4 h-4 flex-shrink-0 rounded border flex items-center justify-center transition-colors {excluded
-            ? 'border-tertiary bg-tertiary/20'
-            : 'border-accent bg-accent/10'}"
-          title={excluded ? 'Include in search' : 'Exclude from search'}
-        >
-          {#if !excluded}
-            <svg
-              class="w-2.5 h-2.5 text-accent"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="3"
-                d="M5 13l4 4L19 7"
-              />
-            </svg>
-          {/if}
-        </button>
-      {:else}
-        <span class="w-4 flex-shrink-0"></span>
-      {/if}
+      <!-- Checkbox -->
+      <button
+        onclick={() => toggleExclude(node)}
+        class="w-4 h-4 flex-shrink-0 rounded border flex items-center justify-center transition-colors {excluded
+          ? 'border-tertiary bg-tertiary/20'
+          : 'border-accent bg-accent/10'}"
+        title={excluded ? 'Include in search' : 'Exclude from search'}
+      >
+        {#if !excluded}
+          <svg
+            class="w-2.5 h-2.5 text-accent"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="3"
+              d="M5 13l4 4L19 7"
+            />
+          </svg>
+        {/if}
+      </button>
 
       <!-- Name -->
       <button

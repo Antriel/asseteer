@@ -102,6 +102,10 @@ The FTS INSERT trigger (`assets_ai`) is permanently removed. Both FTS indexes (`
 - **Rescan**: inline in the transaction (typically small number of new assets)
 - **UPDATE/DELETE triggers** are kept for convenience (modifications are infrequent)
 
+### Data Migrations
+
+Schema is `CREATE ... IF NOT EXISTS`; one-time data fixes for existing libraries go in `database/migrate.rs`, gated on `PRAGMA user_version` — add a `version < N` step to `run()` (report progress, stamp the version when the step is done) and bump `DATA_VERSION`. They run on a background task once the window is up; `DbMigrationDialog.svelte` polls `get_db_migration` and blocks the UI meanwhile. Commit in chunks so other writers aren't locked out. E.g. a change to `compute_searchable_path` needs `reindex_searchable_paths()` (`folders.rs`) run once.
+
 ## Testing
 
 ```bash

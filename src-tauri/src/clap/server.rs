@@ -236,17 +236,16 @@ async fn start_server_process(
                 use std::os::windows::process::CommandExt;
                 cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
             }
-            let child = cmd.spawn()
-                .map_err(|e| {
-                    format!(
-                        "Failed to start CLAP server via uv: {}. \
+            let child = cmd.spawn().map_err(|e| {
+                format!(
+                    "Failed to start CLAP server via uv: {}. \
                          Try deleting {:?} and restarting the app. \
                          Log file: {:?}",
-                        e,
-                        uv::uv_bin_path(),
-                        log_path
-                    )
-                })?;
+                    e,
+                    uv::uv_bin_path(),
+                    log_path
+                )
+            })?;
             Ok((child, log_path))
         }
         Err(uv_err) => {
@@ -288,29 +287,28 @@ fn start_server_venv_fallback(
 
     let mut cmd = Command::new(&python_path);
     cmd.args([
-            "-m",
-            "uvicorn",
-            "clap_server:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            &port_str,
-        ])
-        .current_dir(clap_dir)
-        .stdout(stdout)
-        .stderr(stderr);
+        "-m",
+        "uvicorn",
+        "clap_server:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        &port_str,
+    ])
+    .current_dir(clap_dir)
+    .stdout(stdout)
+    .stderr(stderr);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    cmd.spawn()
-        .map_err(|e| {
-            format!(
-                "Failed to start CLAP server: {} (python: {:?}). Log file: {:?}",
-                e, python_path, log_path
-            )
-        })
+    cmd.spawn().map_err(|e| {
+        format!(
+            "Failed to start CLAP server: {} (python: {:?}). Log file: {:?}",
+            e, python_path, log_path
+        )
+    })
 }
 
 /// Wait for the server to become healthy (up to 30 minutes).

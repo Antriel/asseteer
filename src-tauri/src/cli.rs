@@ -100,7 +100,13 @@ mod tests {
 
     #[test]
     fn both_forms() {
-        let a = p(&["--data-dir", "C:/x", "--profile-dir=C:/y", "--window-size", "1400x900"]);
+        let a = p(&[
+            "--data-dir",
+            "C:/x",
+            "--profile-dir=C:/y",
+            "--window-size",
+            "1400x900",
+        ]);
         assert_eq!(a.data_dir.as_deref(), Some("C:/x"));
         assert_eq!(a.profile_dir.as_deref(), Some("C:/y"));
         assert_eq!(a.window_size, Some((1400, 900)));

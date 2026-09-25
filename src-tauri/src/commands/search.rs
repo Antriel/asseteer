@@ -159,7 +159,10 @@ async fn embed_texts(texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         out[i] = Some(embedding);
     }
 
-    Ok(out.into_iter().map(|e| e.expect("every text embedded")).collect())
+    Ok(out
+        .into_iter()
+        .map(|e| e.expect("every text embedded"))
+        .collect())
 }
 
 /// Semantic search for audio assets using CLAP embeddings. `queries` are alternatives (the

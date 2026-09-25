@@ -661,10 +661,18 @@ mod tests {
         let result = process_asset_cpu(&asset, false).await;
 
         match result {
-            ProcessingOutput::ImageSuccess { width, height, thumbnail, .. } => {
+            ProcessingOutput::ImageSuccess {
+                width,
+                height,
+                thumbnail,
+                ..
+            } => {
                 assert_eq!(width, 64);
                 assert_eq!(height, 48);
-                assert!(thumbnail.is_none(), "Thumbnail should be None when not pre-generating");
+                assert!(
+                    thumbnail.is_none(),
+                    "Thumbnail should be None when not pre-generating"
+                );
             }
             ProcessingOutput::Failure { error, .. } => panic!("Should succeed: {}", error),
             _ => panic!("Expected ImageSuccess"),
@@ -676,16 +684,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let folder_path = dir.path().to_string_lossy().replace('\\', "/");
         // create_test_png makes a 64x48 image (both dims <= 128), so create a larger one
-        let img = image::RgbaImage::from_fn(256, 192, |x, y| {
-            image::Rgba([x as u8, y as u8, 128, 255])
-        });
+        let img =
+            image::RgbaImage::from_fn(256, 192, |x, y| image::Rgba([x as u8, y as u8, 128, 255]));
         img.save(dir.path().join("large.png")).unwrap();
 
         let asset = make_test_asset_with_path("large.png", &folder_path, "image", "png");
         let result = process_asset_cpu(&asset, true).await;
 
         match result {
-            ProcessingOutput::ImageSuccess { width, height, thumbnail, .. } => {
+            ProcessingOutput::ImageSuccess {
+                width,
+                height,
+                thumbnail,
+                ..
+            } => {
                 assert_eq!(width, 256);
                 assert_eq!(height, 192);
                 let thumb = thumbnail.expect("Should pre-generate thumbnail for large image");
@@ -707,7 +719,10 @@ mod tests {
 
         match result {
             ProcessingOutput::ImageSuccess { thumbnail, .. } => {
-                assert!(thumbnail.is_none(), "Should skip thumbnail for small image even with pre_generate=true");
+                assert!(
+                    thumbnail.is_none(),
+                    "Should skip thumbnail for small image even with pre_generate=true"
+                );
             }
             ProcessingOutput::Failure { error, .. } => panic!("Should succeed: {}", error),
             _ => panic!("Expected ImageSuccess"),
@@ -780,11 +795,20 @@ mod tests {
         let result = process_asset_cpu(&asset, false).await;
 
         match result {
-            ProcessingOutput::AudioSuccess { duration_ms, sample_rate, channels, .. } => {
+            ProcessingOutput::AudioSuccess {
+                duration_ms,
+                sample_rate,
+                channels,
+                ..
+            } => {
                 assert_eq!(sample_rate, 44100);
                 assert_eq!(channels, 1);
                 // 4410 samples @ 44100 Hz ≈ 100 ms
-                assert!(duration_ms > 0, "Duration should be positive, got {}", duration_ms);
+                assert!(
+                    duration_ms > 0,
+                    "Duration should be positive, got {}",
+                    duration_ms
+                );
             }
             ProcessingOutput::Failure { error, .. } => panic!("Should succeed: {}", error),
             _ => panic!("Expected AudioSuccess"),
@@ -802,7 +826,11 @@ mod tests {
 
         match result {
             ProcessingOutput::Failure { error, .. } => {
-                assert!(error.contains("Unsupported"), "Error should mention unsupported type: {}", error);
+                assert!(
+                    error.contains("Unsupported"),
+                    "Error should mention unsupported type: {}",
+                    error
+                );
             }
             _ => panic!("Expected Failure for unsupported type"),
         }
