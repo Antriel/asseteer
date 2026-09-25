@@ -484,7 +484,8 @@ export async function getZipDirTrees(
  * Result of a semantic search query - full Asset data plus similarity score.
  * The Rust backend always returns null for width/height (audio-only).
  */
-export type SemanticSearchResult = Asset & { similarity: number };
+/** `matched_query`: index of the search alternative that gave `similarity` */
+export type SemanticSearchResult = Asset & { similarity: number; matched_query: number };
 
 /**
  * Convert a FolderLocation to the flat object the Rust FolderFilter expects.
@@ -500,17 +501,18 @@ function toFolderFilter(loc: FolderLocation | null | undefined) {
 }
 
 /**
- * Search audio assets semantically using CLAP embeddings
+ * Search audio assets semantically using CLAP embeddings. `queries` are alternatives (OR):
+ * each asset scores its best similarity to any of them.
  * Falls back to error if CLAP server is unavailable
  */
 export async function searchAudioSemantic(
-  query: string,
+  queries: string[],
   limit: number = 50,
   durationFilter?: DurationFilter,
   folderLocation?: FolderLocation | null,
 ): Promise<SemanticSearchResult[]> {
   return invoke('search_audio_semantic', {
-    query,
+    queries,
     limit,
     minDurationMs: durationFilter?.minMs ?? null,
     maxDurationMs: durationFilter?.maxMs ?? null,

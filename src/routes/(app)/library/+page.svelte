@@ -123,11 +123,13 @@
 </script>
 
 <!-- A query rendered the way the search field shows it: chips with "or" between -->
-{#snippet queryChips(text: string)}
+{#snippet queryChips(text: string, semantic = false)}
   {#each splitAlternatives(text) as alt, i (i)}
     {#if i > 0}<span class="text-xs text-tertiary">or</span>{/if}
-    <span class="h-6 px-1.5 flex items-center text-xs font-medium rounded bg-tertiary text-primary"
-      >{alt.trim()}</span
+    <span
+      class="h-6 px-1.5 flex items-center text-xs font-medium rounded {semantic
+        ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300'
+        : 'bg-tertiary text-primary'}">{alt.trim()}</span
     >
   {/each}
 {/snippet}
@@ -192,18 +194,31 @@
               No {viewState.activeTab} found - try scanning for assets first
             {/if}
           </p>
-          {#if assetsState.totalMatchingCount > 0 && !isSemanticModeEnabled}
+          {#if assetsState.totalMatchingCount > 0}
             <dl
               class="mt-2 grid grid-cols-[auto_auto] items-center gap-x-4 gap-y-2 text-xs text-secondary"
             >
-              <dt class="justify-self-end">
-                <kbd class="px-1.5 py-0.5 rounded bg-tertiary text-primary font-sans">gun shot</kbd>
-              </dt>
-              <dd>all of the words</dd>
-              <dt class="justify-self-end flex items-center gap-1.5">
-                {@render queryChips('gun, laser')}
-              </dt>
-              <dd>any of them — separate with commas</dd>
+              {#if isSemanticModeEnabled}
+                <dt class="justify-self-end">
+                  <kbd class="px-1.5 py-0.5 rounded bg-tertiary text-primary font-sans"
+                    >footsteps on wood</kbd
+                  >
+                </dt>
+                <dd>describe the sound</dd>
+                <dt class="justify-self-end flex items-center gap-1.5">
+                  {@render queryChips('footsteps, door creak', true)}
+                </dt>
+                <dd>any of these sounds — separate with commas</dd>
+              {:else}
+                <dt class="justify-self-end">
+                  <kbd class="px-1.5 py-0.5 rounded bg-tertiary text-primary font-sans">gun shot</kbd>
+                </dt>
+                <dd>all of the words</dd>
+                <dt class="justify-self-end flex items-center gap-1.5">
+                  {@render queryChips('gun, laser')}
+                </dt>
+                <dd>any of them — separate with commas</dd>
+              {/if}
             </dl>
           {/if}
         </div>

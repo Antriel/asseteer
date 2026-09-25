@@ -177,9 +177,9 @@
   // Check if similarity search is active
   let isSimilarityMode = $derived(isAudioTab && clapState.similarToAssetId !== null);
 
-  // Text search shows finished alternatives (before the last comma) as chips; semantic and
-  // similarity filtering take the text as typed
-  let chipMode = $derived(!isSimilarityMode && !isSemanticModeEnabled);
+  // Text and semantic search show finished alternatives (before the last comma) as chips;
+  // similarity filtering takes the text as typed
+  let chipMode = $derived(!isSimilarityMode);
   let editParts = $derived(
     chipMode ? splitForEditing(searchInput) : { committed: [] as string[], editing: searchInput },
   );
@@ -270,6 +270,7 @@
   ];
 
   function clearSearchText() {
+    if (debounceTimer) clearTimeout(debounceTimer);
     searchInput = '';
     if (isSimilarityMode) {
       clapState.similarityFilterText = '';
@@ -422,7 +423,9 @@
       >
         {#each editParts.committed as alt, i (i)}
           <span
-            class="h-6 max-w-40 flex-shrink-0 overflow-hidden flex items-center pl-1.5 pr-0.5 text-xs font-medium rounded bg-tertiary text-primary"
+            class="h-6 max-w-40 flex-shrink-0 overflow-hidden flex items-center pl-1.5 pr-0.5 text-xs font-medium rounded {isSemanticModeEnabled
+              ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300'
+              : 'bg-tertiary text-primary'}"
           >
             <button
               class="min-w-0 truncate cursor-text"
@@ -430,7 +433,9 @@
               title="Edit “{alt}”">{alt}</button
             >
             <button
-              class="flex-shrink-0 p-0.5 rounded text-secondary hover:text-primary hover:bg-elevated transition-colors"
+              class="flex-shrink-0 p-0.5 rounded transition-colors {isSemanticModeEnabled
+                ? 'hover:bg-purple-200 dark:hover:bg-purple-800/60'
+                : 'text-secondary hover:text-primary hover:bg-elevated'}"
               onclick={() => removeAlternative(i)}
               aria-label="Remove “{alt}”"
             >

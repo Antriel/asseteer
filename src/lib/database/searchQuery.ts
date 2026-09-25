@@ -169,3 +169,13 @@ export function splitForEditing(text: string): { committed: string[]; editing: s
 export function joinAlternatives(committed: string[], editing: string): string {
   return committed.length ? [...committed, editing].join(', ') : editing;
 }
+
+/**
+ * Semantic (CLAP) search takes each alternative as one phrase: no AND, quotes only protect
+ * commas — `"heavy, metallic impact", door creak` → two phrases.
+ */
+export function semanticAlternatives(text: string): string[] {
+  return splitAlternatives(text)
+    .map((alt) => alt.replace(/"/g, '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}

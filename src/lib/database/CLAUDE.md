@@ -46,7 +46,7 @@ const count = await getAssetCount(db);
 
 | Function | Purpose |
 |----------|---------|
-| `searchAudioSemantic(query, limit?, durationFilter?, folderLocation?)` | Text→audio semantic search |
+| `searchAudioSemantic(queries, limit?, durationFilter?, folderLocation?)` | Text→audio semantic search; `queries` are alternatives (OR, best match wins, `matched_query` says which) |
 | `searchAudioBySimilarity(assetId, limit?, durationFilter?, folderLocation?)` | Find similar audio |
 | `getPendingClapCount()` | Audio assets awaiting CLAP embedding |
 | `checkClapServer()` / `startClapServer()` | Server management |

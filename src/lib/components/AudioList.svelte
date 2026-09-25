@@ -23,7 +23,7 @@
   import { formatDurationCompact, formatFileSize, formatSimilarity } from '$lib/utils/format';
 
   // Extended asset type with optional similarity score
-  type AudioAsset = Asset & { similarity?: number };
+  type AudioAsset = Asset & { similarity?: number; matched_query?: number };
 
   interface Props {
     assets: AudioAsset[];
@@ -383,6 +383,14 @@
               <span
                 class="relative flex-shrink-0 px-1 text-[10px] font-semibold tracking-wide text-tertiary border border-default rounded"
                 >ZIP</span
+              >
+            {/if}
+            {#if showSimilarity && asset.matched_query !== undefined && clapState.lastQueries.length > 1}
+              <!-- Several alternatives searched: which one this sound matched -->
+              <span
+                class="relative flex-shrink-0 max-w-32 truncate text-[11px] text-purple-600/80 dark:text-purple-400/80"
+                title="Matched “{clapState.lastQueries[asset.matched_query]}”"
+                >{clapState.lastQueries[asset.matched_query]}</span
               >
             {/if}
             {#if showSimilarity && asset.similarity !== undefined}

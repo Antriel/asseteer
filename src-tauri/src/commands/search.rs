@@ -6,6 +6,7 @@ use crate::clap::{cache as embedding_cache, ensure_server_running, get_clap_clie
 use crate::AppState;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::Mutex;
 use tauri::State;
 
 /// Result of a semantic search query - includes full asset data for direct use
@@ -30,6 +31,8 @@ pub struct SemanticSearchResult {
     pub channels: Option<i32>,
     // Similarity score
     pub similarity: f32,
+    /// Which of the search's alternatives gave `similarity` (0 for similarity search)
+    pub matched_query: usize,
 }
 
 /// Row for fetching asset metadata (no embedding).
@@ -77,6 +80,7 @@ fn build_search_results(
                 sample_rate: m.sample_rate,
                 channels: m.channels,
                 similarity: r.similarity,
+                matched_query: r.matched_query,
             })
         })
         .collect()
@@ -121,25 +125,67 @@ async fn fetch_asset_metadata(
     Ok(map)
 }
 
-/// Semantic search for audio assets using CLAP embeddings
+/// Recently embedded query texts. The search box re-runs the whole query on every
+/// keystroke, so without this each finished alternative would be re-embedded each time.
+static TEXT_EMBEDDINGS: Mutex<Vec<(String, Vec<f32>)>> = Mutex::new(Vec::new());
+const TEXT_EMBEDDINGS_CAP: usize = 64;
+
+/// Embed query texts (from cache where possible, the rest concurrently), in order.
+async fn embed_texts(texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    let mut out: Vec<Option<Vec<f32>>> = {
+        let cache = TEXT_EMBEDDINGS.lock().unwrap();
+        texts
+            .iter()
+            .map(|t| cache.iter().find(|(k, _)| k == t).map(|(_, e)| e.clone()))
+            .collect()
+    };
+
+    let client = get_clap_client().await;
+    let mut tasks = tokio::task::JoinSet::new();
+    for (i, text) in texts.iter().enumerate() {
+        if out[i].is_none() {
+            let text = text.clone();
+            tasks.spawn(async move { (i, text.clone(), client.embed_text(&text).await) });
+        }
+    }
+    while let Some(joined) = tasks.join_next().await {
+        let (i, text, embedding) = joined.map_err(|e| e.to_string())?;
+        let embedding = embedding?;
+        let mut cache = TEXT_EMBEDDINGS.lock().unwrap();
+        if cache.len() >= TEXT_EMBEDDINGS_CAP {
+            cache.remove(0);
+        }
+        cache.push((text, embedding.clone()));
+        out[i] = Some(embedding);
+    }
+
+    Ok(out.into_iter().map(|e| e.expect("every text embedded")).collect())
+}
+
+/// Semantic search for audio assets using CLAP embeddings. `queries` are alternatives (the
+/// search box's comma-separated parts): each asset scores its best match to any of them.
 #[tauri::command]
 pub async fn search_audio_semantic(
-    query: String,
+    queries: Vec<String>,
     limit: usize,
     min_duration_ms: Option<i64>,
     max_duration_ms: Option<i64>,
     folder_filter: Option<FolderFilter>,
     state: State<'_, AppState>,
 ) -> Result<Vec<SemanticSearchResult>, String> {
+    if queries.is_empty() {
+        return Ok(Vec::new());
+    }
+
     // Ensure server is running
     ensure_server_running().await?;
 
-    // Get query embedding from CLAP server
-    let query_embedding = get_clap_client().await.embed_text(&query).await?;
+    // Get query embeddings from CLAP server
+    let query_embeddings = embed_texts(&queries).await?;
 
     // Use cached embeddings for similarity search
     let ranked = embedding_cache::search(
-        &query_embedding,
+        &query_embeddings,
         limit,
         None,
         min_duration_ms,
@@ -182,7 +228,7 @@ pub async fn search_audio_by_similarity(
 
     // Use cached embeddings for similarity search
     let ranked = embedding_cache::search(
-        &source_embedding,
+        std::slice::from_ref(&source_embedding),
         limit,
         None,
         min_duration_ms,

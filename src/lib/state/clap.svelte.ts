@@ -20,6 +20,7 @@ import {
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { DurationFilter } from '$lib/state/assets.svelte';
 import type { FolderLocation } from '$lib/types';
+import { semanticAlternatives } from '$lib/database/searchQuery';
 
 // Maximum number of semantic search results to display
 const MAX_SEMANTIC_RESULTS = 500;
@@ -65,6 +66,8 @@ class ClapState {
   semanticResults = $state<SemanticSearchResult[]>([]);
   isSearching = $state(false);
   lastSearchQuery = $state('');
+  /** The alternatives of the last text search; results' `matched_query` indexes these */
+  lastQueries = $state<string[]>([]);
   hasMoreResults = $state(false);
 
   // Similarity search (find similar to an audio asset)
@@ -167,10 +170,12 @@ class ClapState {
   ): Promise<SemanticSearchResult[]> {
     // Increment version to cancel any in-progress search
     const currentVersion = ++this.searchVersion;
+    const queries = semanticAlternatives(query);
 
-    if (!query.trim()) {
+    if (!queries.length) {
       this.semanticResults = [];
       this.lastSearchQuery = '';
+      this.lastQueries = [];
       this.isSearching = false;
       this.hasMoreResults = false;
       return [];
@@ -180,6 +185,7 @@ class ClapState {
     this.semanticResults = [];
     this.isSearching = true;
     this.lastSearchQuery = query;
+    this.lastQueries = queries;
     this.hasMoreResults = false;
 
     // Ensure server is running
@@ -199,7 +205,12 @@ class ClapState {
 
     try {
       // Request one extra to detect if there are more results
-      const results = await searchAudioSemantic(query, limit + 1, durationFilter, folderLocation);
+      const results = await searchAudioSemantic(
+        queries,
+        limit + 1,
+        durationFilter,
+        folderLocation,
+      );
 
       // Only update results if this search is still current
       if (currentVersion === this.searchVersion) {
@@ -245,6 +256,7 @@ class ClapState {
     this.similarToFilename = filename;
     this.semanticSearchEnabled = true;
     this.lastSearchQuery = '';
+    this.lastQueries = [];
     this.hasMoreResults = false;
 
     // Check if cancelled
@@ -292,12 +304,15 @@ class ClapState {
   }
 
   /**
-   * Clear semantic search results
+   * Clear semantic search query and results. Leaves the mode alone: semantic search is only
+   * switched on/off explicitly (toggleSemanticSearch), never as a side effect of clearing.
    */
   clearSearch() {
+    ++this.searchVersion; // drop any search still in flight
+    this.isSearching = false;
     this.semanticResults = [];
     this.lastSearchQuery = '';
-    this.semanticSearchEnabled = false;
+    this.lastQueries = [];
     this.hasMoreResults = false;
     this.similarToAssetId = null;
     this.similarToFilename = null;

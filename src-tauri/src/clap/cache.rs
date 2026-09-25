@@ -3,7 +3,7 @@
 //! Stores all embeddings in a flat contiguous f32 buffer for cache-friendly
 //! access and uses rayon to parallelize similarity computation across cores.
 
-use super::embedding::{blob_to_embedding, cosine_similarity};
+use super::embedding::{best_similarity, blob_to_embedding};
 use rayon::prelude::*;
 use serde::Deserialize;
 use sqlx::SqlitePool;
@@ -164,14 +164,17 @@ pub fn invalidate() {
 pub struct SimilarityResult {
     pub asset_id: i64,
     pub similarity: f32,
+    /// Index of the query embedding that gave `similarity` (always 0 for one query)
+    pub matched_query: usize,
 }
 
-/// Search the cache using a query embedding with optional duration filter.
+/// Search the cache using one or more query embeddings with optional filters. With several,
+/// they are alternatives (OR): each entry scores its best similarity to any of them.
 /// Returns top `limit` results sorted by similarity descending.
 ///
 /// Uses rayon to parallelize dot product computation across CPU cores.
 pub async fn search(
-    query_embedding: &[f32],
+    query_embeddings: &[Vec<f32>],
     limit: usize,
     exclude_asset_id: Option<i64>,
     min_duration_ms: Option<i64>,
@@ -185,12 +188,10 @@ pub async fn search(
     let cache = guard.as_ref().unwrap();
     let dim = cache.dim;
 
-    if dim == 0 {
+    if dim == 0 || query_embeddings.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Clone what we need for the rayon closure (query embedding is small)
-    let query = query_embedding.to_vec();
     let embeddings = &cache.embeddings;
     let meta = &cache.meta;
 
@@ -255,9 +256,11 @@ pub async fn search(
         })
         .map(|(i, m)| {
             let emb = &embeddings[i * dim..(i + 1) * dim];
+            let (matched_query, similarity) = best_similarity(query_embeddings, emb);
             SimilarityResult {
                 asset_id: m.asset_id,
-                similarity: cosine_similarity(&query, emb),
+                similarity,
+                matched_query,
             }
         })
         .collect();

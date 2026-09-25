@@ -90,8 +90,10 @@ input's placeholder becomes `or…`); click a chip to edit it, Backspace pulls t
 back. The alternatives + input sit in a strip that scrolls horizontally (chips keep their
 size) with a 12px fade on the left once scrolled. The idle empty state shows the two forms
 as a two-line legend; a several-word search with no results shows the comma form as a
-one-click suggestion with its count. Only text search gets chips — semantic and similarity
-filtering take the text as typed.
+one-click suggestion with its count. Semantic search uses the same commas and chips (purple,
+since it's AI): each alternative is one phrase, quotes protect a descriptive comma, and with
+several alternatives each result row shows which one it matched (small purple label before
+the %). Similarity filtering takes the text as typed.
 
 **Segmented control** (search scope, end-of-track mode): a `radiogroup`, outer
 `p-0.5 bg-primary border border-default rounded-md`; segments `rounded`, active

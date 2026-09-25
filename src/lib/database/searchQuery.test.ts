@@ -5,6 +5,7 @@ import {
   parseSearchQuery,
   splitAlternatives,
   joinAlternatives,
+  semanticAlternatives,
   splitForEditing,
   splitTerms,
   suggestAlternatives,
@@ -59,6 +60,16 @@ describe('splitForEditing', () => {
       expect(joinAlternatives(committed, editing)).toBe(text);
     }
     expect(joinAlternatives([], 'x')).toBe('x');
+  });
+});
+
+describe('semanticAlternatives', () => {
+  it('each alternative is one phrase; quotes only protect commas', () => {
+    expect(semanticAlternatives('footsteps on  wood, "heavy, metallic impact" ,, ')).toEqual([
+      'footsteps on wood',
+      'heavy, metallic impact',
+    ]);
+    expect(semanticAlternatives(' , ')).toEqual([]);
   });
 });
 

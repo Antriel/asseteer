@@ -18,6 +18,17 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
+/// Score an embedding against several query embeddings (alternatives, OR): the best
+/// similarity and which query produced it. `queries` must not be empty.
+pub fn best_similarity(queries: &[Vec<f32>], emb: &[f32]) -> (usize, f32) {
+    queries
+        .iter()
+        .map(|q| cosine_similarity(q, emb))
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .expect("at least one query embedding")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -32,6 +43,18 @@ mod tests {
         for (a, b) in embedding.iter().zip(restored.iter()) {
             assert!((a - b).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn test_best_similarity_takes_the_closest_alternative() {
+        let queries = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0], vec![0.0, 0.0, 1.0]];
+        let (index, sim) = best_similarity(&queries, &[0.1, 0.8, 0.6]);
+        assert_eq!(index, 1);
+        assert!((sim - 0.8).abs() < 1e-6);
+        // A single query is plain cosine similarity
+        let (index, sim) = best_similarity(&queries[..1], &[0.6, 0.8, 0.0]);
+        assert_eq!(index, 0);
+        assert!((sim - 0.6).abs() < 1e-6);
     }
 
     #[test]
