@@ -8,6 +8,7 @@
 import {
   checkClapServer,
   startClapServer,
+  stopClapServer,
   searchAudioSemantic,
   searchAudioBySimilarity,
   getClapServerInfo,
@@ -44,6 +45,7 @@ class ClapState {
   serverAvailable = $state(false);
   serverChecking = $state(false);
   serverStarting = $state(false);
+  serverStopping = $state(false);
 
   // Server info (from detailed health check)
   device = $state<string | null>(null);
@@ -54,6 +56,7 @@ class ClapState {
   setupStatus = $state<ClapSetupStatus>('not-configured');
   setupError = $state<string | null>(null);
   cacheSize = $state(0);
+  clearingCache = $state(false);
   /** True once initialize() has finished its first check — avoids false "not-configured" flash */
   setupKnown = $state(false);
 
@@ -205,12 +208,7 @@ class ClapState {
 
     try {
       // Request one extra to detect if there are more results
-      const results = await searchAudioSemantic(
-        queries,
-        limit + 1,
-        durationFilter,
-        folderLocation,
-      );
+      const results = await searchAudioSemantic(queries, limit + 1, durationFilter, folderLocation);
 
       // Only update results if this search is still current
       if (currentVersion === this.searchVersion) {
@@ -366,12 +364,37 @@ class ClapState {
   }
 
   /**
-   * Clear the CLAP/uv cache and reset state
+   * Stop the CLAP server. It starts again on the next semantic search or CLAP processing.
+   */
+  async stopServer(): Promise<void> {
+    this.serverStopping = true;
+    try {
+      await stopClapServer();
+      this.markStopped('offline');
+    } finally {
+      this.serverStopping = false;
+    }
+  }
+
+  /**
+   * Clear the CLAP/uv cache (stopping the server first) and reset state
    */
   async clearCache(): Promise<void> {
-    await clearClapCache();
-    this.cacheSize = 0;
-    this.setupStatus = 'not-configured';
+    this.clearingCache = true;
+    try {
+      await clearClapCache();
+      this.cacheSize = 0;
+      this.markStopped('not-configured');
+    } finally {
+      this.clearingCache = false;
+      // A failed clear may have deleted part of the cache
+      await this.refreshCacheSize();
+    }
+  }
+
+  private markStopped(status: ClapSetupStatus) {
+    this.stopHealthMonitor();
+    this.setupStatus = status;
     this.serverAvailable = false;
     this.device = null;
     this.model = null;

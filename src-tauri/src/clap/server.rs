@@ -9,6 +9,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use super::client::{get_clap_client, set_active_port};
+use super::job_object::ProcessTree;
 use super::logs;
 use super::uv;
 
@@ -33,7 +34,10 @@ fn emit_startup_progress(phase: &str, detail: Option<&str>) {
     }
 }
 
-static SERVER_PROCESS: Lazy<Mutex<Option<Child>>> = Lazy::new(|| Mutex::new(None));
+static SERVER_PROCESS: Lazy<Mutex<Option<ProcessTree>>> = Lazy::new(|| Mutex::new(None));
+
+/// How long a stop waits for the server's processes to exit before reporting failure.
+const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Try ports 5555, 5556, 5557 in sequence and return the first one that is free.
 /// Falls back to 5555 if all are in use (server startup will then fail with a clear error).
@@ -90,18 +94,18 @@ pub async fn ensure_server_running() -> Result<(), String> {
 
     println!("[CLAP] Process spawned with PID: {}", child.id());
 
-    // Assign to Windows Job Object so the OS kills it if we crash
-    if let Err(e) = super::job_object::assign_child_to_job(&child) {
-        println!("[CLAP] Warning: could not assign to job object: {}", e);
-    }
-
-    *guard = Some(child);
+    // Own the whole uv -> python tree, so stopping (or our own crash) takes all of it down
+    *guard = Some(ProcessTree::new(child));
 
     // Hold lock until server is ready — prevents concurrent callers from
     // spawning duplicate server processes during the startup window
     emit_startup_progress("waiting-for-server", Some("Starting Python server…"));
     let child_ref = guard.as_mut().expect("just assigned");
     if let Err(e) = wait_for_server_ready(child_ref, &log_path).await {
+        // Don't leave a half-started server in the slot: it would count as running
+        if let Some(mut tree) = guard.take() {
+            let _ = tree.kill_and_wait(STOP_TIMEOUT);
+        }
         emit_startup_progress("error", Some(&e));
         return Err(e);
     }
@@ -318,7 +322,7 @@ fn start_server_venv_fallback(
 /// We check process liveness on every iteration for a fast-fail if the
 /// process died, and tail the log every 10s to show download progress.
 async fn wait_for_server_ready(
-    child: &mut Child,
+    child: &mut ProcessTree,
     log_path: &std::path::Path,
 ) -> Result<(), String> {
     println!("[CLAP] Waiting for server to be ready (GPU first-run may take 20+ minutes)...");
@@ -435,19 +439,21 @@ async fn call_preload() {
 pub fn stop_server() {
     // Use try_lock to avoid blocking - this is called during shutdown
     if let Ok(mut guard) = SERVER_PROCESS.try_lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
+        if let Some(mut tree) = guard.take() {
+            tree.kill();
         }
     }
 }
 
-/// Stops the CLAP server and waits for the process to fully exit.
-/// Use this before deleting files the server may have open.
-pub async fn stop_server_and_wait() {
+/// Stops the CLAP server and waits until all of its processes have exited, so the files
+/// they had open (the uv cache) are released. Waits for a server that is still starting.
+pub async fn stop_server_and_wait() -> Result<(), String> {
     let mut guard = SERVER_PROCESS.lock().await;
-    if let Some(mut child) = guard.take() {
-        let _ = child.kill();
-        // Wait for the process to exit so the OS releases file handles
-        let _ = child.wait();
-    }
+    let Some(mut tree) = guard.take() else {
+        return Ok(());
+    };
+    println!("[CLAP] Stopping server (PID {})", tree.id());
+    tokio::task::spawn_blocking(move || tree.kill_and_wait(STOP_TIMEOUT))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }

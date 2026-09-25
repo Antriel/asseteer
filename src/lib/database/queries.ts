@@ -578,6 +578,13 @@ export async function getClapServerInfo(): Promise<ClapServerInfo> {
 }
 
 /**
+ * Stop the CLAP server, waiting until its processes have exited
+ */
+export async function stopClapServer(): Promise<void> {
+  return invoke('stop_clap_server');
+}
+
+/**
  * Get the size of the uv/CLAP cache in bytes
  */
 export async function getClapCacheSize(): Promise<number> {

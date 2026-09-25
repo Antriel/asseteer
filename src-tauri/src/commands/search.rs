@@ -288,6 +288,12 @@ pub async fn start_clap_server() -> Result<(), String> {
     ensure_server_running().await
 }
 
+/// Stop the CLAP server (and every process it started), waiting until they have exited
+#[tauri::command]
+pub async fn stop_clap_server() -> Result<(), String> {
+    crate::clap::stop_server_and_wait().await
+}
+
 /// Get detailed CLAP server health info (device, model, etc.)
 #[tauri::command]
 pub async fn get_clap_server_info() -> Result<HealthInfo, String> {
@@ -308,18 +314,27 @@ pub fn get_clap_cache_size() -> Result<u64, String> {
 #[tauri::command]
 pub async fn clear_clap_cache() -> Result<(), String> {
     // Stop the server first so it releases file locks on the cache directory
-    crate::clap::stop_server_and_wait().await;
+    crate::clap::stop_server_and_wait()
+        .await
+        .map_err(|e| format!("Failed to stop CLAP server: {}", e))?;
 
-    let cache_dir = crate::clap::uv::uv_cache_dir();
-    if cache_dir.exists() {
-        std::fs::remove_dir_all(&cache_dir).map_err(|e| format!("Failed to clear cache: {}", e))?;
-    }
-    // Also remove the uv binary so it re-downloads fresh
-    let uv_path = crate::clap::uv::uv_bin_path();
-    if uv_path.exists() {
-        std::fs::remove_file(&uv_path).map_err(|e| format!("Failed to remove uv binary: {}", e))?;
-    }
-    Ok(())
+    // Several GB of small files: delete off the async runtime
+    tokio::task::spawn_blocking(|| {
+        let cache_dir = crate::clap::uv::uv_cache_dir();
+        if cache_dir.exists() {
+            std::fs::remove_dir_all(&cache_dir)
+                .map_err(|e| format!("Failed to clear cache: {}", e))?;
+        }
+        // Also remove the uv binary so it re-downloads fresh
+        let uv_path = crate::clap::uv::uv_bin_path();
+        if uv_path.exists() {
+            std::fs::remove_file(&uv_path)
+                .map_err(|e| format!("Failed to remove uv binary: {}", e))?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]

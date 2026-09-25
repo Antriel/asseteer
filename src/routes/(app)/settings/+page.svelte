@@ -1,12 +1,21 @@
 <script lang="ts">
   import { clapState, type ClapSetupStatus, type ClapStartupPhase } from '$lib/state/clap.svelte';
   import { checkClapSetupState } from '$lib/database/queries';
+  import { processingState, isCategoryQueued, isCategoryStarting } from '$lib/state/tasks.svelte';
   import { showToast, showConfirm } from '$lib/state/ui.svelte';
   import { formatFileSize } from '$lib/utils/format';
   import { invoke } from '@tauri-apps/api/core';
   import { openPath } from '@tauri-apps/plugin-opener';
 
   let isFirstTimeSetup = $state(false);
+
+  // CLAP processing would restart a stopped server (and re-download a cleared cache)
+  let clapProcessing = $derived(
+    !!processingState.categoryProgress.get('clap')?.isRunning ||
+      isCategoryStarting(processingState, 'clap') ||
+      isCategoryQueued(processingState, 'clap'),
+  );
+  let clapBusy = $derived(clapState.serverStopping || clapState.clearingCache);
   let showDownloadStep = $state(false);
 
   // Database info
@@ -156,6 +165,15 @@
     });
   }
 
+  async function handleStopServer() {
+    try {
+      await clapState.stopServer();
+      showToast('CLAP server stopped', 'success');
+    } catch (error) {
+      showToast('Failed to stop CLAP server: ' + error, 'error');
+    }
+  }
+
   async function handleClearCache() {
     const confirmed = await showConfirm(
       'This will remove the downloaded Python environment and AI model. You will need to set up again to use semantic search.',
@@ -300,6 +318,29 @@
               <span class="text-tertiary">Model</span>
               <span class="text-secondary font-mono text-xs">{clapState.model ?? 'Unknown'}</span>
             </div>
+            <div class="flex items-center justify-between gap-4 pt-1">
+              <span class="text-xs text-tertiary">
+                {clapProcessing
+                  ? 'In use by CLAP processing.'
+                  : 'Starts again on the next semantic search.'}
+              </span>
+              <button
+                onclick={handleStopServer}
+                disabled={clapBusy || clapProcessing}
+                class="shrink-0 px-3 py-1.5 text-xs font-medium rounded-lg border border-default text-secondary hover:text-primary hover:bg-tertiary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {#if clapState.serverStopping}
+                  <span class="inline-flex items-center gap-1.5">
+                    <span
+                      class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"
+                    ></span>
+                    Stopping...
+                  </span>
+                {:else}
+                  Stop Server
+                {/if}
+              </button>
+            </div>
           </div>
 
           <!-- Offline: restart button -->
@@ -308,7 +349,8 @@
             <span class="text-sm text-secondary">CLAP server not running</span>
             <button
               onclick={handleSetup}
-              class="px-4 py-2 text-sm font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors"
+              disabled={clapBusy}
+              class="px-4 py-2 text-sm font-medium rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Start Server
             </button>
@@ -331,9 +373,20 @@
               </button>
               <button
                 onclick={handleClearCache}
-                class="px-3 py-1.5 text-xs font-medium rounded-lg border border-default text-secondary hover:text-primary hover:bg-tertiary transition-colors"
+                disabled={clapBusy || clapProcessing || clapState.setupStatus === 'setting-up'}
+                title={clapProcessing ? 'CLAP processing is running' : undefined}
+                class="px-3 py-1.5 text-xs font-medium rounded-lg border border-default text-secondary hover:text-primary hover:bg-tertiary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Clear Cache
+                {#if clapState.clearingCache}
+                  <span class="inline-flex items-center gap-1.5">
+                    <span
+                      class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"
+                    ></span>
+                    Clearing...
+                  </span>
+                {:else}
+                  Clear Cache
+                {/if}
               </button>
             </div>
           </div>
