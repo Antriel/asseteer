@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import type { Asset } from '$lib/types';
   import { viewState } from '$lib/state/view.svelte';
   import ImageThumbnail from './ImageThumbnail.svelte';
   import AssetContextMenu from './shared/AssetContextMenu.svelte';
   import { showInFolder, openDirectory, dragOut } from '$lib/actions/assetActions';
+  import { ListSelection } from '$lib/state/listSelection.svelte';
 
   interface Props {
     assets: Asset[];
@@ -78,8 +79,36 @@
     contextMenu = { x: e.clientX, y: e.clientY, asset };
   }
 
-  function handleImageClick(asset: Asset) {
+  function handleImageClick(e: MouseEvent, asset: Asset) {
+    if (handleSelectClick(e, asset)) return;
     viewState.openLightbox(asset);
+  }
+
+  // Ctrl/Shift+click picks tiles for drag / Copy Path; a plain click opens the lightbox
+  const selection = new ListSelection();
+
+  $effect(() => {
+    const list = assets;
+    untrack(() => {
+      if (selection.size > 0) selection.retain(list.map((a) => a.id));
+    });
+  });
+
+  /** Returns true when the click was a selection gesture (and must not open anything). */
+  function handleSelectClick(e: MouseEvent, asset: Asset): boolean {
+    if (e.ctrlKey || e.metaKey) {
+      selection.toggle(asset.id);
+      return true;
+    }
+    if (e.shiftKey) {
+      selection.extendTo(
+        assets.map((a) => a.id),
+        asset.id,
+      );
+      return true;
+    }
+    selection.clearAt(asset.id);
+    return false;
   }
 
   function handleScroll(event: Event) {
@@ -122,6 +151,7 @@
     x={contextMenu.x}
     y={contextMenu.y}
     asset={contextMenu.asset}
+    targets={selection.targets(assets, contextMenu.asset)}
     onclose={() => (contextMenu = null)}
     onShowInFolder={(a) => showInFolder(a, 'image')}
     onOpenDirectory={openDirectory}
@@ -136,10 +166,14 @@
     >
       {#each visibleAssets as asset (asset.id)}
         <button
-          class="relative bg-secondary border border-default rounded-lg overflow-hidden cursor-pointer hover:border-accent hover:shadow-md hover:-translate-y-0.5"
-          onclick={() => handleImageClick(asset)}
+          class="relative bg-secondary border rounded-lg overflow-hidden cursor-pointer select-none hover:border-accent hover:shadow-md hover:-translate-y-0.5 {selection.has(
+            asset.id,
+          )
+            ? 'border-accent ring-2 ring-accent'
+            : 'border-default'}"
+          onclick={(e) => handleImageClick(e, asset)}
           oncontextmenu={(e) => handleContextMenu(e, asset)}
-          {@attach dragOut(asset)}
+          {@attach dragOut(() => selection.targets(assets, asset))}
         >
           <ImageThumbnail {asset} size={viewState.thumbnailSize} />
           {#if asset.format === 'gif'}

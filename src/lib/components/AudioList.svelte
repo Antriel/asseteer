@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { Asset } from '$lib/types';
   import { getAssetDisplayPath, getAssetRelativeDirectory } from '$lib/types';
   import AudioPlayer from './AudioPlayer.svelte';
@@ -20,6 +21,7 @@
   import { showToast } from '$lib/state/ui.svelte';
   import { settings, type AudioEndMode } from '$lib/state/settings.svelte';
   import { showInFolder, openDirectory, dragOut } from '$lib/actions/assetActions';
+  import { ListSelection } from '$lib/state/listSelection.svelte';
   import { formatDurationCompact, formatFileSize, formatSimilarity } from '$lib/utils/format';
 
   // Extended asset type with optional similarity score
@@ -32,7 +34,17 @@
 
   let { assets, showSimilarity = false }: Props = $props();
 
+  // The sound in the transport (the "current" row)…
   let selectedAsset = $state<Asset | null>(null);
+  // …and the rows picked for drag / Copy Path, which usually is just that one
+  const selection = new ListSelection();
+
+  $effect(() => {
+    const list = assets;
+    untrack(() => {
+      if (selection.size > 0) selection.retain(list.map((a) => a.id));
+    });
+  });
   let shouldAutoPlay = $state(false);
   let playKey = $state(0);
   let audioPlayerRef = $state<ReturnType<typeof AudioPlayer> | null>(null);
@@ -66,6 +78,22 @@
     return channels === 1 ? 'Mono' : channels === 2 ? 'Stereo' : `${channels} ch`;
   }
 
+  function handleRowClick(e: MouseEvent, asset: Asset) {
+    if (e.ctrlKey || e.metaKey) {
+      selection.toggle(asset.id);
+      containerRef?.focus();
+    } else if (e.shiftKey) {
+      selection.extendTo(
+        assets.map((a) => a.id),
+        asset.id,
+      );
+      containerRef?.focus();
+    } else {
+      selection.only(asset.id);
+      playAsset(asset);
+    }
+  }
+
   function playAsset(asset: Asset) {
     if (selectedAsset?.id === asset.id) {
       // Same asset - restart playback from beginning
@@ -86,13 +114,26 @@
     return assets.findIndex((a) => a.id === selectedAsset!.id);
   }
 
-  function navigateToIndex(newIndex: number) {
+  /**
+   * Move the current row. `select`: `only` collapses the selection to it (arrow keys),
+   * `extend` grows the range to it (Shift+arrows), `follow` leaves a multi-selection
+   * alone (auto-advance at the end of a sound).
+   */
+  function navigateToIndex(newIndex: number, select: 'only' | 'extend' | 'follow' = 'only') {
     if (newIndex < 0 || newIndex >= assets.length) return;
 
     const newAsset = assets[newIndex];
     const wasPlaying = shouldContinuePlaying;
 
     selectedAsset = newAsset;
+    if (select === 'extend') {
+      selection.extendTo(
+        assets.map((a) => a.id),
+        newAsset.id,
+      );
+    } else if (select === 'only' || selection.size <= 1) {
+      selection.only(newAsset.id);
+    }
 
     // Scroll to make the item visible with 1 item buffer
     virtualListRef?.scrollToIndex(newIndex, 1);
@@ -129,14 +170,17 @@
   function handleKeyDown(e: KeyboardEvent) {
     const currentIndex = getSelectedIndex();
 
+    // Shift+arrows extend the selection; Shift+Tab is plain "up"
+    const select = e.shiftKey && e.key.startsWith('Arrow') ? 'extend' : 'only';
+
     // Arrow Up / Shift+Tab - navigate up
     if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) {
       e.preventDefault();
       if (currentIndex <= 0) {
         // Already at top or no selection - select first item
-        navigateToIndex(0);
+        navigateToIndex(0, select);
       } else {
-        navigateToIndex(currentIndex - 1);
+        navigateToIndex(currentIndex - 1, select);
       }
       return;
     }
@@ -146,10 +190,18 @@
       e.preventDefault();
       if (currentIndex < 0) {
         // No selection - select first item
-        navigateToIndex(0);
+        navigateToIndex(0, select);
       } else if (currentIndex < assets.length - 1) {
-        navigateToIndex(currentIndex + 1);
+        navigateToIndex(currentIndex + 1, select);
       }
+      return;
+    }
+
+    // Escape - collapse a multi-selection back to the current sound
+    if (e.key === 'Escape' && selection.size > 1) {
+      e.preventDefault();
+      if (selectedAsset) selection.only(selectedAsset.id);
+      else selection.clearAt(null);
       return;
     }
 
@@ -159,6 +211,7 @@
       if (!selectedAsset && assets.length > 0) {
         // No selection - select and play first item
         selectedAsset = assets[0];
+        selection.only(assets[0].id);
         shouldAutoPlay = true;
         shouldContinuePlaying = true;
       } else if (audioPlayerRef) {
@@ -227,7 +280,7 @@
           // Note: onPause is called before onEnded, so we need to restore it
           shouldContinuePlaying = true;
           if (settings.audioEndMode === 'next') {
-            navigateToIndex(getSelectedIndex() + 1);
+            navigateToIndex(getSelectedIndex() + 1, 'follow');
           }
         }}
       >
@@ -250,6 +303,13 @@
                 .join(' · ')}
             </p>
             <div class="flex items-center gap-0.5 ml-auto flex-shrink-0">
+              {#if selection.size > 1}
+                <span
+                  class="mr-2 text-xs text-accent whitespace-nowrap"
+                  title="Drag a selected row to take them all · Esc to clear"
+                  >{selection.size} selected</span
+                >
+              {/if}
               <button
                 class="w-6 h-6 flex items-center justify-center text-tertiary hover:text-purple-500 hover:bg-tertiary rounded transition-colors"
                 onclick={() => findSimilar(selectedAsset! as AudioAsset)}
@@ -338,12 +398,13 @@
         {#each visibleItems as asset (asset.id)}
           {@const selected = selectedAsset?.id === asset.id}
           <button
-            class="group relative w-full h-8 flex items-center gap-3 pl-3 pr-4 text-left text-sm border-b border-subtle focus:outline-none {selected
+            class="group relative w-full h-8 flex items-center gap-3 pl-3 pr-4 text-left text-sm border-b border-subtle select-none focus:outline-none {selected ||
+            selection.has(asset.id)
               ? 'bg-accent-light'
               : 'hover:bg-secondary'}"
-            onclick={() => playAsset(asset)}
+            onclick={(e) => handleRowClick(e, asset)}
             oncontextmenu={(e) => handleContextMenu(e, asset)}
-            {@attach dragOut(asset)}
+            {@attach dragOut(() => selection.targets(assets, asset))}
             tabindex="-1"
             title={getAssetDisplayPath(asset)}
           >
@@ -436,6 +497,7 @@
     x={contextMenu.x}
     y={contextMenu.y}
     asset={contextMenu.asset}
+    targets={selection.targets(assets, contextMenu.asset)}
     onclose={() => (contextMenu = null)}
     onShowInFolder={(a) => showInFolder(a, viewState.activeTab === 'images' ? 'image' : 'audio')}
     onOpenDirectory={openDirectory}

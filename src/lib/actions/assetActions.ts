@@ -83,14 +83,14 @@ export async function openDirectory(asset: Asset) {
 }
 
 /**
- * Copy the asset's full path. A ZIP entry has no path of its own, so it gets its
- * location inside the archive (e.g. `D:\Packs\Retro.zip\Sounds\coin.wav`).
+ * Copy the assets' full paths, one per line. A ZIP entry has no path of its own, so it
+ * gets its location inside the archive (e.g. `D:\Packs\Retro.zip\Sounds\coin.wav`).
  */
-export async function copyAssetPath(asset: Asset) {
-  const path = getAssetDisplayPath(asset).replace(/[\\/]/g, sep());
+export async function copyAssetPaths(assets: Asset[]) {
+  const paths = assets.map((a) => getAssetDisplayPath(a).replace(/[\\/]/g, sep()));
   try {
-    await navigator.clipboard.writeText(path);
-    showToast('Path copied', 'success');
+    await navigator.clipboard.writeText(paths.join('\n'));
+    showToast(paths.length === 1 ? 'Path copied' : `${paths.length} paths copied`, 'success');
   } catch (error) {
     showToast('Failed to copy path: ' + error, 'error');
   }
@@ -100,13 +100,15 @@ export async function copyAssetPath(asset: Asset) {
 const DRAG_THRESHOLD_PX = 6;
 
 /**
- * Drag the asset out of the app as a real file — into Audacity, a DAW, Explorer. The
+ * Drag assets out of the app as real files — into Audacity, a DAW, Explorer. The
  * backend extracts ZIP entries (and copies network files) only once a drag starts.
  *
- * `{@attach dragOut(asset)}` on the row/tile. Plain clicks are untouched: nothing
- * happens until the pointer moves past the threshold with the primary button held.
+ * `{@attach dragOut(() => selection.targets(assets, asset))}` on the row/tile: `targets`
+ * is read when the drag starts, so it sees the selection as it is then. Plain clicks are
+ * untouched: nothing happens until the pointer moves past the threshold with the primary
+ * button held.
  */
-export function dragOut(asset: Asset): Attachment<HTMLElement> {
+export function dragOut(targets: () => Asset[]): Attachment<HTMLElement> {
   return (node) => {
     let startX = 0;
     let startY = 0;
@@ -115,7 +117,7 @@ export function dragOut(asset: Asset): Attachment<HTMLElement> {
       if (!(e.buttons & 1)) return stopTracking();
       if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD_PX) return;
       stopTracking();
-      startAssetDrag(asset);
+      startAssetDrag(targets());
     }
 
     function stopTracking() {
@@ -147,19 +149,24 @@ export function dragOut(asset: Asset): Attachment<HTMLElement> {
   };
 }
 
-async function startAssetDrag(asset: Asset) {
+async function startAssetDrag(assets: Asset[]) {
+  if (assets.length === 0) return;
   try {
     await invoke<'dropped' | 'cancelled' | 'released'>('start_asset_drag', {
-      assetId: asset.id,
-      image: renderDragImage(asset),
+      assetIds: assets.map((a) => a.id),
+      image: renderDragImage(assets),
     });
   } catch (error) {
     showToast('Drag failed: ' + error, 'error');
   }
 }
 
-/** A small label under the cursor while dragging: the file's name, as a PNG data URL. */
-function renderDragImage(asset: Asset): string | null {
+/**
+ * A small label under the cursor while dragging — the first file's name, plus how many
+ * more come with it — as a PNG data URL.
+ */
+function renderDragImage(assets: Asset[]): string | null {
+  const [asset] = assets;
   const dpr = window.devicePixelRatio || 1;
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
@@ -171,8 +178,11 @@ function renderDragImage(asset: Asset): string | null {
   ctx.font = font;
   const padX = 10 * dpr;
   const gap = 6 * dpr;
+  const more = assets.length > 1 ? `+${assets.length - 1} more` : '';
   const glyphW = ctx.measureText(glyph).width;
-  canvas.width = Math.ceil(padX * 2 + glyphW + gap + ctx.measureText(text).width);
+  const textW = ctx.measureText(text).width;
+  const moreW = more ? gap * 1.5 + ctx.measureText(more).width : 0;
+  canvas.width = Math.ceil(padX * 2 + glyphW + gap + textW + moreW);
   canvas.height = Math.ceil(28 * dpr);
 
   // Colors from the current theme. Never pure black: Windows keys it out as transparent.
@@ -194,6 +204,10 @@ function renderDragImage(asset: Asset): string | null {
   ctx.fillText(glyph, padX, canvas.height / 2);
   ctx.fillStyle = color('--color-text-primary', '#18181b');
   ctx.fillText(text, padX + glyphW + gap, canvas.height / 2);
+  if (more) {
+    ctx.fillStyle = color('--color-text-secondary', '#57606a');
+    ctx.fillText(more, padX + glyphW + gap + textW + gap * 1.5, canvas.height / 2);
+  }
 
   return canvas.toDataURL('image/png');
 }

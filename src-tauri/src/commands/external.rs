@@ -138,35 +138,58 @@ fn primary_button_held() -> bool {
     true
 }
 
-/// Start a native OS drag of one asset's file out of the window.
+/// Start a native OS drag of assets' files out of the window, in the given order.
 ///
 /// Called by the frontend once the pointer has moved past a threshold with the button
 /// held. Resolves when the drag ends, with `"dropped"`, `"cancelled"`, or `"released"`
-/// (the button came up while the file was being prepared, so no drag was started).
+/// (the button came up while the files were being prepared, so no drag was started).
 /// `image` is an optional `data:image/png;base64,...` drag preview.
 #[tauri::command]
 pub async fn start_asset_drag(
     app: tauri::AppHandle,
     window: tauri::Window,
     state: State<'_, AppState>,
-    asset_id: i64,
+    asset_ids: Vec<i64>,
     image: Option<String>,
 ) -> Result<&'static str, String> {
-    let asset = sqlx::query_as::<_, Asset>(
-        "SELECT a.*, sf.path as folder_path
-         FROM assets a
-         JOIN source_folders sf ON a.folder_id = sf.id
-         WHERE a.id = ?",
-    )
-    .bind(asset_id)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| format!("Failed to load asset: {}", e))?;
+    if asset_ids.is_empty() {
+        return Err("Nothing to drag".into());
+    }
+    // Chunked: a Shift+click range can exceed SQLite's bound-parameter limit
+    let mut assets = Vec::with_capacity(asset_ids.len());
+    for chunk in asset_ids.chunks(500) {
+        let sql = format!(
+            "SELECT a.*, sf.path as folder_path
+             FROM assets a
+             JOIN source_folders sf ON a.folder_id = sf.id
+             WHERE a.id IN ({})",
+            vec!["?"; chunk.len()].join(",")
+        );
+        let mut query = sqlx::query_as::<_, Asset>(&sql);
+        for id in chunk {
+            query = query.bind(id);
+        }
+        assets.extend(
+            query
+                .fetch_all(&state.pool)
+                .await
+                .map_err(|e| format!("Failed to load assets: {}", e))?,
+        );
+    }
+    // Drop order follows the list order the frontend sent, not the DB's
+    let order: std::collections::HashMap<i64, usize> =
+        asset_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    assets.sort_by_key(|a| order.get(&a.id).copied());
 
     let cache_dir = state.drag_cache_dir.clone();
-    let path = tokio::task::spawn_blocking(move || ensure_local_file(&asset, &cache_dir))
-        .await
-        .map_err(|e| e.to_string())??;
+    let paths = tokio::task::spawn_blocking(move || {
+        assets
+            .iter()
+            .map(|asset| ensure_local_file(asset, &cache_dir))
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     let image = match image.as_deref().and_then(|s| s.strip_prefix("data:image/png;base64,")) {
         Some(data) => {
@@ -189,7 +212,7 @@ pub async fn start_asset_drag(
         let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             drag::start_drag(
                 &window,
-                drag::DragItem::Files(vec![path]),
+                drag::DragItem::Files(paths),
                 drag::Image::Raw(image),
                 move |result, _cursor| {
                     let _ = result_tx.send(result);

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import type { Asset } from '$lib/types';
   import { getAssetDisplayPath } from '$lib/types';
   import { formatFileSize } from '$lib/utils/format';
@@ -8,6 +8,7 @@
   import AssetContextMenu from './shared/AssetContextMenu.svelte';
   import { viewState } from '$lib/state/view.svelte';
   import { showInFolder, openDirectory, dragOut } from '$lib/actions/assetActions';
+  import { ListSelection } from '$lib/state/listSelection.svelte';
 
   interface Props {
     assets: Asset[];
@@ -46,6 +47,33 @@
 
   function formatLocation(asset: Asset): string {
     return getAssetDisplayPath(asset);
+  }
+
+  // Ctrl/Shift+click picks tiles for drag / Copy Path; a plain click opens the lightbox
+  const selection = new ListSelection();
+
+  $effect(() => {
+    const list = assets;
+    untrack(() => {
+      if (selection.size > 0) selection.retain(list.map((a) => a.id));
+    });
+  });
+
+  /** Returns true when the click was a selection gesture (and must not open anything). */
+  function handleSelectClick(e: MouseEvent, asset: Asset): boolean {
+    if (e.ctrlKey || e.metaKey) {
+      selection.toggle(asset.id);
+      return true;
+    }
+    if (e.shiftKey) {
+      selection.extendTo(
+        assets.map((a) => a.id),
+        asset.id,
+      );
+      return true;
+    }
+    selection.clearAt(asset.id);
+    return false;
   }
 
   // Context menu
@@ -90,6 +118,7 @@
     x={contextMenu.x}
     y={contextMenu.y}
     asset={contextMenu.asset}
+    targets={selection.targets(assets, contextMenu.asset)}
     onclose={() => (contextMenu = null)}
     onShowInFolder={(a) => showInFolder(a, 'image')}
     onOpenDirectory={openDirectory}
@@ -121,14 +150,25 @@
     <div style="height: {totalHeight}px; position: relative;">
       <div class="absolute w-full" style="transform: translateY({offsetY}px);">
         {#each visibleAssets as asset (asset.id)}
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
           <div
-            class="grid grid-cols-[80px_1fr_100px_120px_100px] items-center px-4 border-b border-default hover:bg-secondary"
+            class="grid grid-cols-[80px_1fr_100px_120px_100px] items-center px-4 border-b border-default select-none {selection.has(
+              asset.id,
+            )
+              ? 'bg-accent-light'
+              : 'hover:bg-secondary'}"
             style="height: {rowHeight}px;"
+            onclick={(e) => handleSelectClick(e, asset)}
             oncontextmenu={(e) => handleContextMenu(e, asset)}
-            {@attach dragOut(asset)}
+            {@attach dragOut(() => selection.targets(assets, asset))}
           >
-            <button class="py-2 cursor-pointer" onclick={() => viewState.openLightbox(asset)}>
+            <button
+              class="py-2 cursor-pointer"
+              onclick={(e) => {
+                // Modifier clicks bubble to the row as selection gestures
+                if (!e.ctrlKey && !e.metaKey && !e.shiftKey) viewState.openLightbox(asset);
+              }}
+            >
               <AssetThumbnail {asset} />
             </button>
             <div class="py-2 text-sm text-primary" title={formatLocation(asset)}>
