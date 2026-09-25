@@ -48,3 +48,61 @@ test('end-of-track mode is a persisted three-way choice', async ({ page }) => {
   const stored = await page.evaluate(() => localStorage.getItem('asseteer-settings'));
   expect(JSON.parse(stored).audioEndMode).toBe('repeat');
 });
+
+const audioState = (page) =>
+  page.evaluate(() => {
+    const a = document.querySelector('audio');
+    const fill = document.querySelector('[aria-label="Seek audio"] .bg-accent');
+    return { paused: a.paused, ended: a.ended, loop: a.loop, t: a.currentTime, fill: fill.style.width };
+  });
+
+const nowPlaying = (page) => page.getByRole('application').locator('p.font-medium').textContent();
+
+// The playhead used to freeze at the last animation-frame sample, visibly short of the end
+// on sounds of a few hundred ms.
+test('a short sound that plays out leaves the progress bar full', async ({ page }) => {
+  for (const f of ['footstep_grass_01.wav', 'laser_blast.wav', 'retro_coin.wav']) {
+    await row(page, f).click();
+    await expect.poll(async () => (await audioState(page)).ended).toBe(true);
+    expect((await audioState(page)).fill).toBe('100%');
+  }
+});
+
+test('"Play next" moves on to the following sound when one ends', async ({ page }) => {
+  await row(page, 'explosion_big.wav').click(); // the transport, and its mode radios, need a selection
+  await page.getByRole('radio', { name: 'Play next' }).click();
+  const names = await page
+    .locator('button[title$=".wav"]')
+    .evaluateAll((rows) => rows.map((r) => r.title.split('/').pop()));
+  const i = names.indexOf('footstep_grass_01.wav');
+  await row(page, names[i]).click();
+
+  await expect.poll(() => nowPlaying(page)).toBe(names[i + 1]);
+  await expect.poll(async () => (await audioState(page)).paused).toBe(false);
+});
+
+test('"Repeat" loops the sound instead of stopping', async ({ page }) => {
+  await row(page, 'laser_blast.wav').click(); // 0.5 s
+  await page.getByRole('radio', { name: 'Repeat' }).click();
+  await page.waitForTimeout(1500);
+
+  const s = await audioState(page);
+  expect(s).toMatchObject({ loop: true, paused: false, ended: false });
+  expect(await nowPlaying(page)).toBe('laser_blast.wav');
+});
+
+test('"Test loop" repeats, starting 5 s before the end', async ({ page }) => {
+  await row(page, 'forest_birds_loop.wav').click(); // 6 s
+  await expect.poll(async () => (await audioState(page)).paused).toBe(false);
+  await page.getByRole('button', { name: 'Test loop' }).click();
+
+  await expect(page.getByRole('radio', { name: 'Repeat' })).toHaveAttribute('aria-checked', 'true');
+  const start = await audioState(page);
+  expect(start.t).toBeGreaterThanOrEqual(1);
+  expect(start.t).toBeLessThan(2);
+  expect(start.paused).toBe(false);
+
+  // Through the loop point and back round
+  await expect.poll(async () => (await audioState(page)).t, { timeout: 8000 }).toBeLessThan(1);
+  expect(await audioState(page)).toMatchObject({ paused: false, ended: false });
+});

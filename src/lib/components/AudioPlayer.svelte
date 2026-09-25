@@ -11,6 +11,8 @@
     isActive?: boolean;
     autoPlay?: boolean;
     restartKey?: number;
+    /** Loop natively (gapless where the codec allows); `onEnded` never fires while set. */
+    loop?: boolean;
     onPlay?: () => void;
     onPause?: () => void;
     onEnded?: () => void;
@@ -28,6 +30,7 @@
     isActive = false,
     autoPlay = false,
     restartKey = 0,
+    loop = false,
     onPlay,
     onPause,
     onEnded,
@@ -44,7 +47,11 @@
 
     const newTime = currentTime + delta * duration;
 
-    if (newTime >= duration) {
+    if (newTime >= duration && loop) {
+      // Looping - wrap around like playback itself would
+      audioElement.currentTime = 0;
+      return { playing: isPlaying, stopped: false };
+    } else if (newTime >= duration) {
       // Seeking past end - stop playback
       audioElement.currentTime = duration;
       audioElement.pause();
@@ -65,6 +72,14 @@
   // Exported function to toggle play/pause from parent
   export function toggle(): void {
     togglePlay();
+  }
+
+  // Exported function to start playback a given number of seconds before the end
+  export function playFromEnd(seconds: number): void {
+    if (!audioElement || !duration) return;
+    audioElement.currentTime = Math.max(0, duration - seconds);
+    currentTime = audioElement.currentTime;
+    if (!isPlaying) togglePlay();
   }
 
   // Exported getter for current playing state
@@ -229,6 +244,9 @@
   }
 
   function handleEnded() {
+    // The RAF loop's last sample lands up to a frame before the end, and the final
+    // timeupdate arrives while still playing - snap so short sounds finish at 100%
+    currentTime = duration;
     isPlaying = false;
     onPause?.();
     onEnded?.();
@@ -323,6 +341,7 @@
   <audio
     bind:this={audioElement}
     src={audioSrc}
+    {loop}
     onloadedmetadata={handleLoadedMetadata}
     oncanplay={handleCanPlay}
     ontimeupdate={handleTimeUpdate}

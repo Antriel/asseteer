@@ -1,12 +1,13 @@
 ---
 # asseteer-8v28
 title: 'Audio player: end-of-track mode toggle and loop test button'
-status: in-progress
+status: completed
 type: feature
 priority: normal
 created_at: 2026-04-02T13:09:46Z
-updated_at: 2026-09-25T09:22:51Z
+updated_at: 2026-09-25T10:18:09Z
 ---
+
 
 Two additions to the audio player controls:
 
@@ -24,4 +25,10 @@ UI done (behaviour intentionally not wired yet):
 
 Remaining:
 - [ ] onEnded honours `audioEndMode` (next → navigate + play; repeat → loop)
-- [ ] Test loop: repeat + seek to max(0, duration − 5s) + play
+- [x] Test loop: repeat + seek to max(0, duration − 5s) + play
+
+## Summary of Changes
+- `AudioPlayer` takes a `loop` prop, bound to the native `<audio loop>`, so Repeat is gapless wherever the codec allows and `ended` never fires. Seeking past the end with → wraps to the start while looping.
+- `AudioList`: in Play next mode, `onEnded` moves to the next row and autoplays it (on the last row it just stops). Test loop sets Repeat and calls the new `AudioPlayer.playFromEnd(5)`.
+- Bug fixed along the way: short sounds finished with the progress bar visibly short of 100%. While playing, only the rAF loop updates `currentTime`, and the final `timeupdate` arrived while still "playing", so the bar froze at the last frame sample (e.g. 98–99% on a 0.5 s sound). `handleEnded` now snaps to `duration`.
+- e2e specs in `tests/e2e/audio.spec.mjs`: bar full after a short sound ends (fails 3/3 without the fix), Play next, Repeat, Test loop.

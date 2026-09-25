@@ -54,10 +54,11 @@
     { mode: 'repeat', label: 'Repeat', icon: RepeatIcon },
   ];
 
-  // UI only for now (asseteer-8v28): the end-of-track behaviour and the seek to
-  // ~5 s before the end are not wired to the player yet.
+  // Audition the loop point: repeat, starting just before the end
   function testLoop() {
     settings.setAudioEndMode('repeat');
+    audioPlayerRef?.playFromEnd(5);
+    containerRef?.focus();
   }
 
   function formatChannels(channels: number | null): string {
@@ -210,6 +211,7 @@
         bind:playing={isPlaying}
         asset={selectedAsset}
         isActive={true}
+        loop={settings.audioEndMode === 'repeat'}
         autoPlay={shouldAutoPlay}
         restartKey={playKey}
         onPlay={() => {
@@ -224,6 +226,9 @@
           // Natural end - keep shouldContinuePlaying true so navigation auto-plays
           // Note: onPause is called before onEnded, so we need to restore it
           shouldContinuePlaying = true;
+          if (settings.audioEndMode === 'next') {
+            navigateToIndex(getSelectedIndex() + 1);
+          }
         }}
       >
         {#snippet info()}
