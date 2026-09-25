@@ -2,7 +2,7 @@ import { test, expect } from './asseteer.mjs';
 
 test.beforeEach(async ({ page, app }) => {
   await app.ensureLibrary();
-  await page.getByRole('button', { name: /^Audio/ }).click();
+  await page.getByRole('radio', { name: 'Audio' }).click();
   await page.getByRole('button', { name: 'Folders' }).first().click();
   await page.getByText('library', { exact: true }).first().click();
   await app.waitForIdle();

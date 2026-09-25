@@ -27,8 +27,10 @@ GitHub-derived neutrals, one accent (blue). Purple is reserved for semantic/CLAP
 | Scrubber track | `bg-track` | unfilled part of progress/meters |
 | Selection | `bg-accent-light` + 2px `bg-accent` left edge | rows, active segment |
 
-Don't use classes that aren't defined in `app.css` (e.g. `bg-default`) — they silently render
-nothing (that was the invisible-progress-bar bug).
+Don't use classes that aren't defined — they silently render nothing (`bg-default` was the
+invisible-progress-bar bug). Only `accent` / `accent-hover` are registered in Tailwind's
+`@theme`, so `ring-accent`, `bg-accent/10`, `hover:bg-accent/90` work; the other tokens
+exist only as the hand-written classes in `app.css` (no opacity modifiers, no `ring-*`).
 
 ## Depth
 
@@ -60,11 +62,27 @@ children. Order of shedding:
 
 - List rows: size (`@xl`), then sample rate + channels (`@3xl`). Filename and duration never go.
 - Transport strip: metadata (`@3xl`), volume (`@2xl`), Test loop (`@xl`), idle hint (`@2xl`).
-- Toolbar: text labels collapse to icons below `@3xl` (Folders, Semantic, inactive Duration),
-  result count hides below `@2xl`, and the row `flex-wrap`s rather than squeezing the search
-  box below `min-w-48`.
+- Toolbar (the search field is the priority element): Folders and inactive Duration are
+  icon-only below `@5xl`, Semantic below `@4xl`, Audio/Images below `@3xl`; result count
+  hides below `@2xl`; the row `flex-wrap`s rather than squeezing the search field below
+  `min-w-72`.
 
 ## Patterns
+
+**Library header**: a single toolbar row — folder-panel toggle · Audio/Images segmented
+switch · search field · Semantic · Duration · view toggles · result count. No tab bar, no
+filter banners. Library totals (hundreds of thousands) go in the switch's tooltip, never in
+labels.
+
+**Search field = everything that decides what matches**: one bordered box
+(`focus-within:ring-accent/60`, purple in semantic mode) holding, in order: search
+icon/spinner · similarity chip (purple) · folder-scope chip (neutral, deepest segment,
+full location in the tooltip) · the bare input · clear × · Name/Path restriction toggles.
+Chips never shrink below their label (`flex-shrink-0 max-w-36`); Backspace in an empty input
+removes the nearest chip. The Name/Path toggles are *optional restrictions*
+(`aria-pressed`, mutually exclusive, click again to clear): neither pressed = both, which is
+the quiet default — never make the user turn a toggle *off* to narrow a search. The
+placeholder states the current scope ("Search audio…" / "Search audio names…").
 
 **Segmented control** (search scope, end-of-track mode): a `radiogroup`, outer
 `p-0.5 bg-primary border border-default rounded-md`; segments `rounded`, active

@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* Register the accent with Tailwind so ring-accent, bg-accent/10, hover:bg-accent/90 …
+   exist; the :root values below (per theme) override this default at runtime. */
+@theme {
+  --color-accent: #58a6ff;
+  --color-accent-hover: #79b8ff;
+}
+
 /* Define custom properties for theming - Dark minimal by default */
 :root {
   /* Dark mode colors (default) */

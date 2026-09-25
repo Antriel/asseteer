@@ -16,3 +16,4 @@ export { default as InboxIcon } from './InboxIcon.svelte';
 export { default as RepeatIcon } from './RepeatIcon.svelte';
 export { default as SkipNextIcon } from './SkipNextIcon.svelte';
 export { default as PlayOnceIcon } from './PlayOnceIcon.svelte';
+export { default as ImageIcon } from './ImageIcon.svelte';

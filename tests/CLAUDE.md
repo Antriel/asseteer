@@ -46,7 +46,7 @@ await withAsseteer(async ({ page, app, shot }) => {
   await shot('dark');
   await app.theme('light');        // the app themes on prefers-color-scheme
   await shot('light');
-  await page.getByRole('button', { name: /^Images/ }).click();
+  await page.getByRole('radio', { name: 'Images' }).click();
 });
 ```
 

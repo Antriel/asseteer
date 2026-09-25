@@ -8,6 +8,7 @@
   import { clapState } from '$lib/state/clap.svelte';
   import { showToast } from '$lib/state/ui.svelte';
   import ViewModeToggle from './ViewModeToggle.svelte';
+  import AssetTypeSwitch from './AssetTypeSwitch.svelte';
   import DurationFilter from './DurationFilter.svelte';
   import Spinner from './Spinner.svelte';
   import {
@@ -119,28 +120,20 @@
     assetsState.setFolderFilter(null, assetType);
   }
 
-  // Folder display name from the selected explore node
-  let folderDisplayName = $derived(() => {
+  // Folder scope chip: the deepest segment as the label, the whole location as the tooltip
+  let folderChip = $derived.by(() => {
     const loc = assetsState.folderLocation;
-    if (!loc) return '';
-    if (loc.type === 'zip') {
-      const parts: string[] = [];
-      if (loc.relPath) parts.push(...loc.relPath.split('/').filter(Boolean));
-      parts.push(loc.zipFile);
-      if (loc.zipPrefix) {
-        parts.push(...loc.zipPrefix.replace(/\/$/, '').split('/').filter(Boolean));
-      }
-      return parts.join(' / ');
-    }
-    // Filesystem folder: show last segment of relPath, or the root name from the tree
-    if (loc.relPath) {
-      return loc.relPath.split('/').pop() || loc.relPath;
-    }
-    // Root folder — find name from explore roots
+    if (!loc) return null;
     const root = exploreState.roots.find(
       (r) => r.location.type === 'folder' && r.location.folderId === loc.folderId,
     );
-    return root?.name || 'Folder';
+    const parts = [root?.name || 'Folder'];
+    if (loc.relPath) parts.push(...loc.relPath.split('/').filter(Boolean));
+    if (loc.type === 'zip') {
+      parts.push(loc.zipFile);
+      if (loc.zipPrefix) parts.push(...loc.zipPrefix.split('/').filter(Boolean));
+    }
+    return { label: parts[parts.length - 1], title: parts.join(' / ') };
   });
 
   // Check if semantic mode is active
@@ -222,11 +215,35 @@
     isSemanticModeEnabled ? clapState.hasMoreResults : assetsState.hasMoreResults,
   );
 
+  // Optional restrictions; with neither pressed the search covers both ('anywhere')
   const searchColumnOptions: { value: SearchColumn; label: string; title: string }[] = [
-    { value: 'anywhere', label: 'Anywhere', title: 'Match filename or folder path' },
-    { value: 'filename', label: 'Name', title: 'Match the filename only' },
-    { value: 'path', label: 'Path', title: 'Match the folder path only' },
+    { value: 'filename', label: 'Name', title: 'Only match filenames' },
+    { value: 'path', label: 'Path', title: 'Only match folder paths' },
   ];
+
+  function clearSearchText() {
+    searchInput = '';
+    if (isSimilarityMode) {
+      clapState.similarityFilterText = '';
+    } else if (clapState.semanticSearchEnabled && isAudioTab) {
+      clapState.clearSearch();
+      assetsState.searchAssets('', 'audio');
+    } else {
+      assetsState.searchAssets('', viewState.activeTab === 'images' ? 'image' : 'audio');
+    }
+  }
+
+  // Backspace in an empty field removes the nearest chip, like a tag input
+  function handleSearchKeyDown(e: KeyboardEvent) {
+    if (e.key !== 'Backspace' || searchInput) return;
+    if (assetsState.folderLocation) {
+      e.preventDefault();
+      clearFolderFilter();
+    } else if (isSimilarityMode) {
+      e.preventDefault();
+      cancelSimilaritySearch();
+    }
+  }
 
   function setSearchColumn(value: SearchColumn) {
     if (assetsState.searchColumn === value) return;
@@ -246,11 +263,15 @@
       ? 'Filter results by filename...'
       : isSemanticModeEnabled
         ? 'Semantic search (e.g., "footsteps on wood")...'
-        : `Search ${viewState.activeTab}...`,
+        : assetsState.searchColumn === 'filename'
+          ? `Search ${viewState.activeTab} names…`
+          : assetsState.searchColumn === 'path'
+            ? `Search ${viewState.activeTab} paths…`
+            : `Search ${viewState.activeTab}…`,
   );
 </script>
 
-<div class="@container flex flex-col">
+<div class="@container">
   <div
     class="flex flex-wrap items-center gap-x-3 @3xl:gap-x-4 gap-y-2 px-4 py-3 bg-secondary border-b border-default"
   >
@@ -263,77 +284,102 @@
       title={viewState.folderSidebarOpen ? 'Collapse folder panel' : 'Expand folder panel'}
     >
       <FolderIcon size="sm" />
-      <span class="hidden @3xl:inline">Folders</span>
+      <span class="hidden @5xl:inline">Folders</span>
     </button>
 
-    <!-- Search -->
-    <!-- Never squeezed below a usable width: the toolbar wraps to a second row instead -->
-    <div class="relative flex-1 min-w-48 max-w-[400px]">
+    <AssetTypeSwitch />
+
+    <!-- Search: one field for everything that decides what matches — similarity source,
+         folder scope, the query, and the name/path restriction. Never squeezed below a
+         usable width: the toolbar wraps to a second row instead. -->
+    <div
+      class="flex-1 min-w-72 max-w-[520px] h-9 overflow-hidden flex items-center gap-1.5 pl-2 pr-1 bg-primary border rounded-md focus-within:ring-2 {isSemanticModeEnabled &&
+      !isSimilarityMode
+        ? 'border-purple-500 focus-within:ring-purple-500'
+        : 'border-default focus-within:ring-accent/60'}"
+    >
       {#if clapState.isSearching}
-        <div class="absolute left-2 top-1/2 -translate-y-1/2">
-          <Spinner size="sm" />
-        </div>
+        <Spinner size="sm" />
       {:else}
-        <SearchIcon
-          size="sm"
-          class="absolute left-2 top-1/2 -translate-y-1/2 text-secondary pointer-events-none"
-        />
+        <SearchIcon size="sm" class="text-secondary flex-shrink-0" />
       {/if}
+
+      {#if isSimilarityMode}
+        <span
+          class="h-6 max-w-36 flex-shrink-0 overflow-hidden flex items-center gap-1 pl-1.5 pr-0.5 text-xs font-medium rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+          title="Similar to {clapState.similarToFilename}"
+        >
+          <SimilarIcon size="sm" class="w-3.5 h-3.5 flex-shrink-0" />
+          <span class="min-w-0 truncate">{clapState.similarToFilename}</span>
+          <button
+            class="flex-shrink-0 p-0.5 rounded hover:bg-purple-200 dark:hover:bg-purple-800/60 transition-colors"
+            onclick={cancelSimilaritySearch}
+            aria-label="Clear similarity search"
+          >
+            <CloseIcon size="sm" class="w-3 h-3" />
+          </button>
+        </span>
+      {/if}
+
+      {#if folderChip}
+        <span
+          class="h-6 max-w-36 flex-shrink-0 overflow-hidden flex items-center gap-1 pl-1.5 pr-0.5 text-xs font-medium rounded bg-tertiary text-primary"
+          title="In {folderChip.title}"
+        >
+          <FolderIcon size="sm" class="w-3.5 h-3.5 flex-shrink-0 text-secondary" />
+          <span class="min-w-0 truncate">{folderChip.label}</span>
+          <button
+            class="flex-shrink-0 p-0.5 rounded text-secondary hover:text-primary hover:bg-elevated transition-colors"
+            onclick={clearFolderFilter}
+            aria-label="Clear folder filter"
+          >
+            <CloseIcon size="sm" class="w-3 h-3" />
+          </button>
+        </span>
+      {/if}
+
       <input
         type="text"
         placeholder={placeholderText}
         value={searchInput}
         oninput={handleSearch}
-        class="w-full h-9 px-2 pl-8 {searchInput
-          ? 'pr-8'
-          : 'pr-2'} border border-default rounded-md bg-primary text-primary placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
-        class:!border-purple-500={isSemanticModeEnabled && !isSimilarityMode}
-        class:!ring-purple-500={isSemanticModeEnabled && !isSimilarityMode}
+        onkeydown={handleSearchKeyDown}
+        class="flex-1 min-w-16 h-full bg-transparent text-primary placeholder:text-tertiary outline-none"
       />
+
       {#if searchInput}
         <button
-          class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-tertiary transition-colors"
-          onclick={() => {
-            searchInput = '';
-            if (isSimilarityMode) {
-              clapState.similarityFilterText = '';
-            } else if (clapState.semanticSearchEnabled && isAudioTab) {
-              clapState.clearSearch();
-              assetsState.searchAssets('', 'audio');
-            } else {
-              assetsState.searchAssets('', viewState.activeTab === 'images' ? 'image' : 'audio');
-            }
-          }}
+          class="flex-shrink-0 p-0.5 rounded text-secondary hover:text-primary hover:bg-tertiary transition-colors"
+          onclick={clearSearchText}
           title="Clear search"
         >
-          <CloseIcon size="sm" class="text-secondary hover:text-primary" />
+          <CloseIcon size="sm" />
         </button>
       {/if}
-    </div>
 
-    <!-- Search column targeting -->
-    {#if !isSimilarityMode && !isSemanticModeEnabled}
-      <div
-        class="h-9 flex-shrink-0 flex items-center p-0.5 bg-primary border border-default rounded-md"
-        role="radiogroup"
-        aria-label="Search in"
-      >
-        {#each searchColumnOptions as opt (opt.value)}
-          {@const active = assetsState.searchColumn === opt.value}
-          <button
-            class="h-full px-2.5 text-xs font-medium rounded transition-colors {active
-              ? 'bg-accent-light text-accent'
-              : 'text-tertiary hover:text-primary'}"
-            role="radio"
-            aria-checked={active}
-            title={opt.title}
-            onclick={() => setSearchColumn(opt.value)}
-          >
-            {opt.label}
-          </button>
-        {/each}
-      </div>
-    {/if}
+      <!-- Restrict matching to one column; neither pressed = both -->
+      {#if !isSimilarityMode && !isSemanticModeEnabled}
+        <div
+          class="flex-shrink-0 flex items-center gap-0.5 pl-1 border-l border-default"
+          role="group"
+          aria-label="Only match"
+        >
+          {#each searchColumnOptions as opt (opt.value)}
+            {@const active = assetsState.searchColumn === opt.value}
+            <button
+              class="h-6 px-1.5 text-xs font-medium rounded transition-colors {active
+                ? 'bg-accent-light text-accent'
+                : 'text-tertiary hover:text-primary hover:bg-tertiary'}"
+              aria-pressed={active}
+              title={active ? 'Search names and paths' : opt.title}
+              onclick={() => setSearchColumn(active ? 'anywhere' : opt.value)}
+            >
+              {opt.label}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
 
     <!-- Audio-specific filters (semantic search + duration filter) -->
     {#if isAudioTab}
@@ -360,7 +406,7 @@
       >
         <!-- Brain/AI icon for semantic search -->
         <BrainIcon size="sm" />
-        <span class="hidden @3xl:inline">Semantic</span>
+        <span class="hidden @4xl:inline">Semantic</span>
         {#if clapNotConfigured}
           <GearIcon size="sm" class="w-3 h-3 opacity-70" />
         {/if}
@@ -400,41 +446,4 @@
       {/if}
     </div>
   </div>
-
-  <!-- Similarity search banner -->
-  {#if isSimilarityMode}
-    <div
-      class="flex items-center gap-2 px-4 py-1.5 bg-purple-50 dark:bg-purple-900/20 border-b border-purple-200 dark:border-purple-800"
-    >
-      <SimilarIcon size="sm" class="text-purple-500 flex-shrink-0" />
-      <span class="text-sm text-purple-700 dark:text-purple-300">
-        Similar to: <strong class="font-semibold">"{clapState.similarToFilename}"</strong>
-      </span>
-      <button
-        onclick={cancelSimilaritySearch}
-        class="flex-shrink-0 p-0.5 rounded hover:bg-purple-100 dark:hover:bg-purple-800/40 transition-colors"
-        title="Clear similarity search"
-      >
-        <CloseIcon
-          size="sm"
-          class="text-purple-500 hover:text-purple-700 dark:hover:text-purple-300"
-        />
-      </button>
-    </div>
-  {/if}
-
-  <!-- Folder breadcrumb (when a folder filter is active) -->
-  {#if assetsState.folderLocation}
-    <div class="flex items-center gap-2 px-4 py-1.5 bg-tertiary border-b border-default">
-      <FolderIcon size="sm" class="text-secondary flex-shrink-0" />
-      <span class="text-sm text-primary truncate">{folderDisplayName()}</span>
-      <button
-        onclick={clearFolderFilter}
-        class="flex-shrink-0 p-0.5 rounded hover:bg-secondary transition-colors"
-        title="Clear folder filter"
-      >
-        <CloseIcon size="sm" class="text-secondary hover:text-primary" />
-      </button>
-    </div>
-  {/if}
 </div>

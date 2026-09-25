@@ -9,7 +9,6 @@
   import { getAssetTypeCounts, getPendingClapCount } from '$lib/database/queries';
   import type { CategoryProgress } from '$lib/types';
 
-  import TabBar from '$lib/components/shared/TabBar.svelte';
   import Toolbar from '$lib/components/shared/Toolbar.svelte';
   // FolderSidebar is now rendered in the root layout
   import ImageGrid from '$lib/components/ImageGrid.svelte';
@@ -120,10 +119,7 @@
 </script>
 
 <div class="flex flex-col h-full overflow-hidden">
-  <!-- Tab Navigation (asset type + folder toggle) -->
-  <TabBar />
-
-  <!-- Toolbar (search, filters, view controls) -->
+  <!-- Toolbar (asset type, search, filters, view controls) -->
   <Toolbar />
 
   <!-- Main Content Area -->
@@ -203,9 +199,9 @@
           {:else if isSemanticModeEnabled && pendingClapCount === viewState.assetCounts.audio}
             <p class="text-primary font-medium">No embeddings generated yet</p>
             <p class="text-sm text-secondary text-center">
-              None of your {viewState.assetCounts.audio.toLocaleString()} audio files have been processed for semantic
-              search. Head to the
-              <a href="/processing" class="text-accent-muted hover:underline">Processing tab</a> to generate
+              None of your {viewState.assetCounts.audio.toLocaleString()} audio files have been processed
+              for semantic search. Head to the
+              <a href="/processing" class="text-accent hover:underline">Processing tab</a> to generate
               embeddings.
             </p>
           {:else if isSemanticModeEnabled && pendingClapCount > 0}
@@ -213,7 +209,7 @@
             <p class="text-sm text-secondary text-center">
               {(viewState.assetCounts.audio - pendingClapCount).toLocaleString()} of {viewState.assetCounts.audio.toLocaleString()}
               audio files have embeddings. Try adjusting your query, or process more in the
-              <a href="/processing" class="text-accent-muted hover:underline">Processing tab</a>.
+              <a href="/processing" class="text-accent hover:underline">Processing tab</a>.
             </p>
           {:else}
             <p class="text-primary font-medium">No matching {viewState.activeTab}</p>

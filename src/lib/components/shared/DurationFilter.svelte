@@ -198,7 +198,7 @@
       />
     </svg>
     <!-- Label collapses to the icon when the toolbar is narrow; an active range always shows -->
-    <span class="max-w-[120px] truncate {isFilterActive ? '' : 'hidden @3xl:inline'}"
+    <span class="max-w-[120px] truncate {isFilterActive ? '' : 'hidden @5xl:inline'}"
       >{filterSummary()}</span
     >
     {#if isFilterActive}

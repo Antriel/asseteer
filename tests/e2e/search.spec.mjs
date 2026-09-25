@@ -19,7 +19,7 @@ test('finds audio inside a nested zip', async ({ page, app }) => {
 });
 
 test('images tab searches images', async ({ page, app }) => {
-  await page.getByRole('button', { name: /^Images/ }).click();
+  await page.getByRole('radio', { name: 'Images' }).click();
   await app.search('tile');
   // grass_tile + stone_tile by filename, water_wide by its `Tiles/` folder path.
   expect((await app.state()).assetCount).toBe(3);
