@@ -1,5 +1,4 @@
 import type { Asset, FolderLocation } from '$lib/types';
-import { getAssetDisplayPath } from '$lib/types';
 import type { Attachment } from 'svelte/attachments';
 import { openPath } from '@tauri-apps/plugin-opener';
 import { invoke } from '@tauri-apps/api/core';
@@ -85,10 +84,13 @@ export async function openDirectory(asset: Asset) {
 /**
  * Copy the assets' full paths, one per line. A ZIP entry has no path of its own, so it
  * gets its location inside the archive (e.g. `D:\Packs\Retro.zip\Sounds\coin.wav`).
+ * The backend builds them: they must match the drag cache's `.origin.json` sidecars.
  */
 export async function copyAssetPaths(assets: Asset[]) {
-  const paths = assets.map((a) => getAssetDisplayPath(a).replace(/[\\/]/g, sep()));
   try {
+    const paths = await invoke<string[]>('get_asset_origin_paths', {
+      assetIds: assets.map((a) => a.id),
+    });
     await navigator.clipboard.writeText(paths.join('\n'));
     showToast(paths.length === 1 ? 'Path copied' : `${paths.length} paths copied`, 'success');
   } catch (error) {

@@ -7,6 +7,11 @@
 //! - ZIP entries (incl. nested ZIPs) have no path of their own, so they are extracted.
 //! - Files on network drives are copied: the `drag` crate panics natively on UNC and
 //!   mapped-drive paths (drag-rs#72), which would take the whole app down.
+//!
+//! Public contract (Scry's import reads it): every cached file has a sidecar
+//! `<filename>.origin.json` beside it, `{ "path": "<origin>" }`, where the origin is exactly
+//! what "Copy path" gives for that asset (`utils::asset_origin_path`). It exists whenever the
+//! cached file does. Nothing is ever written next to a file that is used in place.
 
 use crate::models::Asset;
 use crate::zip_cache;
@@ -39,12 +44,20 @@ pub fn ensure_local_file(asset: &Asset, cache_dir: &Path) -> Result<PathBuf, Str
         asset.fs_modified_at.unwrap_or(0)
     ));
     let target = dir.join(&asset.filename);
+    let sidecar = dir.join(format!("{}.origin.json", asset.filename));
+    let origin = origin_json(asset);
     if target.is_file() {
         touch(&target);
+        // Backfills entries cached before sidecars existed, and follows a renamed folder
+        if std::fs::read(&sidecar).ok().as_deref() != Some(origin.as_slice()) {
+            write_sidecar(&sidecar, &origin)?;
+        }
         return Ok(target);
     }
 
     std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create drag cache: {}", e))?;
+    // Before the file itself, so a receiver never sees the file without it
+    write_sidecar(&sidecar, &origin)?;
     // Written under a temporary name and renamed, so a half-written file is never reused.
     let partial = dir.join(format!("{}.partial", asset.filename));
     if asset.zip_entry.is_some() {
@@ -57,6 +70,21 @@ pub fn ensure_local_file(asset: &Asset, cache_dir: &Path) -> Result<PathBuf, Str
     std::fs::rename(&partial, &target)
         .map_err(|e| format!("Failed to finalize {}: {}", target.display(), e))?;
     Ok(target)
+}
+
+/// Contents of the `.origin.json` sidecar naming where `asset` really lives.
+fn origin_json(asset: &Asset) -> Vec<u8> {
+    let json = serde_json::json!({ "path": crate::utils::asset_origin_path(asset) });
+    serde_json::to_vec(&json).expect("a JSON object serializes")
+}
+
+/// Write a sidecar via a temporary name, so it is never seen half-written.
+fn write_sidecar(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut partial = path.as_os_str().to_owned();
+    partial.push(".partial");
+    std::fs::write(&partial, bytes)
+        .and_then(|_| std::fs::rename(&partial, path))
+        .map_err(|e| format!("Failed to write {}: {}", path.display(), e))
 }
 
 /// Remove drag-cache entries not used within `DRAG_CACHE_MAX_AGE`.
@@ -148,8 +176,8 @@ fn primary_button_held() -> bool {
     true
 }
 
-/// Local files for `asset_ids`, in that order — see `ensure_local_file`.
-async fn local_files(state: &AppState, asset_ids: &[i64]) -> Result<Vec<PathBuf>, String> {
+/// Assets for `asset_ids`, in that order.
+async fn load_assets(state: &AppState, asset_ids: &[i64]) -> Result<Vec<Asset>, String> {
     // Chunked: a Shift+click range can exceed SQLite's bound-parameter limit
     let mut assets = Vec::with_capacity(asset_ids.len());
     for chunk in asset_ids.chunks(500) {
@@ -178,7 +206,12 @@ async fn local_files(state: &AppState, asset_ids: &[i64]) -> Result<Vec<PathBuf>
         .map(|(i, id)| (*id, i))
         .collect();
     assets.sort_by_key(|a| order.get(&a.id).copied());
+    Ok(assets)
+}
 
+/// Local files for `asset_ids`, in that order — see `ensure_local_file`.
+async fn local_files(state: &AppState, asset_ids: &[i64]) -> Result<Vec<PathBuf>, String> {
+    let assets = load_assets(state, asset_ids).await?;
     let cache_dir = state.drag_cache_dir.clone();
     tokio::task::spawn_blocking(move || {
         assets
@@ -188,6 +221,17 @@ async fn local_files(state: &AppState, asset_ids: &[i64]) -> Result<Vec<PathBuf>
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The assets' paths for "Copy path", in the given order — see `utils::asset_origin_path`.
+/// Built here rather than in the frontend so they always match the drag-cache sidecars.
+#[tauri::command]
+pub async fn get_asset_origin_paths(
+    state: State<'_, AppState>,
+    asset_ids: Vec<i64>,
+) -> Result<Vec<String>, String> {
+    let assets = load_assets(&state, &asset_ids).await?;
+    Ok(assets.iter().map(crate::utils::asset_origin_path).collect())
 }
 
 /// Put assets' files on the OS clipboard (Ctrl+C), so Ctrl+V in Explorer or a DAW
@@ -400,6 +444,108 @@ mod tests {
             0,
             "nothing written"
         );
+        assert_eq!(
+            std::fs::read_dir(src.path()).unwrap().count(),
+            1,
+            "no sidecar beside the user's file"
+        );
+    }
+
+    /// The `path` recorded in the sidecar beside a cached file.
+    fn sidecar_path(cached: &Path) -> String {
+        let mut sidecar = cached.as_os_str().to_owned();
+        sidecar.push(".origin.json");
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
+        json["path"].as_str().unwrap().to_owned()
+    }
+
+    fn native(path: &str) -> String {
+        path.replace(['/', '\\'], std::path::MAIN_SEPARATOR_STR)
+    }
+
+    fn zip_asset(src: &Path) -> (Asset, PathBuf) {
+        let (zip_path, entry) = create_test_zip_with_image(src);
+        let mut asset = asset_at(src, "test.png");
+        asset.zip_file = Some(zip_path.file_name().unwrap().to_string_lossy().into_owned());
+        asset.zip_entry = Some(entry);
+        (asset, zip_path)
+    }
+
+    #[test]
+    fn zip_entry_gets_a_sidecar_with_its_copy_path() {
+        let src = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let (asset, zip_path) = zip_asset(src.path());
+
+        let path = ensure_local_file(&asset, cache.path()).unwrap();
+
+        let origin = sidecar_path(&path);
+        assert_eq!(origin, crate::utils::asset_origin_path(&asset));
+        assert_eq!(
+            origin,
+            native(&format!("{}/images/test.png", zip_path.display()))
+        );
+        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 2, "no leftover temp files: {:?}", names);
+    }
+
+    #[test]
+    fn nested_zip_entry_sidecar_names_the_full_chain() {
+        use std::io::Write;
+        let src = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let mut inner = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        inner.start_file("Sounds/coin.wav", options).unwrap();
+        inner.write_all(b"RIFFcoin").unwrap();
+        let inner = inner.finish().unwrap().into_inner();
+        let mut outer =
+            zip::ZipWriter::new(std::fs::File::create(src.path().join("Retro.zip")).unwrap());
+        outer.start_file("sub.zip", options).unwrap();
+        outer.write_all(&inner).unwrap();
+        outer.finish().unwrap();
+        let mut asset = asset_at(src.path(), "coin.wav");
+        asset.zip_file = Some("Retro.zip".into());
+        asset.zip_entry = Some("sub.zip/Sounds/coin.wav".into());
+
+        let path = ensure_local_file(&asset, cache.path()).unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"RIFFcoin");
+        assert_eq!(
+            sidecar_path(&path),
+            native(&format!(
+                "{}/Retro.zip/sub.zip/Sounds/coin.wav",
+                src.path().display()
+            ))
+        );
+    }
+
+    #[test]
+    fn reuse_backfills_and_refreshes_the_sidecar() {
+        let src = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let (mut asset, _) = zip_asset(src.path());
+        let path = ensure_local_file(&asset, cache.path()).unwrap();
+        let mut sidecar = path.as_os_str().to_owned();
+        sidecar.push(".origin.json");
+
+        // An entry cached before sidecars existed
+        std::fs::remove_file(&sidecar).unwrap();
+        assert_eq!(ensure_local_file(&asset, cache.path()).unwrap(), path);
+        assert_eq!(sidecar_path(&path), crate::utils::asset_origin_path(&asset));
+
+        // The source folder was renamed: same id and mtime, so the cache entry is reused
+        asset.folder_path = "/elsewhere/Packs".into();
+        assert_eq!(ensure_local_file(&asset, cache.path()).unwrap(), path);
+        assert_eq!(
+            sidecar_path(&path),
+            native("/elsewhere/Packs/test_archive.zip/images/test.png")
+        );
     }
 
     #[test]
@@ -437,14 +583,17 @@ mod tests {
         for dir in [&fresh, &stale] {
             std::fs::create_dir_all(dir).unwrap();
             std::fs::write(dir.join("a.wav"), b"x").unwrap();
+            std::fs::write(dir.join("a.wav.origin.json"), b"{}").unwrap();
         }
         let old = SystemTime::now() - DRAG_CACHE_MAX_AGE - Duration::from_secs(60);
-        std::fs::File::options()
-            .write(true)
-            .open(stale.join("a.wav"))
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        for file in ["a.wav", "a.wav.origin.json"] {
+            std::fs::File::options()
+                .write(true)
+                .open(stale.join(file))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
 
         prune_drag_cache(cache.path());
 

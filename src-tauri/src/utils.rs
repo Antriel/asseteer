@@ -50,6 +50,22 @@ pub fn format_asset_display_path(asset: &Asset) -> String {
     }
 }
 
+/// The asset's path as "Copy path" puts it on the clipboard: the display path with
+/// separators normalized to the OS one, e.g. `D:\Packs\Retro.zip\sub.zip\Sounds\coin.wav`.
+/// Also the `path` of a drag-cache `.origin.json` sidecar, so the two never differ.
+pub fn asset_origin_path(asset: &Asset) -> String {
+    format_asset_display_path(asset)
+        .chars()
+        .map(|c| {
+            if c == '/' || c == '\\' {
+                std::path::MAIN_SEPARATOR
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 /// Resolve the absolute filesystem path to the ZIP archive containing this asset.
 /// Returns: folder_path/rel_path/zip_file (or folder_path/zip_file if rel_path is empty)
 pub fn resolve_zip_path(asset: &Asset) -> String {
